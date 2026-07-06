@@ -99,6 +99,7 @@ class Settings(BaseSettings):
 
     # ─── Database ────────────────────────────────────────────────
     database_url: str = "sqlite:///./data/chatbot.db"
+    auth_secret_key: str = ""
 
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"

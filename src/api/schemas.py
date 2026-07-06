@@ -1,6 +1,6 @@
 """Modelos Pydantic para a API."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Any
 
 
@@ -30,7 +30,7 @@ class ChatStreamRequest(BaseModel):
 class IngestRequest(BaseModel):
     text: str
     source: Optional[str] = "manual"
-    metadata: Optional[dict] = {}
+    metadata: Optional[dict] = Field(default_factory=dict)
 
 
 class IngestResponse(BaseModel):
@@ -94,10 +94,10 @@ class OnboardingRequest(BaseModel):
     role: Optional[str] = ""
     technical_level: Optional[str] = ""
     preferred_tone: Optional[str] = "direto"
-    goals: list[str] = []
-    avoid: list[str] = []
+    goals: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
     memory_policy: Optional[str] = "ask"
-    extra: dict[str, Any] = {}
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillToggleRequest(BaseModel):

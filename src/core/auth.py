@@ -14,13 +14,20 @@ from src.config import settings
 
 
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7
+LOCAL_SECRET_PATH = os.path.join("data", "auth_secret.key")
 
 
 def _secret() -> bytes:
     raw = getattr(settings, "auth_secret_key", "") or os.environ.get("AUTH_SECRET_KEY", "")
-    if not raw:
-        raw = "dev-local-change-me"
-    return raw.encode("utf-8")
+    if raw:
+        return raw.encode("utf-8")
+
+    os.makedirs(os.path.dirname(LOCAL_SECRET_PATH), exist_ok=True)
+    if not os.path.exists(LOCAL_SECRET_PATH):
+        with open(LOCAL_SECRET_PATH, "w", encoding="utf-8") as f:
+            f.write(_b64(os.urandom(32)))
+    with open(LOCAL_SECRET_PATH, "r", encoding="utf-8") as f:
+        return f.read().strip().encode("utf-8")
 
 
 def _b64(data: bytes) -> str:
