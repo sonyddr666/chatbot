@@ -112,13 +112,14 @@ class ConversationRepo:
             conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
             if not conv:
                 return []
-            return (
+            messages = (
                 db.query(Message)
                 .filter(Message.conversation_id == conv.id)
-                .order_by(Message.created_at.asc())
+                .order_by(Message.created_at.desc(), Message.id.desc())
                 .limit(limit)
                 .all()
             )
+            return list(reversed(messages))
         finally:
             db.close()
 
@@ -139,8 +140,13 @@ class ConversationRepo:
     def set_language(session_id: str, lang: str) -> None:
         db = get_session_db()
         try:
-            conv = ConversationRepo.get_or_create(session_id)
+            conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
+            if not conv:
+                conv = Conversation(session_id=session_id, title=f"Conversa {session_id[:8]}")
+                db.add(conv)
+                db.flush()
             conv.language = lang
+            conv.updated_at = datetime.now(timezone.utc)
             db.commit()
         finally:
             db.close()

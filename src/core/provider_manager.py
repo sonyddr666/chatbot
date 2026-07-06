@@ -454,7 +454,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
     """Retorna lista combinada de providers built-in + custom."""
     data = _load_raw()
     custom_providers = data.get("custom_providers", [])
-    active_id = data.get("active_provider_id", "zen-free")
+    active_id = data.get("active_provider_id", "opencode-zen-free")
     active_model_id = data.get("active_model_id")
 
     result = []
@@ -499,7 +499,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "id": cp["id"],
             "name": cp.get("name", cp["id"]),
             "base_url": cp.get("base_url", ""),
-            "api_key": cp_key if include_keys else "sk-...",
+            "api_key": cp_key if include_keys else ("sk-..." if cp_key else ""),
             "api_format": cp.get("api_format", "chat_completions"),
             "provider_type": "custom",
             "enabled": cp.get("enabled", True),
@@ -652,7 +652,7 @@ def delete_provider(provider_id: str) -> bool:
     if len(raw["custom_providers"]) < before:
         # Se o provider ativo foi deletado, volta pro default
         if raw.get("active_provider_id") == provider_id:
-            raw["active_provider_id"] = "zen-free"
+            raw["active_provider_id"] = "opencode-zen-free"
         _save_raw(raw)
         return True
     return False
@@ -676,7 +676,7 @@ def set_active_provider(provider_id: str) -> bool:
 def set_active_model(model_id: str) -> bool:
     """Define o modelo ativo dentro do provider ativo."""
     raw = _load_raw()
-    active_id = raw.get("active_provider_id", "zen-free")
+    active_id = raw.get("active_provider_id", "opencode-zen-free")
     provider = get_provider(active_id)
     if not provider:
         return False

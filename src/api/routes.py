@@ -67,24 +67,19 @@ async def async_set_language(session_id: str, lang: str) -> None:
 
 @router.get("/profiles")
 async def list_profiles():
-    """Lista todos os perfis de LLM disponíveis."""
+    """Lista perfis/modelos a partir do provider manager, a fonte atual de verdade."""
     profiles = []
-    for name, cfg in settings.CUSTOM_PROFILES.items():
+    for provider in pm_list(include_keys=False):
+        models = provider.get("models", [])
+        model = next((m for m in models if m.get("active")), None)
+        if not model:
+            model = next((m for m in models if m.get("enabled", True)), {})
         profiles.append({
-            "id": name,
-            "name": name.replace("-", " ").title(),
-            "model": cfg["model"],
-            "provider": settings.llm_provider,
-            "active": name == settings.custom_profile,
-        })
-    # Adiciona provedores nativos
-    for prov in ["openai", "anthropic", "ollama"]:
-        profiles.append({
-            "id": prov,
-            "name": prov.title(),
-            "model": getattr(settings, f"{prov}_model", ""),
-            "provider": prov,
-            "active": settings.llm_provider == prov,
+            "id": provider.get("id", ""),
+            "name": provider.get("name", provider.get("id", "")),
+            "model": model.get("id", ""),
+            "provider": provider.get("id", ""),
+            "active": provider.get("active", False),
         })
     return profiles
 
@@ -145,16 +140,23 @@ from src.core.provider_manager import (
 )
 
 
+def _safe_provider_config(cfg: dict) -> dict:
+    """Remove segredos antes de devolver config de provider pela API."""
+    safe = {k: v for k, v in cfg.items() if k not in {"api_key", "access_token", "refresh_token"}}
+    safe["has_key"] = bool(cfg.get("api_key"))
+    return safe
+
+
 @router.get("/providers/manage")
 async def providers_list(include_keys: bool = False):
-    """Lista todos os provedores disponíveis (built-in + custom)."""
-    return pm_list(include_keys=include_keys)
+    """Lista todos os provedores disponiveis sem expor chaves reais."""
+    return pm_list(include_keys=False)
 
 
 @router.get("/providers/manage/{provider_id}")
 async def provider_get(provider_id: str, include_keys: bool = False):
-    """Retorna detalhes de um provedor específico."""
-    p = pm_get(provider_id, include_keys=include_keys)
+    """Retorna detalhes de um provedor especifico sem expor chaves reais."""
+    p = pm_get(provider_id, include_keys=False)
     if not p:
         raise HTTPException(status_code=404, detail="Provider não encontrado")
     return p
@@ -221,8 +223,8 @@ async def model_activate(body: dict):
 
 @router.get("/providers/active-config")
 async def providers_active_config():
-    """Retorna a configuração ativa (provider + modelo)."""
-    return pm_active_config()
+    """Retorna a configuracao ativa (provider + modelo), sem segredos."""
+    return _safe_provider_config(pm_active_config())
 
 
 @router.get("/providers/status")
@@ -243,17 +245,54 @@ async def providers_test(body: dict = {}):
     provider_id = body.get("provider_id", "")
     model_id = body.get("model_id", "")
 
-    from src.core.provider_manager import get_active_config, get_provider_api_key
-    from src.config import settings
+    from src.core.provider_manager import get_provider_api_key
 
-    cfg = pm_active_config()
     if provider_id:
-        cfg["provider_id"] = provider_id
-    if model_id:
-        cfg["model_id"] = model_id
+        provider = pm_get(provider_id, include_keys=True)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider nao encontrado")
+        models = provider.get("models", [])
+        model = next((m for m in models if model_id and m.get("id") == model_id and m.get("enabled", True)), None)
+        if not model:
+            model = next((m for m in models if m.get("active")), None)
+        if not model:
+            model = next((m for m in models if m.get("enabled", True)), {})
+        cfg = {
+            "provider_id": provider.get("id", provider_id),
+            "name": provider.get("name", provider_id),
+            "base_url": provider.get("base_url", ""),
+            "api_key": provider.get("api_key", "") or get_provider_api_key(provider_id),
+            "api_format": provider.get("api_format", "chat_completions"),
+            "model_id": model.get("id", ""),
+            "model_name": model.get("name", model.get("id", "")),
+        }
+    else:
+        cfg = pm_active_config()
+        if model_id:
+            provider = pm_get(cfg.get("provider_id", ""), include_keys=True)
+            model = next((m for m in provider.get("models", []) if m.get("id") == model_id and m.get("enabled", True)), None) if provider else None
+            if not model:
+                return {
+                    "ok": False,
+                    "provider": cfg.get("provider_id", ""),
+                    "model": model_id,
+                    "error_type": "misconfigured",
+                    "message": "Modelo nao encontrado ou desativado neste provider",
+                }
+            cfg["model_id"] = model_id
+            cfg["model_name"] = model.get("name", model_id)
+
+    if cfg.get("provider_id") == "codex-chatgpt":
+        status = pm_get_status("codex-chatgpt")
+        return {
+            "ok": bool(status.get("configured")),
+            "provider": "codex-chatgpt",
+            "model": cfg.get("model_id", ""),
+            "source": status.get("key_source", "oauth_pool"),
+            "message": "Codex ChatGPT usa pool OAuth; teste via status do pool.",
+        }
 
     if not cfg.get("api_key"):
-        # Tenta pegar a chave diretamente
         cfg["api_key"] = get_provider_api_key(cfg.get("provider_id", ""))
 
     if not cfg.get("api_key"):
@@ -414,12 +453,14 @@ async def model_delete(provider_id: str, model_id: str):
 
 @router.get("/health")
 async def health():
-    cfg = settings.custom_provider_config
+    cfg = pm_active_config()
     return {
         "status": "ok",
-        "provider": settings.llm_provider,
-        "profile": settings.custom_profile,
-        "model": cfg["model"],
+        "provider": cfg.get("provider_id", settings.llm_provider),
+        "llm_provider": cfg.get("provider_id", settings.llm_provider),
+        "profile": cfg.get("name", settings.custom_profile),
+        "model": cfg.get("model_id") or cfg.get("model_name", ""),
+        "model_name": cfg.get("model_name", ""),
         "vector_db": settings.vector_db_type,
         "moderation": settings.enable_moderation,
         "multilang": settings.enable_multilang,
@@ -841,13 +882,17 @@ def _public_codex_account(acc: dict) -> dict:
     }
 
 
+def _public_pool_account(acc: dict, provider_id: str) -> dict:
+    if provider_id == "codex-chatgpt":
+        return _public_codex_account(acc)
+    return {k: v for k, v in acc.items() if k not in {"access_token", "refresh_token"}}
+
+
 @router.get("/codex/pool/{provider_id}")
 async def codex_pool_list(provider_id: str):
     """Lista contas no pool de um provider."""
     accounts = pool_list_accounts(provider_id)
-    if provider_id == "codex-chatgpt":
-        return [_public_codex_account(acc) for acc in accounts]
-    return accounts
+    return [_public_pool_account(acc, provider_id) for acc in accounts]
 
 
 @router.get("/codex/pool/{provider_id}/stats")
@@ -861,7 +906,7 @@ async def codex_pool_add(provider_id: str, body: dict):
     """Adiciona uma conta ao pool (via tokens manualmente)."""
     try:
         acc = pool_add_account(provider_id, body)
-        return {"status": "ok", "account": _public_codex_account(acc) if provider_id == "codex-chatgpt" else acc}
+        return {"status": "ok", "account": _public_pool_account(acc, provider_id)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -900,11 +945,13 @@ async def codex_pool_update_quota(provider_id: str):
 
 @router.get("/codex/pool/{provider_id}/best")
 async def codex_pool_best(provider_id: str):
-    """Retorna a melhor conta (com mais cota)."""
+    """Retorna a melhor conta sem expor access_token/refresh_token."""
     best = await pool_get_best(provider_id)
     if not best:
-        raise HTTPException(status_code=404, detail="Nenhuma conta disponível")
-    return best
+        raise HTTPException(status_code=404, detail="Nenhuma conta disponivel")
+    if provider_id == "codex-chatgpt":
+        return _public_codex_account(best)
+    return {k: v for k, v in best.items() if k not in {"access_token", "refresh_token"}}
 
 
 # ─── Device Code ─────────────────────────────────────────────────────
