@@ -27,6 +27,7 @@ from src.core.feedback import FeedbackManager
 from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, ACTIVE_SESSIONS, get_metrics
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.llm import get_llm
+from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
@@ -74,10 +75,16 @@ def _public_session_id(user_id: int, session_id: str) -> str:
     return session_id[len(prefix):] if session_id.startswith(prefix) else session_id
 
 
-def _user_prompt_context(user_id: int, rag_context: str | None = None) -> str | None:
+def _user_prompt_context(
+    user_id: int,
+    rag_context: str | None = None,
+    runtime_context: str | None = None,
+) -> str | None:
     sections = []
     if rag_context:
         sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
+    if runtime_context:
+        sections.append(runtime_context)
     skills_context = SkillRepo.enabled_context_for_user(user_id)
     if skills_context:
         sections.append(skills_context)
@@ -623,12 +630,14 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         lang = detect_language(body.message)
         await async_set_language(session_id, lang, user.id)
 
+    use_rag = body.use_rag or user_has_personal_rag(user.id)
     context = None
-    if body.use_rag and settings.enable_rag:
+    if use_rag and settings.enable_rag:
         context = retrieve_context(body.message, collection_name=rag_collection)
+    runtime_context = await run_enabled_skill_context(user.id, body.message)
 
     memory = get_session(session_id)
-    prompt_context = _user_prompt_context(user.id, context)
+    prompt_context = _user_prompt_context(user.id, context, runtime_context)
     if prompt_context:
         memory.update_system_prompt(prompt_context)
     else:
@@ -679,7 +688,8 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
-    if body.use_rag and settings.enable_rag:
+    use_rag = body.use_rag or user_has_personal_rag(user.id)
+    if use_rag and settings.enable_rag:
         # Dispara RAG em task separada, não bloqueia o primeiro token
         async def fetch_rag():
             nonlocal rag_context
@@ -711,7 +721,8 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         # Se tiver RAG, espera o contexto ficar pronto
         if rag_task:
             await rag_task
-        prompt_context = _user_prompt_context(user.id, rag_context)
+        runtime_context = await run_enabled_skill_context(user.id, body.message)
+        prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
         memory.update_system_prompt(prompt_context)
 
         # Inicia o streaming do LLM

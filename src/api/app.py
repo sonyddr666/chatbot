@@ -59,6 +59,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.chat import ChatEngine
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
+    from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
     from src.rag.retriever import retrieve_context
     from src.db.repository import ConversationRepo, SkillRepo
     from src.db.models import init_db
@@ -76,10 +77,16 @@ async def websocket_chat(websocket: WebSocket):
             return raw_session_id
         return f"u{user_id}:{raw_session_id or 'default'}"
 
-    def _user_prompt_context(user_id: int, rag_context: str | None = None) -> str | None:
+    def _user_prompt_context(
+        user_id: int,
+        rag_context: str | None = None,
+        runtime_context: str | None = None,
+    ) -> str | None:
         sections = []
         if rag_context:
             sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
+        if runtime_context:
+            sections.append(runtime_context)
         skills_context = SkillRepo.enabled_context_for_user(user_id)
         if skills_context:
             sections.append(skills_context)
@@ -127,6 +134,8 @@ async def websocket_chat(websocket: WebSocket):
                 if route == "fast":
                     use_rag = False
                     use_thinking = False
+                if user_has_personal_rag(user.id):
+                    use_rag = True
 
                 # Moderação
                 if settings.enable_moderation:
@@ -162,7 +171,8 @@ async def websocket_chat(websocket: WebSocket):
 
                 if rag_task:
                     await rag_task
-                prompt_context = _user_prompt_context(user.id, rag_context)
+                runtime_context = await run_enabled_skill_context(user.id, message)
+                prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
                 memory.update_system_prompt(prompt_context)
 
                 # Streaming LLM
