@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
+import { getAuthToken } from '../lib/api'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -42,9 +43,14 @@ interface Props {
 const API = '/api/v1'
 
 async function apiReq<T>(url: string, opts?: RequestInit): Promise<T> {
+  const token = getAuthToken()
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...opts?.headers,
+    },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -1262,8 +1268,8 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
     if (!silent) setLoading(true)
     try {
       const [accs, st] = await Promise.all([
-        fetch(`/api/v1/codex/pool/${providerId}`).then(r => r.json()),
-        fetch(`/api/v1/codex/pool/${providerId}/stats`).then(r => r.json()),
+        apiReq<CodexAccountInfo[]>(`${API}/codex/pool/${providerId}`),
+        apiReq<PoolStats>(`${API}/codex/pool/${providerId}/stats`),
       ])
       setAccounts(accs || [])
       setStats(st || null)
@@ -1279,8 +1285,7 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
   const refreshQuota = useCallback(async (silent = false) => {
     if (!silent) setQuotaLoading(true)
     try {
-      const res = await fetch(`/api/v1/codex/pool/${providerId}/update-quota`, { method: 'POST' })
-      if (!res.ok) throw new Error('Erro ao atualizar cota')
+      await apiReq(`${API}/codex/pool/${providerId}/update-quota`, { method: 'POST' })
       if (!silent) toast.success('Cota atualizada!')
       await loadAccounts(true)
     } catch (err: any) {
@@ -1314,8 +1319,7 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
   const handleDeviceCodeInit = async () => {
     setDeviceLoading(true)
     try {
-      const res = await fetch('/api/v1/codex/device-code/request', { method: 'POST' })
-      const data = await res.json()
+      const data: any = await apiReq(`${API}/codex/device-code/request`, { method: 'POST' })
       if (data.user_code) {
         setDeviceCode(data.user_code)
         setVerificationUri(data.verification_uri || 'https://auth.openai.com/codex/device')
@@ -1328,8 +1332,7 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
         const pollInterval = setInterval(async () => {
           attempts++
           try {
-            const res = await fetch(`/api/v1/codex/device-code/poll/${requestId}`, { method: 'POST' })
-            const status = await res.json()
+            const status: any = await apiReq(`${API}/codex/device-code/poll/${requestId}`, { method: 'POST' })
             
             if (status.status === 'saved') {
               clearInterval(pollInterval)
@@ -1376,16 +1379,10 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
       try {
         const text = await file.text()
         const json = JSON.parse(text)
-        const res = await fetch('/api/v1/codex/extract-auth', {
+        const data: any = await apiReq(`${API}/codex/extract-auth`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(json),
         })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: 'Erro ao importar' }))
-          throw new Error(err.detail)
-        }
-        const data = await res.json()
         toast.success(`Conta ${data.email || 'desconhecida'} importada!`)
         loadAccounts()
       } catch (err: any) {
@@ -1402,13 +1399,9 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
   const handleRemoveAccount = async (accountId: string) => {
     if (!confirm('Remover esta conta do pool?')) return
     try {
-      const res = await fetch(`/api/v1/codex/pool/${providerId}/accounts/${accountId}`, {
+      await apiReq(`${API}/codex/pool/${providerId}/accounts/${accountId}`, {
         method: 'DELETE',
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Erro ao remover' }))
-        throw new Error(err.detail)
-      }
       toast.success('Conta removida')
       loadAccounts()
     } catch (err: any) {

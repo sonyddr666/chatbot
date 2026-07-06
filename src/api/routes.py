@@ -191,7 +191,7 @@ async def toggle_skill(skill_name: str, body: SkillToggleRequest, user=Depends(g
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/profiles")
-async def list_profiles():
+async def list_profiles(user=Depends(get_current_user)):
     """Lista perfis/modelos a partir do provider manager, a fonte atual de verdade."""
     profiles = []
     for provider in pm_list(include_keys=False):
@@ -210,7 +210,7 @@ async def list_profiles():
 
 
 @router.get("/config")
-async def get_config():
+async def get_config(user=Depends(get_current_user)):
     """Retorna configuração atual do chatbot, mesclando
     provider manager (ativo) com settings (fallback).
     """
@@ -273,13 +273,13 @@ def _safe_provider_config(cfg: dict) -> dict:
 
 
 @router.get("/providers/manage")
-async def providers_list(include_keys: bool = False):
+async def providers_list(include_keys: bool = False, user=Depends(get_current_user)):
     """Lista todos os provedores disponiveis sem expor chaves reais."""
     return pm_list(include_keys=False)
 
 
 @router.get("/providers/manage/{provider_id}")
-async def provider_get(provider_id: str, include_keys: bool = False):
+async def provider_get(provider_id: str, include_keys: bool = False, user=Depends(get_current_user)):
     """Retorna detalhes de um provedor especifico sem expor chaves reais."""
     p = pm_get(provider_id, include_keys=False)
     if not p:
@@ -288,7 +288,7 @@ async def provider_get(provider_id: str, include_keys: bool = False):
 
 
 @router.post("/providers/manage")
-async def provider_create(body: dict):
+async def provider_create(body: dict, user=Depends(get_current_user)):
     """Cria um novo provedor customizado."""
     try:
         return pm_create(body)
@@ -297,7 +297,7 @@ async def provider_create(body: dict):
 
 
 @router.put("/providers/manage/{provider_id}")
-async def provider_update(provider_id: str, body: dict):
+async def provider_update(provider_id: str, body: dict, user=Depends(get_current_user)):
     """Atualiza um provedor."""
     try:
         p = pm_update(provider_id, body)
@@ -309,7 +309,7 @@ async def provider_update(provider_id: str, body: dict):
 
 
 @router.put("/providers/manage/{provider_id}/api-key")
-async def provider_set_api_key(provider_id: str, body: dict):
+async def provider_set_api_key(provider_id: str, body: dict, user=Depends(get_current_user)):
     """Salva chave de API para qualquer provider (built-in ou custom)."""
     api_key = body.get("api_key", "")
     pm_set_api_key(provider_id, api_key)
@@ -317,7 +317,7 @@ async def provider_set_api_key(provider_id: str, body: dict):
 
 
 @router.delete("/providers/manage/{provider_id}")
-async def provider_delete(provider_id: str):
+async def provider_delete(provider_id: str, user=Depends(get_current_user)):
     """Remove um provedor customizado."""
     ok = pm_delete(provider_id)
     if not ok:
@@ -326,7 +326,7 @@ async def provider_delete(provider_id: str):
 
 
 @router.post("/providers/manage/{provider_id}/activate")
-async def provider_activate(provider_id: str):
+async def provider_activate(provider_id: str, user=Depends(get_current_user)):
     """Define o provedor ativo."""
     ok = pm_set_active(provider_id)
     if not ok:
@@ -335,7 +335,7 @@ async def provider_activate(provider_id: str):
 
 
 @router.post("/providers/activate-model")
-async def model_activate(body: dict):
+async def model_activate(body: dict, user=Depends(get_current_user)):
     """Define o modelo ativo dentro do provider ativo."""
     model_id = body.get("model_id", "")
     if not model_id:
@@ -347,13 +347,13 @@ async def model_activate(body: dict):
 
 
 @router.get("/providers/active-config")
-async def providers_active_config():
+async def providers_active_config(user=Depends(get_current_user)):
     """Retorna a configuracao ativa (provider + modelo), sem segredos."""
     return _safe_provider_config(pm_active_config())
 
 
 @router.get("/providers/status")
-async def providers_status(provider_id: str = ""):
+async def providers_status(provider_id: str = "", user=Depends(get_current_user)):
     """
     Status detalhado do provider ativo (ou de um específico).
     Retorna has_key, key_source, key_masked, configured.
@@ -362,11 +362,12 @@ async def providers_status(provider_id: str = ""):
 
 
 @router.post("/providers/test")
-async def providers_test(body: dict = {}):
+async def providers_test(body: dict | None = None, user=Depends(get_current_user)):
     """
     Testa o provider ativo com uma chamada real leve.
     Envia "ping" e mede latência.
     """
+    body = body or {}
     provider_id = body.get("provider_id", "")
     model_id = body.get("model_id", "")
 
@@ -534,7 +535,7 @@ def _detect_key_source(provider_id: str, key: str) -> str:
 
 
 @router.get("/providers/manage/{provider_id}/models")
-async def provider_models(provider_id: str):
+async def provider_models(provider_id: str, user=Depends(get_current_user)):
     """Lista modelos de um provedor."""
     p = pm_get(provider_id)
     if not p:
@@ -543,7 +544,7 @@ async def provider_models(provider_id: str):
 
 
 @router.post("/providers/manage/{provider_id}/models")
-async def model_add(provider_id: str, body: dict):
+async def model_add(provider_id: str, body: dict, user=Depends(get_current_user)):
     """Adiciona um modelo a um provedor custom."""
     m = pm_add_model(provider_id, body)
     if not m:
@@ -552,7 +553,7 @@ async def model_add(provider_id: str, body: dict):
 
 
 @router.put("/providers/manage/{provider_id}/models/{model_id}")
-async def model_update(provider_id: str, model_id: str, body: dict):
+async def model_update(provider_id: str, model_id: str, body: dict, user=Depends(get_current_user)):
     """Atualiza um modelo."""
     try:
         m = pm_update_model(provider_id, model_id, body)
@@ -564,7 +565,7 @@ async def model_update(provider_id: str, model_id: str, body: dict):
 
 
 @router.delete("/providers/manage/{provider_id}/models/{model_id}")
-async def model_delete(provider_id: str, model_id: str):
+async def model_delete(provider_id: str, model_id: str, user=Depends(get_current_user)):
     """Remove um modelo de um provedor custom."""
     ok = pm_delete_model(provider_id, model_id)
     if not ok:
@@ -594,7 +595,7 @@ async def health():
 
 
 @router.get("/metrics")
-async def metrics():
+async def metrics(user=Depends(get_current_user)):
     return PlainTextResponse(get_metrics())
 
 
@@ -1026,20 +1027,20 @@ def _public_pool_account(acc: dict, provider_id: str) -> dict:
 
 
 @router.get("/codex/pool/{provider_id}")
-async def codex_pool_list(provider_id: str):
+async def codex_pool_list(provider_id: str, user=Depends(get_current_user)):
     """Lista contas no pool de um provider."""
     accounts = pool_list_accounts(provider_id)
     return [_public_pool_account(acc, provider_id) for acc in accounts]
 
 
 @router.get("/codex/pool/{provider_id}/stats")
-async def codex_pool_stats(provider_id: str):
+async def codex_pool_stats(provider_id: str, user=Depends(get_current_user)):
     """Estatísticas do pool (quotas, etc)."""
     return pool_get_stats(provider_id)
 
 
 @router.post("/codex/pool/{provider_id}/accounts")
-async def codex_pool_add(provider_id: str, body: dict):
+async def codex_pool_add(provider_id: str, body: dict, user=Depends(get_current_user)):
     """Adiciona uma conta ao pool (via tokens manualmente)."""
     try:
         acc = pool_add_account(provider_id, body)
@@ -1049,7 +1050,7 @@ async def codex_pool_add(provider_id: str, body: dict):
 
 
 @router.delete("/codex/pool/{provider_id}/accounts/{account_id}")
-async def codex_pool_remove(provider_id: str, account_id: str):
+async def codex_pool_remove(provider_id: str, account_id: str, user=Depends(get_current_user)):
     """Remove uma conta do pool."""
     ok = pool_remove_account(provider_id, account_id)
     if not ok:
@@ -1058,7 +1059,7 @@ async def codex_pool_remove(provider_id: str, account_id: str):
 
 
 @router.post("/codex/pool/{provider_id}/accounts/{account_id}/refresh")
-async def codex_pool_refresh(provider_id: str, account_id: str):
+async def codex_pool_refresh(provider_id: str, account_id: str, user=Depends(get_current_user)):
     """Renova token de uma conta."""
     tokens = await pool_refresh_token(provider_id, account_id)
     if not tokens:
@@ -1067,21 +1068,21 @@ async def codex_pool_refresh(provider_id: str, account_id: str):
 
 
 @router.post("/codex/pool/{provider_id}/refresh-all")
-async def codex_pool_refresh_all(provider_id: str):
+async def codex_pool_refresh_all(provider_id: str, user=Depends(get_current_user)):
     """Renova tokens de todas as contas expiradas."""
     results = await pool_refresh_all(provider_id)
     return {"results": results}
 
 
 @router.post("/codex/pool/{provider_id}/update-quota")
-async def codex_pool_update_quota(provider_id: str):
+async def codex_pool_update_quota(provider_id: str, user=Depends(get_current_user)):
     """Atualiza cota de todas as contas."""
     results = await pool_update_quota(provider_id)
     return {"results": results}
 
 
 @router.get("/codex/pool/{provider_id}/best")
-async def codex_pool_best(provider_id: str):
+async def codex_pool_best(provider_id: str, user=Depends(get_current_user)):
     """Retorna a melhor conta sem expor access_token/refresh_token."""
     best = await pool_get_best(provider_id)
     if not best:
@@ -1094,7 +1095,7 @@ async def codex_pool_best(provider_id: str):
 # ─── Device Code ─────────────────────────────────────────────────────
 
 @router.post("/codex/device-code/request")
-async def codex_device_request():
+async def codex_device_request(user=Depends(get_current_user)):
     """Passo 1: Inicia Device Code OAuth.
     Retorna user_code, verification_uri e request_id.
     O frontend deve chamar /codex/device-code/poll/{request_id} a cada ~5s.
@@ -1112,7 +1113,7 @@ async def codex_device_request():
 
 
 @router.post("/codex/device-code/poll/{request_id}")
-async def codex_device_do_poll(request_id: str):
+async def codex_device_do_poll(request_id: str, user=Depends(get_current_user)):
     """
     Passo 2: Faz UMA tentativa de poll para ver se o usuário autenticou.
     - Se aprovado: faz exchange auth_code → tokens e salva no pool.
@@ -1124,13 +1125,13 @@ async def codex_device_do_poll(request_id: str):
 
 
 @router.get("/codex/device-code/status/{request_id}")
-async def codex_device_status(request_id: str):
+async def codex_device_status(request_id: str, user=Depends(get_current_user)):
     """Consulta o status atual (sem fazer poll)."""
     return get_device_session_status(request_id)
 
 
 @router.post("/codex/extract-auth")
-async def codex_extract_auth(body: dict):
+async def codex_extract_auth(body: dict, user=Depends(get_current_user)):
     """Extrai tokens de um auth.json enviado pelo usuário."""
     tokens = extract_tokens_from_json(body)
     if not tokens:
