@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse
 
 from src.api.routes import router
 from src.config import settings
+from src.core.auth import decode_access_token, rag_collection_for_user
 
 app = FastAPI(
     title="Chatbot API",
@@ -58,18 +59,37 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.rag.retriever import retrieve_context
-    from src.db.repository import ConversationRepo
+    from src.db.repository import ConversationRepo, UserRepo
+    from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
 
-    async def _add_msg(session_id: str, role: str, content: str, **metadata):
+    async def _add_msg(session_id: str, role: str, content: str, user_id: int | None = None, **metadata):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
-            lambda: ConversationRepo.add_message(session_id, role, content, **metadata),
+            lambda: ConversationRepo.add_message(session_id, role, content, user_id=user_id, **metadata),
         )
 
+    def _scoped_session_id(user_id: int, raw_session_id: str) -> str:
+        if raw_session_id.startswith(f"u{user_id}:"):
+            return raw_session_id
+        return f"u{user_id}:{raw_session_id or 'default'}"
+
+    def _current_user():
+        token = websocket.query_params.get("token", "")
+        if token:
+            payload = decode_access_token(token)
+            if payload:
+                user = UserRepo.get(int(payload.get("sub", 0)))
+                if user:
+                    return user
+        return UserRepo.ensure_default_user()
+
+    init_db()
     await websocket.accept()
-    session_id = "default"
+    user = _current_user()
+    session_id = _scoped_session_id(user.id, "default")
+    rag_collection = rag_collection_for_user(user.id)
 
     try:
         while True:
@@ -82,7 +102,7 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             if msg_type == "chat":
-                session_id = data.get("session_id", session_id)
+                session_id = _scoped_session_id(user.id, data.get("session_id", "default"))
                 message = data.get("message", "").strip()
                 use_rag = data.get("use_rag", True)
                 use_thinking = data.get("use_thinking", True)
@@ -120,14 +140,14 @@ async def websocket_chat(websocket: WebSocket):
                     async def fetch_rag():
                         nonlocal rag_context
                         loop = asyncio.get_event_loop()
-                        rag_context = await loop.run_in_executor(None, retrieve_context, message)
+                        rag_context = await loop.run_in_executor(None, retrieve_context, message, 4, None, rag_collection)
                     rag_task = asyncio.create_task(fetch_rag())
                     await websocket.send_json({"type": "status", "text": "Consultando base de conhecimento..."})
 
                 if use_thinking:
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
-                save_task = asyncio.create_task(_add_msg(session_id, "user", message))
+                save_task = asyncio.create_task(_add_msg(session_id, "user", message, user_id=user.id))
 
                 if rag_task:
                     await rag_task
@@ -155,7 +175,7 @@ async def websocket_chat(websocket: WebSocket):
 
                 MESSAGES_TOTAL.labels(role="assistant").inc()
                 await save_task
-                ai_msg = await _add_msg(session_id, "assistant", full_response, **model_meta)
+                ai_msg = await _add_msg(session_id, "assistant", full_response, user_id=user.id, **model_meta)
 
                 total_time = time.time() - t_start
                 LATENCY_HISTOGRAM.labels(route=route).observe(total_time)

@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query, Depends, Header
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from slowapi import Limiter
@@ -16,7 +16,8 @@ from slowapi.util import get_remote_address
 from src.api.schemas import (
     ChatRequest, ChatResponse, ChatStreamRequest,
     IngestRequest, IngestResponse, FeedbackRequest, StatsResponse,
-    ConversationResponse,
+    ConversationResponse, RegisterRequest, LoginRequest, AuthResponse, UserResponse,
+    OnboardingRequest, SkillToggleRequest,
 )
 from src.core.memory import get_session
 from src.core.chat import ChatEngine
@@ -29,9 +30,10 @@ from src.core.llm import get_llm
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
-from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo
+from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
+from src.core.auth import create_access_token, decode_access_token, rag_collection_for_user
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -43,25 +45,135 @@ def ensure_db():
     global _db_initialized
     if not _db_initialized:
         _init_db()
+        UserRepo.ensure_default_user()
+        SkillRepo.ensure_defaults()
         _db_initialized = True
 
 
-async def async_add_message(session_id: str, role: str, content: str, **metadata) -> "Message":
-    """Executa add_message em thread separada para não bloquear o event loop."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: ConversationRepo.add_message(session_id, role, content, **metadata),
+def _user_response(user) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        display_name=user.display_name or user.username,
+        is_admin=bool(user.is_admin),
     )
 
 
-async def async_set_language(session_id: str, lang: str) -> None:
+def _scoped_session_id(user_id: int, session_id: str | None) -> str:
+    raw = (session_id or "default").strip() or "default"
+    if raw.startswith(f"u{user_id}:"):
+        return raw
+    return f"u{user_id}:{raw}"
+
+
+def _public_session_id(user_id: int, session_id: str) -> str:
+    prefix = f"u{user_id}:"
+    return session_id[len(prefix):] if session_id.startswith(prefix) else session_id
+
+
+async def get_optional_user(authorization: str | None = Header(default=None)):
+    ensure_db()
+    if authorization and authorization.lower().startswith("bearer "):
+        payload = decode_access_token(authorization.split(" ", 1)[1].strip())
+        if payload:
+            user = UserRepo.get(int(payload.get("sub", 0)))
+            if user:
+                return user
+    return UserRepo.ensure_default_user()
+
+
+async def get_current_user(user=Depends(get_optional_user)):
+    if not user:
+        raise HTTPException(status_code=401, detail="Nao autenticado")
+    return user
+
+
+async def async_add_message(session_id: str, role: str, content: str, user_id: int | None = None, **metadata) -> "Message":
+    """Executa add_message em thread separada para nao bloquear o event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: ConversationRepo.add_message(session_id, role, content, user_id=user_id, **metadata),
+    )
+
+
+async def async_set_language(session_id: str, lang: str, user_id: int | None = None) -> None:
     """Executa set_language em thread separada."""
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, ConversationRepo.set_language, session_id, lang)
+    await loop.run_in_executor(None, ConversationRepo.set_language, session_id, lang, user_id)
 
 
 # ═══════════════════════════════════════════════════════════════
+
+# AUTH / ONBOARDING / SKILLS
+
+@router.post("/auth/register", response_model=AuthResponse)
+async def register(body: RegisterRequest):
+    ensure_db()
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 6 caracteres")
+    try:
+        user = UserRepo.create_user(body.email, body.username, body.password, body.display_name or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    token = create_access_token(user.id, user.username)
+    return AuthResponse(access_token=token, user=_user_response(user))
+
+
+@router.post("/auth/login", response_model=AuthResponse)
+async def login(body: LoginRequest):
+    ensure_db()
+    user = UserRepo.authenticate(body.login, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login ou senha invalidos")
+    token = create_access_token(user.id, user.username)
+    return AuthResponse(access_token=token, user=_user_response(user))
+
+
+@router.get("/auth/me", response_model=UserResponse)
+async def me(user=Depends(get_current_user)):
+    return _user_response(user)
+
+
+@router.post("/onboarding")
+async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user)):
+    ensure_db()
+    data = body.model_dump()
+    profile = UserRepo.update_profile(user.id, data)
+    memory_doc = "\n".join([
+        "# Perfil inicial do usuario",
+        f"Nome: {body.display_name or user.display_name or user.username}",
+        f"Idioma: {body.language}",
+        f"Fuso: {body.timezone}",
+        f"Papel/area: {body.role}",
+        f"Nivel tecnico: {body.technical_level}",
+        f"Tom preferido: {body.preferred_tone}",
+        "Objetivos: " + "; ".join(body.goals),
+        "Evitar: " + "; ".join(body.avoid),
+    ])
+    chunks = split_text(memory_doc)
+    collection = rag_collection_for_user(user.id)
+    metadatas = [{"source": "onboarding", "user_id": user.id, "filename": "perfil-inicial.md"}] * len(chunks)
+    ids = add_documents(chunks, metadatas=metadatas, collection_name=collection)
+    DocumentRepo.save("perfil-inicial.md", "onboarding", len(chunks), len(memory_doc.encode("utf-8")), user_id=user.id)
+    return {"status": "ok", "profile_id": profile.id, "rag_collection": collection, "chunks": len(chunks), "ids": ids}
+
+
+@router.get("/skills")
+async def list_skills(user=Depends(get_current_user)):
+    ensure_db()
+    return SkillRepo.list_for_user(user.id)
+
+
+@router.put("/skills/{skill_name}")
+async def toggle_skill(skill_name: str, body: SkillToggleRequest, user=Depends(get_current_user)):
+    ensure_db()
+    ok = SkillRepo.set_enabled(user.id, skill_name, body.enabled, body.config)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Skill nao encontrada")
+    return {"status": "ok", "skill": skill_name, "enabled": body.enabled}
+
 # CONFIG / PROFILES
 # ═══════════════════════════════════════════════════════════════
 
@@ -474,9 +586,11 @@ async def metrics():
 
 
 @router.get("/stats")
-async def stats():
+async def stats(user=Depends(get_current_user)):
     ensure_db()
-    fb_stats = feedback_mgr.get_stats()
+    fb_stats = ConversationRepo.get_stats(user.id)
+    total = fb_stats.get("likes", 0) + fb_stats.get("dislikes", 0)
+    fb_stats["satisfaction_rate"] = (fb_stats.get("likes", 0) / total * 100) if total else 0.0
     return StatsResponse(**fb_stats)
 
 
@@ -486,9 +600,11 @@ async def stats():
 
 @router.post("/chat")
 @limiter.limit("30/minute")
-async def chat(body: ChatRequest, request: Request):
+async def chat(body: ChatRequest, request: Request, user=Depends(get_current_user)):
     """Envia uma mensagem e obtém resposta completa."""
     ensure_db()
+    session_id = _scoped_session_id(user.id, body.session_id)
+    rag_collection = rag_collection_for_user(user.id)
 
     if settings.enable_moderation:
         blocked = moderate_text(body.message)
@@ -499,13 +615,13 @@ async def chat(body: ChatRequest, request: Request):
     lang = "pt"
     if settings.enable_multilang:
         lang = detect_language(body.message)
-        await async_set_language(body.session_id, lang)
+        await async_set_language(session_id, lang, user.id)
 
     context = None
     if body.use_rag and settings.enable_rag:
-        context = retrieve_context(body.message)
+        context = retrieve_context(body.message, collection_name=rag_collection)
 
-    memory = get_session(body.session_id)
+    memory = get_session(session_id)
     if context:
         memory.update_system_prompt(context)
     else:
@@ -523,8 +639,8 @@ async def chat(body: ChatRequest, request: Request):
         model_meta = get_active_model_metadata()
         response = await engine.chat(body.message)
         MESSAGES_TOTAL.labels(role="assistant").inc()
-        user_msg = await async_add_message(body.session_id, "user", body.message)
-        ai_msg = await async_add_message(body.session_id, "assistant", response, **model_meta)
+        user_msg = await async_add_message(session_id, "user", body.message, user_id=user.id)
+        ai_msg = await async_add_message(session_id, "assistant", response, user_id=user.id, **model_meta)
         return ChatResponse(
             response=response,
             session_id=body.session_id,
@@ -538,7 +654,7 @@ async def chat(body: ChatRequest, request: Request):
 
 @router.post("/chat/stream")
 @limiter.limit("30/minute")
-async def chat_stream(body: ChatStreamRequest, request: Request):
+async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(get_current_user)):
     """Envia mensagem e obtém resposta em streaming (SSE).
     Otimizado para mínima latência de primeiro token.
     """
@@ -551,7 +667,9 @@ async def chat_stream(body: ChatStreamRequest, request: Request):
                 yield {"event": "done", "data": ""}
             return EventSourceResponse(error_gen())
 
-    memory = get_session(body.session_id)
+    session_id = _scoped_session_id(user.id, body.session_id)
+    rag_collection = rag_collection_for_user(user.id)
+    memory = get_session(session_id)
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
@@ -560,7 +678,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request):
         async def fetch_rag():
             nonlocal rag_context
             rag_context = await asyncio.get_event_loop().run_in_executor(
-                None, retrieve_context, body.message
+                None, retrieve_context, body.message, 4, None, rag_collection
             )
         rag_task = asyncio.create_task(fetch_rag())
     else:
@@ -581,7 +699,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request):
 
         # Salva mensagem do usuário em background (não bloqueia o stream)
         save_task = asyncio.create_task(
-            async_add_message(body.session_id, "user", body.message)
+            async_add_message(session_id, "user", body.message, user_id=user.id)
         )
 
         # Se tiver RAG, espera o contexto ficar pronto
@@ -604,7 +722,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request):
 
             # Aguarda salvamento da mensagem do usuário (já deve ter terminado)
             await save_task
-            ai_msg = await async_add_message(body.session_id, "assistant", full_response, **model_meta)
+            ai_msg = await async_add_message(session_id, "assistant", full_response, user_id=user.id, **model_meta)
             yield {"event": "done", "data": json.dumps({
                 "message_id": ai_msg.id,
                 "has_reasoning": has_reasoning,
@@ -618,23 +736,23 @@ async def chat_stream(body: ChatStreamRequest, request: Request):
 
 
 @router.post("/chat/regenerate")
-async def regenerate(session_id: str = "default"):
-    """Regera a última resposta do assistente."""
-    memory = get_session(session_id)
+async def regenerate(session_id: str = "default", user=Depends(get_current_user)):
+    """Regera a ultima resposta do assistente."""
+    raw_session_id = session_id
+    scoped_session_id = _scoped_session_id(user.id, session_id)
+    memory = get_session(scoped_session_id)
     if len(memory.messages) < 2:
-        raise HTTPException(status_code=400, detail="Não há mensagens para regenerar")
-    # Remove última resposta do assistente
+        raise HTTPException(status_code=400, detail="Nao ha mensagens para regenerar")
     if memory.messages[-1].type == "ai":
         memory.messages.pop()
-    # Pega última pergunta do usuário
     user_msg = memory.messages[-1].content if memory.messages[-1].type == "human" else ""
     if not user_msg:
-        raise HTTPException(status_code=400, detail="Não há pergunta para regenerar")
+        raise HTTPException(status_code=400, detail="Nao ha pergunta para regenerar")
 
     engine = ChatEngine(memory)
     response = await engine.chat(user_msg)
-    ConversationRepo.add_message(session_id, "assistant", response)
-    return ChatResponse(response=response, session_id=session_id)
+    ConversationRepo.add_message(scoped_session_id, "assistant", response, user_id=user.id)
+    return ChatResponse(response=response, session_id=raw_session_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -642,14 +760,14 @@ async def regenerate(session_id: str = "default"):
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/conversations")
-async def list_conversations():
+async def list_conversations(user=Depends(get_current_user)):
     """Lista todas as conversas."""
     ensure_db()
-    convs = ConversationRepo.list_all()
+    convs = ConversationRepo.list_all(user.id)
     return [
         ConversationResponse(
             id=c.id,
-            session_id=c.session_id,
+            session_id=_public_session_id(user.id, c.session_id),
             title=c.title or f"Conversa {c.id}",
             language=c.language,
             message_count=c.messages_count,
@@ -661,16 +779,17 @@ async def list_conversations():
 
 
 @router.get("/conversations/{session_id}")
-async def get_conversation(session_id: str):
+async def get_conversation(session_id: str, user=Depends(get_current_user)):
     """Obtém uma conversa com suas mensagens."""
     ensure_db()
-    conv = ConversationRepo.get_by_session(session_id)
+    scoped_session_id = _scoped_session_id(user.id, session_id)
+    conv = ConversationRepo.get_by_session(scoped_session_id, user.id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
-    msgs = ConversationRepo.get_history(session_id, limit=200)
+    msgs = ConversationRepo.get_history(scoped_session_id, limit=200, user_id=user.id)
     return {
         "id": conv.id,
-        "session_id": conv.session_id,
+        "session_id": _public_session_id(user.id, conv.session_id),
         "title": conv.title or f"Conversa {conv.id}",
         "language": conv.language,
         "created_at": conv.created_at.isoformat(),
@@ -693,21 +812,21 @@ async def get_conversation(session_id: str):
 
 
 @router.put("/conversations/{session_id}/title")
-async def rename_conversation(session_id: str, title: str = Query(...)):
+async def rename_conversation(session_id: str, title: str = Query(...), user=Depends(get_current_user)):
     """Renomeia uma conversa."""
     ensure_db()
-    ConversationRepo.rename(session_id, title)
+    ConversationRepo.rename(_scoped_session_id(user.id, session_id), title, user.id)
     return {"status": "ok", "session_id": session_id, "title": title}
 
 
 @router.delete("/conversations/{session_id}")
-async def delete_conversation(session_id: str):
+async def delete_conversation(session_id: str, user=Depends(get_current_user)):
     """Deleta uma conversa."""
     ensure_db()
-    ConversationRepo.delete(session_id)
+    ConversationRepo.delete(_scoped_session_id(user.id, session_id), user.id)
     # Limpa memória também
     from src.core.memory import _sessions
-    _sessions.pop(session_id, None)
+    _sessions.pop(_scoped_session_id(user.id, session_id), None)
     return {"status": "ok", "deleted": session_id}
 
 
@@ -716,20 +835,20 @@ async def delete_conversation(session_id: str):
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/feedback")
-async def feedback(request: FeedbackRequest):
+async def feedback(request: FeedbackRequest, user=Depends(get_current_user)):
     """Registra feedback para uma mensagem."""
     ensure_db()
-    success = feedback_mgr.register_feedback(request.message_id, request.score)
+    success = ConversationRepo.set_feedback(request.message_id, request.score, user.id)
     if not success:
         raise HTTPException(status_code=404, detail="Mensagem não encontrada")
     return {"status": "ok"}
 
 
 @router.put("/messages/{message_id}")
-async def edit_message(message_id: int, content: str = Query(...)):
+async def edit_message(message_id: int, content: str = Query(...), user=Depends(get_current_user)):
     """Edita uma mensagem do usuário."""
     ensure_db()
-    msg = MessageRepo.update_content(message_id, content)
+    msg = MessageRepo.update_content(message_id, content, user.id)
     if not msg:
         raise HTTPException(status_code=404, detail="Mensagem não encontrada")
     return {"status": "ok", "message_id": msg.id, "content": msg.content}
@@ -740,8 +859,8 @@ async def edit_message(message_id: int, content: str = Query(...)):
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/session/{session_id}/clear")
-async def clear_session(session_id: str):
-    memory = get_session(session_id)
+async def clear_session(session_id: str, user=Depends(get_current_user)):
+    memory = get_session(_scoped_session_id(user.id, session_id))
     memory.clear()
     return {"status": "ok", "session_id": session_id}
 
@@ -751,18 +870,18 @@ async def clear_session(session_id: str):
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/ingest")
-async def ingest(body: IngestRequest):
+async def ingest(body: IngestRequest, user=Depends(get_current_user)):
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Texto vazio")
     chunks = split_text(body.text)
-    metadatas = [{"source": body.source, **(body.metadata or {})}] * len(chunks)
-    ids = add_documents(chunks, metadatas=metadatas)
+    metadatas = [{"source": body.source, "user_id": user.id, **(body.metadata or {})}] * len(chunks)
+    ids = add_documents(chunks, metadatas=metadatas, collection_name=rag_collection_for_user(user.id))
     DOCUMENTS_INGESTED.inc()
     return IngestResponse(chunks_count=len(chunks), ids=ids)
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user=Depends(get_current_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
     ext = os.path.splitext(file.filename)[1].lower()
@@ -774,17 +893,17 @@ async def upload_file(file: UploadFile = File(...)):
     if file_size > settings.max_upload_size_mb * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"Arquivo muito grande (máx {settings.max_upload_size_mb}MB)")
     chunks = split_text(text)
-    metadatas = [{"source": "upload", "filename": file.filename}] * len(chunks)
-    ids = add_documents(chunks, metadatas=metadatas)
-    DocumentRepo.save(file.filename, "upload", len(chunks), file_size)
+    metadatas = [{"source": "upload", "filename": file.filename, "user_id": user.id}] * len(chunks)
+    ids = add_documents(chunks, metadatas=metadatas, collection_name=rag_collection_for_user(user.id))
+    DocumentRepo.save(file.filename, "upload", len(chunks), file_size, user_id=user.id)
     DOCUMENTS_INGESTED.inc()
     return {"filename": file.filename, "size": file_size, "chunks": len(chunks), "ids": ids}
 
 
 @router.get("/documents")
-async def list_documents():
+async def list_documents(user=Depends(get_current_user)):
     ensure_db()
-    docs = DocumentRepo.list_all()
+    docs = DocumentRepo.list_all(user.id)
     return [
         {
             "id": d.id, "filename": d.filename, "source": d.source,
@@ -796,10 +915,10 @@ async def list_documents():
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: int):
+async def delete_document(doc_id: int, user=Depends(get_current_user)):
     """Deleta um documento da base."""
     ensure_db()
-    DocumentRepo.delete(doc_id)
+    DocumentRepo.delete(doc_id, user.id)
     return {"status": "ok", "deleted": doc_id}
 
 
@@ -808,13 +927,14 @@ async def delete_document(doc_id: int):
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/export/{session_id}")
-async def export_conversation(session_id: str, format: str = "txt"):
+async def export_conversation(session_id: str, format: str = "txt", user=Depends(get_current_user)):
     """Exporta uma conversa em TXT ou JSON."""
     ensure_db()
-    conv = ConversationRepo.get_by_session(session_id)
+    scoped_session_id = _scoped_session_id(user.id, session_id)
+    conv = ConversationRepo.get_by_session(scoped_session_id, user.id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
-    msgs = ConversationRepo.get_history(session_id, limit=500)
+    msgs = ConversationRepo.get_history(scoped_session_id, limit=500, user_id=user.id)
 
     if format == "json":
         data = {

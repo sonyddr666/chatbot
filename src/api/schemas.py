@@ -1,7 +1,7 @@
 """Modelos Pydantic para a API."""
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 
 
 class ChatRequest(BaseModel):
@@ -59,3 +59,47 @@ class ConversationResponse(BaseModel):
     message_count: int
     created_at: str
     updated_at: str
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    username: str
+    password: str
+    display_name: Optional[str] = ""
+
+
+class LoginRequest(BaseModel):
+    login: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    display_name: str = ""
+    is_admin: bool = False
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class OnboardingRequest(BaseModel):
+    display_name: Optional[str] = None
+    language: Optional[str] = "pt"
+    timezone: Optional[str] = "America/Sao_Paulo"
+    role: Optional[str] = ""
+    technical_level: Optional[str] = ""
+    preferred_tone: Optional[str] = "direto"
+    goals: list[str] = []
+    avoid: list[str] = []
+    memory_policy: Optional[str] = "ask"
+    extra: dict[str, Any] = {}
+
+
+class SkillToggleRequest(BaseModel):
+    enabled: bool
+    config: Optional[dict[str, Any]] = None

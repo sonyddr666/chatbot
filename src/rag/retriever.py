@@ -9,9 +9,10 @@ def retrieve_context(
     query: str,
     k: int = 4,
     min_score: Optional[float] = None,
+    collection_name: str = "documents",
 ) -> str:
     """Busca chunks relevantes e retorna como texto formatado para contexto."""
-    documents = similarity_search(query, k=k)
+    documents = similarity_search(query, k=k, collection_name=collection_name)
 
     if not documents:
         return ""
