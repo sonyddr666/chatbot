@@ -501,3 +501,22 @@ class SkillRepo:
             return True
         finally:
             db.close()
+
+    @staticmethod
+    def enabled_context_for_user(user_id: int) -> str:
+        """Build a safe prompt context from skills enabled for one user."""
+        enabled_skills = [skill for skill in SkillRepo.list_for_user(user_id) if skill.get("enabled")]
+        if not enabled_skills:
+            return ""
+
+        lines = [
+            "Skills habilitadas para este usuario:",
+            "Use estas habilidades como preferencia operacional. Nao execute rede, shell ou acoes externas sem confirmacao explicita do usuario.",
+        ]
+        for skill in enabled_skills:
+            definition = skill.get("definition") or {}
+            definition_text = json.dumps(definition, ensure_ascii=False, sort_keys=True)
+            lines.append(
+                f"- {skill['name']} ({skill['kind']}): {skill['description']} Definicao: {definition_text}"
+            )
+        return "\n".join(lines)

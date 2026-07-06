@@ -72,6 +72,16 @@ def _public_session_id(user_id: int, session_id: str) -> str:
     return session_id[len(prefix):] if session_id.startswith(prefix) else session_id
 
 
+def _user_prompt_context(user_id: int, rag_context: str | None = None) -> str | None:
+    sections = []
+    if rag_context:
+        sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
+    skills_context = SkillRepo.enabled_context_for_user(user_id)
+    if skills_context:
+        sections.append(skills_context)
+    return "\n\n".join(sections) if sections else None
+
+
 async def get_optional_user(authorization: str | None = Header(default=None)):
     ensure_db()
     if authorization and authorization.lower().startswith("bearer "):
@@ -622,14 +632,14 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         context = retrieve_context(body.message, collection_name=rag_collection)
 
     memory = get_session(session_id)
-    if context:
-        memory.update_system_prompt(context)
+    prompt_context = _user_prompt_context(user.id, context)
+    if prompt_context:
+        memory.update_system_prompt(prompt_context)
     else:
-        if len(memory.messages) == 1:
-            from langchain_core.messages import SystemMessage
-            from src.core.prompts import build_system_prompt
-            sys_prompt = build_system_prompt_multilang(lang) if settings.enable_multilang else build_system_prompt()
-            memory.messages[0] = SystemMessage(content=sys_prompt)
+        from langchain_core.messages import SystemMessage
+        from src.core.prompts import build_system_prompt
+        sys_prompt = build_system_prompt_multilang(lang) if settings.enable_multilang else build_system_prompt()
+        memory.messages[0] = SystemMessage(content=sys_prompt)
 
     engine = ChatEngine(memory)
     MESSAGES_TOTAL.labels(role="user").inc()
@@ -705,8 +715,8 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         # Se tiver RAG, espera o contexto ficar pronto
         if rag_task:
             await rag_task
-            if rag_context:
-                memory.update_system_prompt(rag_context)
+        prompt_context = _user_prompt_context(user.id, rag_context)
+        memory.update_system_prompt(prompt_context)
 
         # Inicia o streaming do LLM
         try:

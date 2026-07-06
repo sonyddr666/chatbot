@@ -182,6 +182,11 @@ export default function App() {
     })
   }, [disconnectWs])
 
+  const handleOnboardingDone = useCallback(() => {
+    if (user) localStorage.setItem(`chatbot_onboarding_done_${user.id}`, '1')
+    setShowOnboarding(false)
+  }, [user])
+
   const handleSend = useCallback((content: string) => {
     if (wsConnected) {
       useChatStore.setState({ isLoading: true, error: null })
@@ -248,7 +253,7 @@ export default function App() {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ProviderManager open={providerManagerOpen} onClose={() => setProviderManagerOpen(false)} />
       <SkillsPanel open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      {showOnboarding && <OnboardingModal user={user} onDone={() => setShowOnboarding(false)} />}
+      {showOnboarding && <OnboardingModal user={user} onDone={handleOnboardingDone} />}
 
       <div className="flex-1 flex flex-col min-w-0">
         <header

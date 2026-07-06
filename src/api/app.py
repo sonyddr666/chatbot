@@ -59,7 +59,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.rag.retriever import retrieve_context
-    from src.db.repository import ConversationRepo, UserRepo
+    from src.db.repository import ConversationRepo, SkillRepo, UserRepo
     from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
 
@@ -75,6 +75,15 @@ async def websocket_chat(websocket: WebSocket):
             return raw_session_id
         return f"u{user_id}:{raw_session_id or 'default'}"
 
+    def _user_prompt_context(user_id: int, rag_context: str | None = None) -> str | None:
+        sections = []
+        if rag_context:
+            sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
+        skills_context = SkillRepo.enabled_context_for_user(user_id)
+        if skills_context:
+            sections.append(skills_context)
+        return "\n\n".join(sections) if sections else None
+
     def _current_user():
         token = websocket.query_params.get("token", "")
         if token:
@@ -86,6 +95,7 @@ async def websocket_chat(websocket: WebSocket):
         return UserRepo.ensure_default_user()
 
     init_db()
+    SkillRepo.ensure_defaults()
     await websocket.accept()
     user = _current_user()
     session_id = _scoped_session_id(user.id, "default")
@@ -151,8 +161,8 @@ async def websocket_chat(websocket: WebSocket):
 
                 if rag_task:
                     await rag_task
-                    if rag_context:
-                        memory.update_system_prompt(rag_context)
+                prompt_context = _user_prompt_context(user.id, rag_context)
+                memory.update_system_prompt(prompt_context)
 
                 # Streaming LLM
                 engine = ChatEngine(memory)
