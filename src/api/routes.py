@@ -37,7 +37,8 @@ from src.core.auth import create_access_token, rag_collection_for_user
 from src.core.auth_required import resolve_authorized_user
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
+_SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
+limiter = Limiter(key_func=get_remote_address, config_filename=_SLOWAPI_CONFIG)
 feedback_mgr = FeedbackManager()
 _db_initialized = False
 
