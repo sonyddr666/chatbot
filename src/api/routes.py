@@ -33,7 +33,8 @@ from src.rag.retriever import retrieve_context
 from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
-from src.core.auth import create_access_token, decode_access_token, rag_collection_for_user
+from src.core.auth import create_access_token, rag_collection_for_user
+from src.core.auth_required import resolve_authorized_user
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -84,13 +85,7 @@ def _user_prompt_context(user_id: int, rag_context: str | None = None) -> str | 
 
 async def get_optional_user(authorization: str | None = Header(default=None)):
     ensure_db()
-    if authorization and authorization.lower().startswith("bearer "):
-        payload = decode_access_token(authorization.split(" ", 1)[1].strip())
-        if payload:
-            user = UserRepo.get(int(payload.get("sub", 0)))
-            if user:
-                return user
-    return UserRepo.ensure_default_user()
+    return resolve_authorized_user(authorization)
 
 
 async def get_current_user(user=Depends(get_optional_user)):

@@ -84,6 +84,7 @@ export default function App() {
     reconnect: reconnectWs,
     disconnect: disconnectWs,
   } = useWebSocket({
+    enabled: !!user,
     onChunk: handleStreamChunk,
     onError: errorMessage => {
       useChatStore.setState({ error: errorMessage, isLoading: false })

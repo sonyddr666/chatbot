@@ -10,7 +10,8 @@ from fastapi.responses import RedirectResponse
 
 from src.api.routes import router
 from src.config import settings
-from src.core.auth import decode_access_token, rag_collection_for_user
+from src.core.auth import rag_collection_for_user
+from src.core.auth_required import resolve_authorized_user
 
 app = FastAPI(
     title="Chatbot API",
@@ -59,7 +60,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.rag.retriever import retrieve_context
-    from src.db.repository import ConversationRepo, SkillRepo, UserRepo
+    from src.db.repository import ConversationRepo, SkillRepo
     from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
 
@@ -86,18 +87,18 @@ async def websocket_chat(websocket: WebSocket):
 
     def _current_user():
         token = websocket.query_params.get("token", "")
-        if token:
-            payload = decode_access_token(token)
-            if payload:
-                user = UserRepo.get(int(payload.get("sub", 0)))
-                if user:
-                    return user
-        return UserRepo.ensure_default_user()
+        return resolve_authorized_user(f"Bearer {token}") if token else None
 
     init_db()
     SkillRepo.ensure_defaults()
-    await websocket.accept()
     user = _current_user()
+    if not user:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "text": "Nao autenticado"})
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
     session_id = _scoped_session_id(user.id, "default")
     rag_collection = rag_collection_for_user(user.id)
 

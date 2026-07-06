@@ -5,6 +5,7 @@ type ChunkHandler = (chunk: StreamChunk) => void
 type StatusHandler = (status: string) => void
 
 interface UseWebSocketOptions {
+  enabled?: boolean
   onChunk?: ChunkHandler
   onStatus?: StatusHandler
   onError?: (error: string) => void
@@ -22,10 +23,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
   handlersRef.current = options
 
   const connect = useCallback(() => {
+    if (handlersRef.current.enabled === false) return
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     const token = getAuthToken()
-    const url = token ? `${WS_BASE}?token=${encodeURIComponent(token)}` : WS_BASE
+    if (!token) return
+    const url = `${WS_BASE}?token=${encodeURIComponent(token)}`
     const ws = new WebSocket(url)
     wsRef.current = ws
 
@@ -92,6 +95,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
     ws.onclose = () => {
       setConnected(false)
+      if (handlersRef.current.enabled === false) return
       // Reconecta automaticamente após 3s
       reconnectTimerRef.current = setTimeout(() => {
         setReconnecting(true)
@@ -151,9 +155,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
   // Conecta automaticamente
   useEffect(() => {
-    connect()
+    if (options.enabled === false) {
+      disconnect()
+    } else {
+      connect()
+    }
     return () => disconnect()
-  }, [connect, disconnect])
+  }, [connect, disconnect, options.enabled])
 
   return {
     connected,
