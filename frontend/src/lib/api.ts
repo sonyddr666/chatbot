@@ -1,5 +1,24 @@
 const API = '/api/v1'
 
+const TOKEN_KEY = 'chatbot_auth_token'
+
+export function getAuthToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function setAuthToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getAuthToken()
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  }
+}
+
 export interface Profile {
   id: string; name: string; model: string; provider: string; active: boolean
 }
@@ -29,6 +48,32 @@ export interface AppConfig {
   moderation: boolean; multilang: boolean; rag: boolean; max_upload_mb: number
 }
 
+export interface UserInfo {
+  id: number
+  email: string
+  username: string
+  display_name: string
+  is_admin: boolean
+}
+
+export interface AuthResponse {
+  access_token: string
+  token_type: string
+  user: UserInfo
+}
+
+export interface SkillInfo {
+  id: number
+  name: string
+  description: string
+  kind: string
+  definition: Record<string, unknown>
+  requires_network: boolean
+  requires_shell: boolean
+  risk_level: number
+  enabled: boolean
+}
+
 /** Chunk do streaming SSE */
 export interface StreamChunk {
   type: 'content' | 'reasoning' | 'done' | 'start' | 'status'
@@ -52,7 +97,7 @@ export interface StreamChunk {
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(API + url, {
-    headers: { 'Content-Type': 'application/json', ...opts?.headers },
+    headers: authHeaders({ 'Content-Type': 'application/json', ...opts?.headers }),
     ...opts,
   })
   if (!res.ok) {
@@ -63,6 +108,35 @@ async function req<T>(url: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  setToken: setAuthToken,
+  getToken: getAuthToken,
+
+  // Auth
+  register: (body: { email: string; username: string; password: string; display_name?: string }) =>
+    req<AuthResponse>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+  login: (body: { login: string; password: string }) =>
+    req<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+  me: () => req<UserInfo>('/auth/me'),
+  logout: () => setAuthToken(''),
+  onboarding: (body: {
+    display_name?: string
+    language?: string
+    timezone?: string
+    role?: string
+    technical_level?: string
+    preferred_tone?: string
+    goals?: string[]
+    avoid?: string[]
+    memory_policy?: string
+    extra?: Record<string, unknown>
+  }) => req<any>('/onboarding', { method: 'POST', body: JSON.stringify(body) }),
+  listSkills: () => req<SkillInfo[]>('/skills'),
+  toggleSkill: (name: string, enabled: boolean, config?: Record<string, unknown>) =>
+    req<any>(`/skills/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, config }),
+    }),
+
   // Config
   getConfig: () => req<AppConfig>('/config'),
   getProfiles: () => req<Profile[]>('/profiles'),
@@ -82,7 +156,7 @@ export const api = {
    */
   async *stream(message: string, sessionId = 'default', useRag = false): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat/stream`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
     })
     if (!res.ok) throw new Error('Falha no streaming')
@@ -202,7 +276,7 @@ export const api = {
   listDocuments: () => req<DocumentInfo[]>('/documents'),
   async uploadDocument(file: File): Promise<{ filename: string; chunks: number }> {
     const fd = new FormData(); fd.append('file', file)
-    const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
+    const res = await fetch(`${API}/upload`, { method: 'POST', headers: authHeaders(), body: fd })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload failed')
     return res.json()
   },
@@ -213,7 +287,7 @@ export const api = {
 
   // Export
   exportConversation: async (sessionId: string, format = 'txt') => {
-    const res = await fetch(`${API}/export/${sessionId}?format=${format}`)
+    const res = await fetch(`${API}/export/${sessionId}?format=${format}`, { headers: authHeaders() })
     if (!res.ok) throw new Error('Export failed')
     return res.text()
   },

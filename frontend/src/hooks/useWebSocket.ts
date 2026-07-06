@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { StreamChunk } from '../lib/api'
+import { getAuthToken, type StreamChunk } from '../lib/api'
 
 type ChunkHandler = (chunk: StreamChunk) => void
 type StatusHandler = (status: string) => void
@@ -24,7 +24,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-    const ws = new WebSocket(WS_BASE)
+    const token = getAuthToken()
+    const url = token ? `${WS_BASE}?token=${encodeURIComponent(token)}` : WS_BASE
+    const ws = new WebSocket(url)
     wsRef.current = ws
 
     ws.onopen = () => {

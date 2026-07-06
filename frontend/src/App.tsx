@@ -1,14 +1,17 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { Menu, Settings, Wifi, WifiOff, Server, ArrowDown } from 'lucide-react'
+import { ArrowDown, LogOut, Menu, Server, Settings, Sparkles, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ProviderManager } from './components/ProviderManager'
 import { ModelSelector } from './components/ModelSelector'
+import { AuthPanel } from './components/AuthPanel'
+import { OnboardingModal } from './components/OnboardingModal'
+import { SkillsPanel } from './components/SkillsPanel'
 import { useChatStore } from './hooks/useChatStore'
-import type { ChatMessage } from './lib/api'
+import { api, getAuthToken, setAuthToken, type ChatMessage, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 
 export default function App() {
@@ -22,9 +25,102 @@ export default function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [providerManagerOpen, setProviderManagerOpen] = useState(false)
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [user, setUser] = useState<UserInfo | null>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const autoScrollRef = useRef(true)
+
+  const handleStreamChunk = useCallback((chunk: StreamChunk) => {
+    if (chunk.type === 'start') {
+      if (chunk.route) useChatStore.setState({ route: chunk.route })
+      return
+    }
+
+    if (chunk.type === 'reasoning' || chunk.type === 'content') {
+      useChatStore.setState(state => {
+        const nextMessages = [...state.messages]
+        const last = nextMessages[nextMessages.length - 1]
+        if (last?.role === 'assistant') {
+          nextMessages[nextMessages.length - 1] = chunk.type === 'reasoning'
+            ? { ...last, reasoning: `${last.reasoning || ''}${chunk.text || ''}` }
+            : { ...last, content: `${last.content || ''}${chunk.text || ''}` }
+        }
+        return { messages: nextMessages }
+      })
+      return
+    }
+
+    if (chunk.type === 'done') {
+      useChatStore.setState(state => {
+        const nextMessages = [...state.messages]
+        const last = nextMessages[nextMessages.length - 1]
+        if (last?.role === 'assistant') {
+          nextMessages[nextMessages.length - 1] = {
+            ...last,
+            messageId: chunk.messageId,
+            providerId: chunk.providerId,
+            providerName: chunk.providerName,
+            modelId: chunk.modelId,
+            modelName: chunk.modelName,
+          }
+        }
+        return {
+          messages: nextMessages,
+          isLoading: false,
+          route: chunk.hasReasoning === undefined ? state.route : chunk.hasReasoning ? 'full' : 'fast',
+          lastMetrics: chunk.metrics || state.lastMetrics,
+        }
+      })
+      useChatStore.getState().loadConversations()
+    }
+  }, [])
+
+  const {
+    connected: wsConnected,
+    sendMessage: wsSend,
+    reconnect: reconnectWs,
+    disconnect: disconnectWs,
+  } = useWebSocket({
+    onChunk: handleStreamChunk,
+    onError: errorMessage => {
+      useChatStore.setState({ error: errorMessage, isLoading: false })
+    },
+  })
+
+  useEffect(() => {
+    setWsConnected(wsConnected)
+  }, [setWsConnected, wsConnected])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadUser() {
+      const token = getAuthToken()
+      if (!token) {
+        setAuthChecked(true)
+        return
+      }
+
+      try {
+        const me = await api.me()
+        if (cancelled) return
+        setUser(me)
+        setShowOnboarding(localStorage.getItem(`chatbot_onboarding_done_${me.id}`) !== '1')
+      } catch {
+        setAuthToken('')
+      } finally {
+        if (!cancelled) setAuthChecked(true)
+      }
+    }
+
+    loadUser()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current
@@ -46,108 +142,91 @@ export default function App() {
     setShowScrollBottom(!near)
   }, [isNearBottom])
 
-  // Só auto-desce quando entra uma nova bolha de mensagem.
-  // Não acompanha cada chunk/token da resposta, pra não "grudar" no scroll.
   useEffect(() => {
     if (!autoScrollRef.current) return
-    requestAnimationFrame(() => scrollToBottom('auto'))
-  }, [messages.length, scrollToBottom])
+    scrollToBottom('auto')
+  }, [messages, scrollToBottom])
 
-  // Quando a resposta cresce e empurra o fim pra baixo, apenas mostra o botão.
-  // Não move o scroll sozinho.
-  useEffect(() => {
-    requestAnimationFrame(() => setShowScrollBottom(!isNearBottom()))
-  }, [messages, isNearBottom])
-
-  // Evento para abrir gerenciador pelo ModelSelector
   useEffect(() => {
     const handler = () => setProviderManagerOpen(true)
     window.addEventListener('open-provider-manager', handler)
     return () => window.removeEventListener('open-provider-manager', handler)
   }, [])
 
-  // ── WebSocket ──
-  const handleChunk = useCallback((chunk: any) => {
-    const set = useChatStore.setState
-    const get = useChatStore.getState
-    const s = get()
-
-    if (chunk.type === 'reasoning') {
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, reasoning: (last.reasoning || '') + (chunk.text || '') }
-        set({ messages: msgs })
-      }
-    } else if (chunk.type === 'content') {
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, content: last.content + (chunk.text || '') }
-        set({ messages: msgs })
-      }
-    } else if (chunk.type === 'done') {
-      const msgs = [...get().messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = {
-          ...last,
-          messageId: chunk.messageId,
-          providerId: chunk.providerId,
-          providerName: chunk.providerName,
-          modelId: chunk.modelId,
-          modelName: chunk.modelName,
-        }
-      }
-      set({ messages: msgs, isLoading: false, route: chunk.hasReasoning ? 'full' : 'fast', lastMetrics: chunk.metrics || null })
-      get().loadConversations()
-    } else if (chunk.type === 'start') {
-      set({ route: chunk.route || null })
-    }
-  }, [])
-
-  const handleStatus = useCallback((_status: string) => {
-    // Poderia mostrar status na UI
-  }, [])
-
-  const handleWsError = useCallback((err: string) => {
-    setError(err)
-    useChatStore.setState({ isLoading: false })
-  }, [setError])
-
-  const { connected: wsConnected, sendMessage: wsSend } = useWebSocket({
-    onChunk: handleChunk,
-    onStatus: handleStatus,
-    onError: handleWsError,
-  })
-
-  // Sincroniza estado de conexão
   useEffect(() => {
-    setWsConnected(wsConnected)
-  }, [wsConnected, setWsConnected])
-
-  // ── Load inicial ──
-  useEffect(() => {
+    if (!user) return
     loadConfig()
     loadProfiles()
-    // Carrega o histórico da sessão atual apenas uma vez ao abrir.
     useChatStore.getState().setSession(useChatStore.getState().sessionId)
-  }, [loadConfig, loadProfiles])
+  }, [loadConfig, loadProfiles, user])
 
-  // ── Send via WebSocket ou HTTP ──
+  const handleAuthenticated = useCallback((nextUser: UserInfo) => {
+    setUser(nextUser)
+    setShowOnboarding(localStorage.getItem(`chatbot_onboarding_done_${nextUser.id}`) !== '1')
+    setTimeout(() => reconnectWs(), 50)
+  }, [reconnectWs])
+
+  const handleLogout = useCallback(() => {
+    disconnectWs()
+    api.logout()
+    setUser(null)
+    setShowOnboarding(false)
+    useChatStore.setState({
+      messages: [],
+      conversations: [],
+      documents: [],
+      stats: null,
+      sessionId: 'default',
+      isLoading: false,
+      error: null,
+    })
+  }, [disconnectWs])
+
   const handleSend = useCallback((content: string) => {
     if (wsConnected) {
       useChatStore.setState({ isLoading: true, error: null })
-      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content, timestamp: new Date() }
-      const asstMsg: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: new Date(), reasoning: '' }
-      useChatStore.setState(s => ({ messages: [...s.messages, userMsg, asstMsg] }))
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content,
+        timestamp: new Date(),
+      }
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+        reasoning: '',
+      }
+      useChatStore.setState(state => ({ messages: [...state.messages, userMsg, assistantMsg] }))
       wsSend(content, sessionId, useRag, useThinking)
-    } else {
-      sendMessage(content)
+      return
     }
-  }, [wsConnected, wsSend, sessionId, useRag, useThinking, sendMessage])
+
+    sendMessage(content)
+  }, [sendMessage, sessionId, useRag, useThinking, wsConnected, wsSend])
 
   const isLastAssistant = messages.length > 0 && messages[messages.length - 1]?.role === 'assistant'
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen grid place-items-center" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-10 w-10 rounded-full border-4 border-current border-t-transparent animate-spin opacity-70" />
+          <p className="text-sm font-medium">Carregando sessao...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <>
+        <Toaster position="top-center" />
+        <AuthPanel onAuthenticated={handleAuthenticated} />
+      </>
+    )
+  }
 
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
@@ -168,68 +247,97 @@ export default function App() {
       <Sidebar />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ProviderManager open={providerManagerOpen} onClose={() => setProviderManagerOpen(false)} />
+      <SkillsPanel open={skillsOpen} onClose={() => setSkillsOpen(false)} />
+      {showOnboarding && <OnboardingModal user={user} onDone={() => setShowOnboarding(false)} />}
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
         <header
           className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0"
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
-          <div className="flex items-center gap-3">
-            <button onClick={toggleSidebar} className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={toggleSidebar}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="Menu"
+            >
               <Menu size={20} style={{ color: 'var(--text-secondary)' }} />
             </button>
-            <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>🤖 Chatbot</h1>
+            <h1 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)' }}>Chatbot</h1>
             {route && (
-              <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{
-                background: route === 'fast' ? '#dcfce7' : '#dbeafe',
-                color: route === 'fast' ? '#16a34a' : 'var(--accent)',
-              }}>
-                {route === 'fast' ? '⚡ Rápida' : '🔬 Completa'}
+              <span
+                className="hidden sm:inline-flex text-xs px-2 py-0.5 rounded-full font-medium"
+                style={{
+                  background: route === 'fast' ? '#dcfce7' : '#dbeafe',
+                  color: route === 'fast' ? '#16a34a' : 'var(--accent)',
+                }}
+              >
+                {route === 'fast' ? 'Rapida' : 'Completa'}
               </span>
             )}
             {lastMetrics?.total_s && (
-              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+              <span
+                className="hidden sm:inline-flex text-xs px-2 py-0.5 rounded-full"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+              >
                 {lastMetrics.total_s.toFixed(1)}s
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Conexão */}
-            <span title={wsConnected ? 'WebSocket' : 'HTTP'}>
+            <span className="hidden md:inline text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
+              {user.display_name || user.username}
+            </span>
+            <span title={wsConnected ? 'WebSocket conectado' : 'Modo HTTP'}>
               {wsConnected ? (
                 <Wifi size={14} style={{ color: '#16a34a' }} />
               ) : (
                 <WifiOff size={14} style={{ color: 'var(--text-tertiary)' }} />
               )}
             </span>
-
             <ModelSelector />
+            <button
+              onClick={() => setSkillsOpen(true)}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="Skills"
+            >
+              <Sparkles size={18} style={{ color: 'var(--text-secondary)' }} />
+            </button>
             <button
               onClick={() => setProviderManagerOpen(true)}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-              title="Gerenciar Providers"
+              title="Gerenciar providers"
             >
               <Server size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
-            <button onClick={() => setSettingsOpen(true)} className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors">
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="Configuracoes"
+            >
               <Settings size={18} style={{ color: 'var(--text-secondary)' }} />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="Sair"
+            >
+              <LogOut size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
           </div>
         </header>
 
-        {/* Error banner */}
         {error && (
-          <div className="flex items-center justify-between px-4 py-2 text-sm"
-            style={{ background: '#fef2f2', color: '#dc2626', borderBottom: '1px solid #fecaca' }}>
-            <span>⚠️ {error}</span>
-            <button onClick={() => setError(null)} className="font-bold hover:opacity-70">×</button>
+          <div
+            className="flex items-center justify-between px-4 py-2 text-sm"
+            style={{ background: '#fef2f2', color: '#dc2626', borderBottom: '1px solid #fecaca' }}
+          >
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="font-bold hover:opacity-70">x</button>
           </div>
         )}
 
-        {/* Messages */}
         <div className="relative flex-1 min-h-0">
           <div
             ref={scrollRef}
@@ -240,25 +348,29 @@ export default function App() {
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full min-h-[60vh]">
                   <div className="text-center max-w-md animate-fade-in">
-                    <div className="text-7xl mb-6">🤖</div>
+                    <div className="mx-auto mb-6 grid h-20 w-20 place-items-center rounded-3xl" style={{ background: 'var(--accent-light)' }}>
+                      <Sparkles size={38} style={{ color: 'var(--accent)' }} />
+                    </div>
                     <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
-                      Olá! Como posso ajudar?
+                      Ola, {user.display_name || user.username}.
                     </h2>
                     <p className="mb-6" style={{ color: 'var(--text-secondary)' }}>
-                      Sou um assistente AI com suporte a RAG, multilíngue e muito mais.
+                      Seu chat agora tem login, memoria/RAG por usuario, onboarding inicial e skills configuraveis.
                     </p>
                     <div className="grid grid-cols-2 gap-3 text-left">
                       {[
-                        { icon: '💬', title: 'Conversas', desc: 'Histórico completo com busca' },
-                        { icon: '📄', title: 'Documentos', desc: 'Upload e RAG automático' },
-                        { icon: '🌍', title: 'Multilíngue', desc: 'Detecta seu idioma' },
-                        { icon: '🎨', title: 'Temas', desc: 'Claro e escuro' },
-                      ].map(s => (
-                        <div key={s.title} className="p-3 rounded-xl"
-                          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-                          <p className="text-lg mb-1">{s.icon}</p>
-                          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{s.title}</p>
-                          <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{s.desc}</p>
+                        { title: 'Multiusuario', desc: 'Dados isolados por conta' },
+                        { title: 'RAG pessoal', desc: 'Documentos por usuario' },
+                        { title: 'Onboarding', desc: 'Perfil salvo como memoria' },
+                        { title: 'Skills', desc: 'Habilidades ativaveis' },
+                      ].map(item => (
+                        <div
+                          key={item.title}
+                          className="p-3 rounded-xl"
+                          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                        >
+                          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{item.title}</p>
+                          <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{item.desc}</p>
                         </div>
                       ))}
                     </div>
@@ -294,7 +406,7 @@ export default function App() {
                 color: 'var(--text-primary)',
                 borderColor: 'var(--border)',
               }}
-              title="Descer até o final"
+              title="Descer ate o final"
             >
               <ArrowDown size={14} />
               Final
@@ -302,7 +414,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Input */}
         <ChatInput onSend={handleSend} disabled={isLoading} onStop={stopGeneration} />
       </div>
     </div>
