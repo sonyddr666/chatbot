@@ -1,0 +1,220 @@
+const API = '/api/v1'
+
+export interface Profile {
+  id: string; name: string; model: string; provider: string; active: boolean
+}
+export interface ChatMessage {
+  id: string; role: 'user' | 'assistant'; content: string; timestamp: Date
+  messageId?: number; feedbackScore?: number | null; tokens?: number
+  reasoning?: string // pensamento interno do modelo
+  providerId?: string | null
+  providerName?: string | null
+  modelId?: string | null
+  modelName?: string | null
+}
+export interface Conversation {
+  id: number; session_id: string; title: string; language: string
+  message_count: number; created_at: string; updated_at: string
+}
+export interface DocumentInfo {
+  id: number; filename: string; chunks: number; size: number; created_at: string
+}
+export interface Stats {
+  total_messages: number; total_conversations: number
+  likes: number; dislikes: number; satisfaction_rate: number
+}
+export interface AppConfig {
+  provider: string; profile: string; model: string
+  model_id?: string; provider_id?: string
+  moderation: boolean; multilang: boolean; rag: boolean; max_upload_mb: number
+}
+
+/** Chunk do streaming SSE */
+export interface StreamChunk {
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status'
+  text?: string
+  messageId?: number
+  hasReasoning?: boolean
+  route?: 'fast' | 'full'
+  sessionId?: string
+  providerId?: string
+  providerName?: string
+  modelId?: string
+  modelName?: string
+  metrics?: {
+    ttft_s?: number
+    total_s?: number
+    route?: 'fast' | 'full'
+    classify_ms?: number
+    moderation_ms?: number
+  }
+}
+
+async function req<T>(url: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(API + url, {
+    headers: { 'Content-Type': 'application/json', ...opts?.headers },
+    ...opts,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
+    throw new Error(err.detail || err.message || `Erro ${res.status}`)
+  }
+  return res.json()
+}
+
+export const api = {
+  // Config
+  getConfig: () => req<AppConfig>('/config'),
+  getProfiles: () => req<Profile[]>('/profiles'),
+
+  // Chat
+  chat: (message: string, sessionId = 'default', useRag = false) =>
+    req<{ response: string; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string }>('/chat', {
+      method: 'POST', body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
+    }),
+
+  /**
+   * Streaming SSE — lê o stream do backend e yield chunks com tipo.
+   * O backend envia SSE events:
+   *   event: reasoning\n data: <text>\n\n
+   *   event: token\n data: <text>\n\n
+   *   event: done\n data: {"message_id":..., "has_reasoning":...}\n\n
+   */
+  async *stream(message: string, sessionId = 'default', useRag = false): AsyncGenerator<StreamChunk> {
+    const res = await fetch(`${API}/chat/stream`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
+    })
+    if (!res.ok) throw new Error('Falha no streaming')
+
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('Sem stream')
+
+    const dec = new TextDecoder()
+    let buf = ''
+    let currentEvent = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buf += dec.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+          continue
+        }
+
+        if (line.startsWith('data: ')) {
+          const raw = line.slice(6).trim()
+
+          if (raw === '[DONE]') {
+            yield { type: 'done' }
+            return
+          }
+
+          if (currentEvent === 'reasoning') {
+            yield { type: 'reasoning', text: raw }
+            continue
+          }
+
+          if (currentEvent === 'token') {
+            yield { type: 'content', text: raw }
+            continue
+          }
+
+          if (currentEvent === 'done') {
+            try {
+              const p = JSON.parse(raw)
+              yield {
+                type: 'done',
+                messageId: p.message_id,
+                hasReasoning: p.has_reasoning,
+                providerId: p.provider_id,
+                providerName: p.provider_name,
+                modelId: p.model_id,
+                modelName: p.model_name,
+              }
+            } catch {
+              yield { type: 'done' }
+            }
+            return
+          }
+
+          if (currentEvent === 'start') {
+            try {
+              const p = JSON.parse(raw)
+              yield {
+                type: 'start',
+                sessionId: p.session_id,
+                route: p.route,
+                providerId: p.provider_id,
+                providerName: p.provider_name,
+                modelId: p.model_id,
+                modelName: p.model_name,
+              }
+            } catch {
+              yield { type: 'start' }
+            }
+            continue
+          }
+
+          if (currentEvent === 'status') {
+            yield { type: 'status', text: raw }
+            continue
+          }
+
+          if (currentEvent === 'error') {
+            throw new Error(raw)
+          }
+
+          // Fallback: tenta parsear como JSON autônomo
+          try {
+            const p = JSON.parse(raw)
+            if (p.token) yield { type: 'content', text: p.token }
+            else if (p.reasoning) yield { type: 'reasoning', text: p.reasoning }
+            else if (p.content) yield { type: 'content', text: p.content }
+            else if (raw) yield { type: 'content', text: raw }
+          } catch {
+            if (raw) yield { type: 'content', text: raw }
+          }
+        }
+      }
+    }
+  },
+
+  // Conversations
+  listConversations: () => req<Conversation[]>('/conversations'),
+  getConversation: (id: string) => req<any>(`/conversations/${id}`),
+  renameConversation: (id: string, title: string) =>
+    req<any>(`/conversations/${id}/title?title=${encodeURIComponent(title)}`, { method: 'PUT' }),
+  deleteConversation: (id: string) =>
+    req<any>(`/conversations/${id}`, { method: 'DELETE' }),
+
+  // Feedback
+  feedback: (messageId: number, score: number) =>
+    req<any>('/feedback', { method: 'POST', body: JSON.stringify({ message_id: messageId, score }) }),
+
+  // Documents
+  listDocuments: () => req<DocumentInfo[]>('/documents'),
+  async uploadDocument(file: File): Promise<{ filename: string; chunks: number }> {
+    const fd = new FormData(); fd.append('file', file)
+    const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload failed')
+    return res.json()
+  },
+  deleteDocument: (id: number) => req<any>(`/documents/${id}`, { method: 'DELETE' }),
+
+  // Stats
+  getStats: () => req<Stats>('/stats'),
+
+  // Export
+  exportConversation: async (sessionId: string, format = 'txt') => {
+    const res = await fetch(`${API}/export/${sessionId}?format=${format}`)
+    if (!res.ok) throw new Error('Export failed')
+    return res.text()
+  },
+}
