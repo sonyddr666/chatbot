@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { getAuthToken } from '../lib/api'
+import { api, getAuthToken, type UserProviderInfo } from '../lib/api'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -67,9 +67,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const loadConfig = useChatStore(s => s.loadConfig)
 
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [userProviders, setUserProviders] = useState<UserProviderInfo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [showPersonalForm, setShowPersonalForm] = useState(false)
   const [editing, setEditing] = useState(false)
 
   // Form state
@@ -79,6 +81,14 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const [formApiFormat, setFormApiFormat] = useState('chat_completions')
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [personalSaving, setPersonalSaving] = useState(false)
+  const [personalProviderId, setPersonalProviderId] = useState('')
+  const [personalDisplayName, setPersonalDisplayName] = useState('')
+  const [personalBaseUrl, setPersonalBaseUrl] = useState('')
+  const [personalModel, setPersonalModel] = useState('')
+  const [personalApiKey, setPersonalApiKey] = useState('')
+  const [personalApiFormat, setPersonalApiFormat] = useState('chat_completions')
+  const [personalIsDefault, setPersonalIsDefault] = useState(true)
 
   // Model management
   const [showAddModel, setShowAddModel] = useState(false)
@@ -92,8 +102,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const loadProviders = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await apiReq<ProviderInfo[]>(`${API}/providers/manage`)
+      const [data, personal] = await Promise.all([
+        apiReq<ProviderInfo[]>(`${API}/providers/manage`),
+        api.listUserProviders(),
+      ])
       setProviders(data)
+      setUserProviders(personal.providers)
     } catch (err: any) {
       toast.error(err.message)
     } finally {
@@ -105,6 +119,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     if (open) {
       loadProviders()
       setShowAddForm(false)
+      setShowPersonalForm(false)
       setEditing(false)
     }
   }, [open, loadProviders])
@@ -112,6 +127,61 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const selected = providers.find(p => p.id === selectedId) || null
   const builtinProviders = providers.filter(p => p.provider_type === 'builtin')
   const customProviders = providers.filter(p => p.provider_type === 'custom')
+
+  const resetPersonalForm = () => {
+    setPersonalProviderId('')
+    setPersonalDisplayName('')
+    setPersonalBaseUrl('')
+    setPersonalModel('')
+    setPersonalApiKey('')
+    setPersonalApiFormat('chat_completions')
+    setPersonalIsDefault(true)
+  }
+
+  const handleCreatePersonalProvider = async () => {
+    if (!personalProviderId.trim() || !personalModel.trim()) {
+      toast.error('Provider ID e modelo sao obrigatorios')
+      return
+    }
+    setPersonalSaving(true)
+    try {
+      const created = await api.createUserProvider({
+        provider_id: personalProviderId.trim(),
+        display_name: personalDisplayName.trim() || personalProviderId.trim(),
+        base_url: personalBaseUrl.trim(),
+        model: personalModel.trim(),
+        api_key: personalApiKey.trim(),
+        api_format: personalApiFormat,
+        is_default: personalIsDefault,
+        is_enabled: true,
+      })
+      await loadProviders()
+      if (created.is_default || personalIsDefault) {
+        loadConfig()
+      }
+      resetPersonalForm()
+      setShowPersonalForm(false)
+      toast.success('Provider pessoal criado')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setPersonalSaving(false)
+    }
+  }
+
+  const handleActivatePersonalProvider = async (id: number) => {
+    setPersonalSaving(true)
+    try {
+      await api.activateUserProvider(id)
+      setUserProviders(prev => prev.map(p => ({ ...p, is_default: p.id === id })))
+      toast.success('Provider pessoal ativado')
+      loadConfig()
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setPersonalSaving(false)
+    }
+  }
 
   // ─── Salvar chave de API ──────────────────────────────────────
 
@@ -246,6 +316,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     setShowKey(false)
     setEditing(false)
     setShowAddForm(false)
+    setShowPersonalForm(false)
   }
 
   const handleEditProvider = (p: ProviderInfo) => {
@@ -494,7 +565,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                     key={p.id}
                     provider={p}
                     selected={selectedId === p.id}
-                    onClick={() => { setSelectedId(p.id); setShowAddForm(false); setEditing(false) }}
+                    onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
                     onEdit={() => handleEditProvider(p)}
                   />
                 ))}
@@ -512,13 +583,67 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         key={p.id}
                         provider={p}
                         selected={selectedId === p.id}
-                        onClick={() => { setSelectedId(p.id); setShowAddForm(false); setEditing(false) }}
+                        onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
                         onEdit={() => handleEditProvider(p)}
                         onDelete={() => handleDelete(p.id)}
                       />
                     ))}
                   </>
                 )}
+
+                <div className="px-2 py-1.5 mt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
+                    Providers pessoais
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {userProviders.length === 0 ? (
+                    <p className="px-3 py-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                      Nenhum provider pessoal ainda.
+                    </p>
+                  ) : (
+                    userProviders.map(provider => (
+                      <div
+                        key={provider.id}
+                        className="px-3 py-2 rounded-xl border"
+                        style={{
+                          background: provider.is_default ? 'var(--accent-light)' : 'transparent',
+                          borderColor: provider.is_default ? 'var(--accent)' : 'var(--border)',
+                        }}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                              {provider.display_name}
+                            </p>
+                            <p className="text-xs truncate" style={{ color: 'var(--text-tertiary)' }}>
+                              {provider.model}
+                            </p>
+                          </div>
+                          {provider.is_default && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                              style={{ background: '#dcfce7', color: '#16a34a' }}>
+                              ativo
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 mt-2">
+                          <span className="text-[11px] truncate" style={{ color: 'var(--text-tertiary)' }}>
+                            {provider.has_key ? provider.key_masked : 'sem chave'}
+                          </span>
+                          <button
+                            onClick={() => handleActivatePersonalProvider(provider.id)}
+                            disabled={provider.is_default || personalSaving}
+                            className="px-2 py-1 rounded-lg text-[11px] font-medium transition-all disabled:opacity-50"
+                            style={{ background: 'var(--accent)', color: '#fff' }}
+                          >
+                            Ativar pessoal
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -526,19 +651,172 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
           {/* Botão Add Provider */}
           <div className="p-3 border-t" style={{ borderColor: 'var(--border)' }}>
             <button
-              onClick={() => { resetForm(); setShowAddForm(true); setSelectedId(null) }}
+              onClick={() => { resetForm(); setShowAddForm(true); setShowPersonalForm(false); setSelectedId(null) }}
               className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all hover:opacity-90"
               style={{ background: 'var(--accent)', color: '#fff' }}
             >
               <Plus size={16} />
               Add Provider
             </button>
+            <button
+              onClick={() => { resetForm(); resetPersonalForm(); setShowPersonalForm(true); setShowAddForm(false); setSelectedId(null) }}
+              className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all hover:opacity-90 border"
+              style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+            >
+              <User size={16} />
+              Criar provider pessoal
+            </button>
           </div>
         </div>
 
         {/* ─── Main Area ─── */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {showAddForm ? (
+          {showPersonalForm ? (
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="max-w-xl mx-auto">
+                <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+                  Criar provider pessoal
+                </h3>
+                <p className="text-sm mb-6" style={{ color: 'var(--text-tertiary)' }}>
+                  Este provider fica ligado somente ao usuario logado e pode virar o padrao do chat dele.
+                </p>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider ID</label>
+                      <input
+                        type="text"
+                        value={personalProviderId}
+                        onChange={e => setPersonalProviderId(e.target.value)}
+                        placeholder="meu-openai"
+                        className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                        style={{
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          borderColor: 'var(--border)',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Nome visivel</label>
+                      <input
+                        type="text"
+                        value={personalDisplayName}
+                        onChange={e => setPersonalDisplayName(e.target.value)}
+                        placeholder="Meu OpenAI"
+                        className="w-full px-3 py-2 rounded-xl border text-sm"
+                        style={{
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          borderColor: 'var(--border)',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Base URL</label>
+                    <input
+                      type="url"
+                      value={personalBaseUrl}
+                      onChange={e => setPersonalBaseUrl(e.target.value)}
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                      style={{
+                        background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        borderColor: 'var(--border)',
+                      }}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Modelo</label>
+                      <input
+                        type="text"
+                        value={personalModel}
+                        onChange={e => setPersonalModel(e.target.value)}
+                        placeholder="gpt-4.1-mini"
+                        className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                        style={{
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          borderColor: 'var(--border)',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Formato</label>
+                      <select
+                        value={personalApiFormat}
+                        onChange={e => setPersonalApiFormat(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border text-sm"
+                        style={{
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          borderColor: 'var(--border)',
+                        }}
+                      >
+                        {Object.entries(formatLabels).map(([val, label]) => (
+                          <option key={val} value={val}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>API Key</label>
+                    <input
+                      type="password"
+                      value={personalApiKey}
+                      onChange={e => setPersonalApiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                      style={{
+                        background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        borderColor: 'var(--border)',
+                      }}
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={personalIsDefault}
+                      onChange={e => setPersonalIsDefault(e.target.checked)}
+                    />
+                    Usar como provider padrao deste usuario
+                  </label>
+
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      onClick={() => { resetPersonalForm(); setShowPersonalForm(false) }}
+                      className="px-4 py-2 rounded-xl border text-sm font-medium"
+                      style={{
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={handleCreatePersonalProvider}
+                      disabled={personalSaving}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90 disabled:opacity-50"
+                      style={{ background: 'var(--accent)' }}
+                    >
+                      {personalSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                      Criar provider pessoal
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : showAddForm ? (
             /* ─── Formulário de Adição/Edição ─── */
             <div className="flex-1 overflow-y-auto p-6">
               <div className="max-w-xl mx-auto">

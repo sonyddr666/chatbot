@@ -106,6 +106,22 @@ export interface PreferenceSuggestionInfo {
   resolved_at: string | null
 }
 
+export interface UserProviderInfo {
+  id: number
+  user_id: number
+  provider_id: string
+  display_name: string
+  base_url: string
+  model: string
+  api_format: string
+  is_enabled: boolean
+  is_default: boolean
+  has_key: boolean
+  key_masked: string
+  created_at: string | null
+  updated_at: string | null
+}
+
 export interface WorkspaceNode {
   name: string
   path: string
@@ -212,6 +228,25 @@ export const api = {
   // Config
   getConfig: () => req<AppConfig>('/config'),
   getProfiles: () => req<Profile[]>('/profiles'),
+  listUserProviders: () =>
+    req<{ providers: UserProviderInfo[] }>('/providers/user'),
+  createUserProvider: (body: {
+    provider_id: string
+    display_name?: string
+    base_url?: string
+    model: string
+    api_key?: string
+    api_format?: string
+    is_default?: boolean
+    is_enabled?: boolean
+  }) => req<UserProviderInfo>('/providers/user', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
+  activateUserProvider: (id: number) =>
+    req<{ status: string; active_config_id: number }>(`/providers/user/${id}/activate`, {
+      method: 'POST',
+    }),
 
   // Chat
   chat: (message: string, sessionId = 'default', useRag = false) =>
