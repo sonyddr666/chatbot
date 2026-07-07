@@ -5,12 +5,12 @@ import argparse
 import asyncio
 import sys
 
-from src.core.memory import ConversationMemory
-from src.core.chat import ChatEngine
-
 
 async def run_cli() -> None:
     """Modo CLI interativo."""
+    from src.core.memory import ConversationMemory
+    from src.core.chat import ChatEngine
+
     print("=" * 50)
     print("  🤖 Chatbot — modo CLI")
     print('  Digite "sair" para encerrar')
@@ -49,6 +49,15 @@ def run_serve() -> None:
         host="0.0.0.0",
         port=settings.api_port,
         reload=True,
+        reload_dirs=["src"],
+        reload_excludes=[
+            ".venv/*",
+            "venv/*",
+            "frontend/node_modules/*",
+            "frontend/dist/*",
+            "data/*",
+            "**/__pycache__/*",
+        ],
     )
 
 
