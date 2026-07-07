@@ -47,6 +47,19 @@ class UserProfile(Base):
     user = relationship("User", back_populates="profile")
 
 
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    key = Column(String(120), nullable=False, index=True)
+    value_json = Column(Text, default="{}")
+    source = Column(String(80), default="manual")
+    confidence = Column(Integer, default=100)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -181,6 +194,11 @@ def init_db():
                 row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }:
                 SkillRun.__table__.create(bind=conn)
+
+            if "user_preferences" not in {
+                row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }:
+                UserPreference.__table__.create(bind=conn)
 
             conn.execute(text("""
                 UPDATE conversations

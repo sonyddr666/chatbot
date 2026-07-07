@@ -86,6 +86,13 @@ export interface SkillRunInfo {
   finished_at: string | null
 }
 
+export interface UserPreferenceInfo {
+  value: unknown
+  source: string
+  confidence: number
+  updated_at: string | null
+}
+
 export interface WorkspaceNode {
   name: string
   path: string
@@ -173,6 +180,13 @@ export const api = {
     req<any>(`/skills/${encodeURIComponent(name)}`, {
       method: 'PUT',
       body: JSON.stringify({ enabled, config }),
+    }),
+  listPreferences: () =>
+    req<{ preferences: Record<string, UserPreferenceInfo> }>('/preferences'),
+  setPreference: (key: string, value: unknown, source = 'manual', confidence = 1) =>
+    req<any>(`/preferences/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value, source, confidence }),
     }),
 
   // Config

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { getAuthToken } from '../lib/api'
+import { api, getAuthToken } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -48,6 +48,9 @@ export function SettingsPanel({ open, onClose }: Props) {
   })
   const [activeProvider, setActiveProvider] = useState<ProviderInfo | null>(null)
   const [activeModel, setActiveModel] = useState<ModelInfo | null>(null)
+  const [answerTone, setAnswerTone] = useState('direto')
+  const [answerDetail, setAnswerDetail] = useState('pratico')
+  const [ragAggressiveness, setRagAggressiveness] = useState('balanced')
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme)
@@ -65,6 +68,33 @@ export function SettingsPanel({ open, onClose }: Props) {
     if (open) loadConfig()
   }, [open, loadConfig])
 
+  const loadPreferences = useCallback(async () => {
+    try {
+      const data = await api.listPreferences()
+      const answerStyle = data.preferences.answer_style?.value
+      if (isAnswerStyle(answerStyle)) {
+        setAnswerTone(String(answerStyle.tone || 'direto'))
+        setAnswerDetail(String(answerStyle.detail || 'pratico'))
+      }
+      const rag = data.preferences.rag_aggressiveness?.value
+      if (typeof rag === 'string') setRagAggressiveness(rag)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao carregar preferencias')
+    }
+  }, [])
+
+  const savePreferences = async () => {
+    try {
+      await Promise.all([
+        api.setPreference('answer_style', { tone: answerTone, detail: answerDetail }),
+        api.setPreference('rag_aggressiveness', ragAggressiveness),
+      ])
+      toast.success('Preferencias salvas')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao salvar preferencias')
+    }
+  }
+
   // Busca provider ativo
   const fetchActiveProvider = useCallback(async () => {
     try {
@@ -77,8 +107,11 @@ export function SettingsPanel({ open, onClose }: Props) {
   }, [])
 
   useEffect(() => {
-    if (open) fetchActiveProvider()
-  }, [open, fetchActiveProvider])
+    if (open) {
+      fetchActiveProvider()
+      loadPreferences()
+    }
+  }, [open, fetchActiveProvider, loadPreferences])
 
   // Escuta mudanças externas
   useEffect(() => {
@@ -168,6 +201,46 @@ export function SettingsPanel({ open, onClose }: Props) {
                   <t.icon size={16} /> {t.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Preferencias pessoais */}
+          <div>
+            <label className="text-sm font-medium mb-2 block" style={{ color: 'var(--text-primary)' }}>
+              Preferencias pessoais
+            </label>
+            <div className="space-y-2">
+              <input
+                value={answerTone}
+                onChange={event => setAnswerTone(event.target.value)}
+                placeholder="Tom: direto, professor, criativo..."
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+              />
+              <input
+                value={answerDetail}
+                onChange={event => setAnswerDetail(event.target.value)}
+                placeholder="Detalhe: pratico, detalhado..."
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+              />
+              <select
+                value={ragAggressiveness}
+                onChange={event => setRagAggressiveness(event.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+              >
+                <option value="low">RAG leve</option>
+                <option value="balanced">RAG equilibrado</option>
+                <option value="high">RAG forte</option>
+              </select>
+              <button
+                onClick={savePreferences}
+                className="w-full rounded-lg px-3 py-2 text-xs font-bold"
+                style={{ background: 'var(--accent)', color: '#fff' }}
+              >
+                Salvar preferencias
+              </button>
             </div>
           </div>
 
@@ -290,6 +363,10 @@ function fmtCtx(n: number): string {
     : n >= 1000
       ? `${(n / 1000).toFixed(0)}K`
       : String(n)
+}
+
+function isAnswerStyle(value: unknown): value is { tone?: unknown; detail?: unknown } {
+  return typeof value === 'object' && value !== null
 }
 
 function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {

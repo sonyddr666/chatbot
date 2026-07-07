@@ -14,6 +14,7 @@ from src.db.models import (
     KnowledgeDocument,
     User,
     UserProfile,
+    UserPreference,
     Skill,
     UserSkill,
     SkillRun,
@@ -160,6 +161,105 @@ class UserRepo:
             return profile
         finally:
             db.close()
+
+
+class UserPreferenceRepo:
+    DEFAULTS = {
+        "answer_style": {"tone": "direto", "detail": "pratico"},
+        "default_language": "pt",
+        "rag_aggressiveness": "balanced",
+    }
+
+    @staticmethod
+    def ensure_defaults(user_id: int) -> None:
+        db = get_session_db()
+        try:
+            existing = {
+                row.key
+                for row in db.query(UserPreference).filter(UserPreference.user_id == user_id).all()
+            }
+            for key, value in UserPreferenceRepo.DEFAULTS.items():
+                if key not in existing:
+                    db.add(UserPreference(
+                        user_id=user_id,
+                        key=key,
+                        value_json=json.dumps(value, ensure_ascii=False),
+                        source="default",
+                        confidence=100,
+                    ))
+            db.commit()
+        finally:
+            db.close()
+
+    @staticmethod
+    def set(
+        user_id: int,
+        key: str,
+        value,
+        source: str = "manual",
+        confidence: float = 1.0,
+    ) -> UserPreference:
+        clean_key = key.strip()
+        if not clean_key:
+            raise ValueError("Chave de preferencia invalida")
+        db = get_session_db()
+        try:
+            pref = (
+                db.query(UserPreference)
+                .filter(UserPreference.user_id == user_id, UserPreference.key == clean_key)
+                .first()
+            )
+            if not pref:
+                pref = UserPreference(user_id=user_id, key=clean_key)
+                db.add(pref)
+            pref.value_json = json.dumps(value, ensure_ascii=False)
+            pref.source = source
+            pref.confidence = max(0, min(100, int(confidence * 100)))
+            pref.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(pref)
+            db.expunge(pref)
+            return pref
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_for_user(user_id: int) -> dict:
+        UserPreferenceRepo.ensure_defaults(user_id)
+        db = get_session_db()
+        try:
+            rows = (
+                db.query(UserPreference)
+                .filter(UserPreference.user_id == user_id)
+                .order_by(UserPreference.key.asc())
+                .all()
+            )
+            return {
+                row.key: {
+                    "value": json.loads(row.value_json or "null"),
+                    "source": row.source,
+                    "confidence": row.confidence / 100,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                }
+                for row in rows
+            }
+        finally:
+            db.close()
+
+    @staticmethod
+    def prompt_context_for_user(user_id: int) -> str:
+        preferences = UserPreferenceRepo.list_for_user(user_id)
+        if not preferences:
+            return ""
+
+        lines = ["Preferencias pessoais do usuario:"]
+        for key in sorted(preferences):
+            info = preferences[key]
+            value = json.dumps(info.get("value"), ensure_ascii=False, sort_keys=True)
+            source = info.get("source", "manual")
+            confidence = info.get("confidence", 1)
+            lines.append(f"- {key}: {value} (fonte={source}, confianca={confidence})")
+        return "\n".join(lines)
 
 
 class ConversationRepo:

@@ -105,6 +105,12 @@ class SkillToggleRequest(BaseModel):
     config: Optional[dict[str, Any]] = None
 
 
+class PreferenceUpdateRequest(BaseModel):
+    value: Any
+    source: str = "manual"
+    confidence: float = 1.0
+
+
 class WorkspacePathRequest(BaseModel):
     path: str
 

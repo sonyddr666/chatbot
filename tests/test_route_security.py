@@ -21,6 +21,7 @@ class RouteSecurityTest(unittest.TestCase):
             "/metrics",
             "/workspace",
             "/skills",
+            "/preferences",
         )
         violations = []
 

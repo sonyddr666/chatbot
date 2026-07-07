@@ -62,7 +62,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
     from src.rag.retriever import retrieve_context
-    from src.db.repository import ConversationRepo, SkillRepo
+    from src.db.repository import ConversationRepo, SkillRepo, UserPreferenceRepo
     from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
 
@@ -88,6 +88,9 @@ async def websocket_chat(websocket: WebSocket):
             sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
         if runtime_context:
             sections.append(runtime_context)
+        preferences_context = UserPreferenceRepo.prompt_context_for_user(user_id)
+        if preferences_context:
+            sections.append(preferences_context)
         skills_context = SkillRepo.enabled_context_for_user(user_id)
         if skills_context:
             sections.append(skills_context)

@@ -17,7 +17,7 @@ from src.api.schemas import (
     ChatRequest, ChatResponse, ChatStreamRequest,
     IngestRequest, IngestResponse, FeedbackRequest, StatsResponse,
     ConversationResponse, RegisterRequest, LoginRequest, AuthResponse, UserResponse,
-    OnboardingRequest, SkillToggleRequest,
+    OnboardingRequest, SkillToggleRequest, PreferenceUpdateRequest,
 )
 from src.core.memory import get_session
 from src.core.chat import ChatEngine
@@ -31,7 +31,7 @@ from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
-from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo, SkillRunRepo
+from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token, rag_collection_for_user
@@ -87,6 +87,9 @@ def _user_prompt_context(
         sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
     if runtime_context:
         sections.append(runtime_context)
+    preferences_context = UserPreferenceRepo.prompt_context_for_user(user_id)
+    if preferences_context:
+        sections.append(preferences_context)
     skills_context = SkillRepo.enabled_context_for_user(user_id)
     if skills_context:
         sections.append(skills_context)
@@ -202,6 +205,22 @@ async def toggle_skill(skill_name: str, body: SkillToggleRequest, user=Depends(g
     if not ok:
         raise HTTPException(status_code=404, detail="Skill nao encontrada")
     return {"status": "ok", "skill": skill_name, "enabled": body.enabled}
+
+
+@router.get("/preferences")
+async def list_preferences(user=Depends(get_current_user)):
+    ensure_db()
+    return {"preferences": UserPreferenceRepo.list_for_user(user.id)}
+
+
+@router.put("/preferences/{key}")
+async def set_preference(key: str, body: PreferenceUpdateRequest, user=Depends(get_current_user)):
+    ensure_db()
+    try:
+        UserPreferenceRepo.set(user.id, key, body.value, source=body.source, confidence=body.confidence)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", "key": key, "preferences": UserPreferenceRepo.list_for_user(user.id)}
 
 # CONFIG / PROFILES
 # ═══════════════════════════════════════════════════════════════
