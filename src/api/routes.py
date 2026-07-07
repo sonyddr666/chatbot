@@ -29,6 +29,12 @@ from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
 from src.core.preference_suggestions import create_suggestion_from_message
+from src.core.user_provider_manager import (
+    activate_user_provider,
+    create_user_provider,
+    get_active_config_for_user,
+    list_user_providers,
+)
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
@@ -276,9 +282,8 @@ async def get_config(user=Depends(get_current_user)):
     """Retorna configuração atual do chatbot, mesclando
     provider manager (ativo) com settings (fallback).
     """
-    # Tenta pegar do provider manager primeiro
-    from src.core.provider_manager import get_active_config
-    pm_cfg = get_active_config()
+    # Tenta pegar provider por usuario primeiro, com fallback global.
+    pm_cfg = get_active_config_for_user(user.id)
     if pm_cfg.get("model_id"):
         return {
             "provider": pm_cfg.get("provider_id", settings.llm_provider),
@@ -338,6 +343,29 @@ def _safe_provider_config(cfg: dict) -> dict:
 async def providers_list(include_keys: bool = False, user=Depends(get_current_user)):
     """Lista todos os provedores disponiveis sem expor chaves reais."""
     return pm_list(include_keys=False)
+
+
+@router.get("/providers/user")
+async def providers_user_list(user=Depends(get_current_user)):
+    """Lista providers configurados somente pelo usuario atual."""
+    return {"providers": list_user_providers(user.id)}
+
+
+@router.post("/providers/user")
+async def providers_user_create(body: dict, user=Depends(get_current_user)):
+    """Cria um provider pessoal sem afetar o provider global."""
+    try:
+        return create_user_provider(user.id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/providers/user/{config_id}/activate")
+async def providers_user_activate(config_id: int, user=Depends(get_current_user)):
+    """Define o provider pessoal ativo do usuario atual."""
+    if not activate_user_provider(user.id, config_id):
+        raise HTTPException(status_code=404, detail="Provider pessoal nao encontrado")
+    return {"status": "ok", "active_config_id": config_id}
 
 
 @router.get("/providers/manage/{provider_id}")
@@ -411,7 +439,7 @@ async def model_activate(body: dict, user=Depends(get_current_user)):
 @router.get("/providers/active-config")
 async def providers_active_config(user=Depends(get_current_user)):
     """Retorna a configuracao ativa (provider + modelo), sem segredos."""
-    return _safe_provider_config(pm_active_config())
+    return _safe_provider_config(get_active_config_for_user(user.id))
 
 
 @router.get("/providers/status")

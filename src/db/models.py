@@ -75,6 +75,23 @@ class PreferenceSuggestion(Base):
     resolved_at = Column(DateTime, nullable=True)
 
 
+class UserProviderConfig(Base):
+    __tablename__ = "user_provider_configs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider_id = Column(String(120), nullable=False, index=True)
+    display_name = Column(String(255), default="")
+    base_url = Column(String(500), default="")
+    model = Column(String(150), default="")
+    api_format = Column(String(80), default="chat_completions")
+    api_key_encrypted = Column(Text, default="")
+    is_enabled = Column(Boolean, default=True)
+    is_default = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -219,6 +236,11 @@ def init_db():
                 row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }:
                 PreferenceSuggestion.__table__.create(bind=conn)
+
+            if "user_provider_configs" not in {
+                row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }:
+                UserProviderConfig.__table__.create(bind=conn)
 
             conn.execute(text("""
                 UPDATE conversations
