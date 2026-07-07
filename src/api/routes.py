@@ -36,6 +36,7 @@ from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token, rag_collection_for_user
 from src.core.auth_required import resolve_authorized_user
+from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original
 from src.core.userspace import write_profile_text
 
 router = APIRouter()
@@ -912,19 +913,36 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in (".txt", ".md", ".pdf", ".docx", ".csv", ".json"):
+    if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Extensão não suportada: {ext}")
     content = await file.read()
-    text = content.decode("utf-8", errors="replace")
     file_size = len(content)
     if file_size > settings.max_upload_size_mb * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"Arquivo muito grande (máx {settings.max_upload_size_mb}MB)")
+    try:
+        artifact = save_upload_original(user.id, file.filename, content)
+        text = extract_text_for_ingestion(artifact.original_filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     chunks = split_text(text)
-    metadatas = [{"source": "upload", "filename": file.filename, "user_id": user.id}] * len(chunks)
+    metadatas = [{
+        "source": "upload",
+        "filename": artifact.original_filename,
+        "upload_path": artifact.relative_path,
+        "checksum": artifact.checksum,
+        "user_id": user.id,
+    }] * len(chunks)
     ids = add_documents(chunks, metadatas=metadatas, collection_name=rag_collection_for_user(user.id))
-    DocumentRepo.save(file.filename, "upload", len(chunks), file_size, user_id=user.id)
+    DocumentRepo.save(artifact.original_filename, "upload", len(chunks), file_size, user_id=user.id)
     DOCUMENTS_INGESTED.inc()
-    return {"filename": file.filename, "size": file_size, "chunks": len(chunks), "ids": ids}
+    return {
+        "filename": artifact.original_filename,
+        "size": file_size,
+        "chunks": len(chunks),
+        "ids": ids,
+        "upload_path": artifact.relative_path,
+        "checksum": artifact.checksum,
+    }
 
 
 @router.get("/documents")
