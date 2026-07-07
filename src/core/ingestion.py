@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
@@ -71,6 +72,38 @@ def extract_text_for_ingestion(filename: str, content: bytes) -> str:
     ext = upload_extension(safe_name)
     if ext in TEXT_EXTENSIONS:
         return content.decode("utf-8", errors="replace")
-    if ext in PARSER_REQUIRED_EXTENSIONS:
-        raise ValueError(f"Parser para {ext} ainda nao disponivel nesta instalacao")
+    if ext == ".pdf":
+        return _extract_pdf_text(content)
+    if ext == ".docx":
+        return _extract_docx_text(content)
     raise ValueError(f"Extensao nao suportada: {ext}")
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(content))
+        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+    except Exception as exc:
+        raise ValueError("Falha ao extrair texto do PDF") from exc
+
+    text = "\n\n".join(page for page in pages if page)
+    if not text.strip():
+        raise ValueError("PDF nao contem texto extraivel")
+    return text
+
+
+def _extract_docx_text(content: bytes) -> str:
+    try:
+        from docx import Document
+
+        document = Document(BytesIO(content))
+        paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+    except Exception as exc:
+        raise ValueError("Falha ao extrair texto do DOCX") from exc
+
+    text = "\n".join(paragraphs)
+    if not text.strip():
+        raise ValueError("DOCX nao contem texto extraivel")
+    return text
