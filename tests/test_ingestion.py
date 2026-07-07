@@ -127,7 +127,7 @@ class IngestionServiceTest(unittest.TestCase):
         user, headers = self._create_auth_headers()
         client = TestClient(app)
 
-        with patch("src.api.routes.add_documents", return_value=["chunk-1"]):
+        with patch("src.api.routes.add_user_documents", return_value=["chunk-1"]):
             response = client.post(
                 "/api/v1/upload",
                 headers=headers,
@@ -148,7 +148,7 @@ class IngestionServiceTest(unittest.TestCase):
         _, headers = self._create_auth_headers()
         client = TestClient(app)
 
-        with patch("src.api.routes.add_documents", return_value=["pdf-chunk"]) as add_mock:
+        with patch("src.api.routes.add_user_documents", return_value=["pdf-chunk"]) as add_mock:
             response = client.post(
                 "/api/v1/upload",
                 headers=headers,
@@ -159,7 +159,7 @@ class IngestionServiceTest(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["filename"], "file.pdf")
         self.assertEqual(data["ids"], ["pdf-chunk"])
-        indexed_texts = add_mock.call_args.args[0]
+        indexed_texts = add_mock.call_args.args[1]
         self.assertTrue(any("Hello PDF" in text for text in indexed_texts))
 
 

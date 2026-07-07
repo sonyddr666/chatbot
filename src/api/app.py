@@ -11,7 +11,6 @@ from fastapi.responses import RedirectResponse
 from src.api.routes import router
 from src.api.workspace_routes import router as workspace_router
 from src.config import settings
-from src.core.auth import rag_collection_for_user
 from src.core.auth_required import resolve_authorized_user
 
 app = FastAPI(
@@ -63,7 +62,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
     from src.core.preference_suggestions import create_suggestion_from_message
     from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
-    from src.rag.retriever import retrieve_context
+    from src.rag.personal import retrieve_user_context
     from src.db.repository import ConversationRepo, SkillRepo, UserPreferenceRepo
     from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
@@ -119,7 +118,6 @@ async def websocket_chat(websocket: WebSocket):
 
     await websocket.accept()
     session_id = _scoped_session_id(user.id, "default")
-    rag_collection = rag_collection_for_user(user.id)
 
     try:
         while True:
@@ -172,7 +170,7 @@ async def websocket_chat(websocket: WebSocket):
                     async def fetch_rag():
                         nonlocal rag_context
                         loop = asyncio.get_event_loop()
-                        rag_context = await loop.run_in_executor(None, retrieve_context, message, 4, None, rag_collection)
+                        rag_context = await loop.run_in_executor(None, retrieve_user_context, user.id, message, 4, None)
                     rag_task = asyncio.create_task(fetch_rag())
                     await websocket.send_json({"type": "status", "text": "Consultando base de conhecimento..."})
 

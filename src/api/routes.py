@@ -37,12 +37,11 @@ from src.core.user_provider_manager import (
     metadata_from_config,
 )
 from src.rag.chunker import split_text, split_documents
-from src.rag.vector_store import add_documents
-from src.rag.retriever import retrieve_context
+from src.rag.personal import add_user_documents, retrieve_user_context, user_rag_collection
 from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
-from src.core.auth import create_access_token, rag_collection_for_user
+from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
 from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original
 from src.core.userspace import write_profile_text
@@ -188,9 +187,9 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
     ])
     write_profile_text(user.id, "onboarding.md", memory_doc)
     chunks = split_text(memory_doc)
-    collection = rag_collection_for_user(user.id)
+    collection = user_rag_collection(user.id)
     metadatas = [{"source": "onboarding", "user_id": user.id, "filename": "perfil-inicial.md"}] * len(chunks)
-    ids = add_documents(chunks, metadatas=metadatas, collection_name=collection)
+    ids = add_user_documents(user.id, chunks, metadatas=metadatas)
     DocumentRepo.save("perfil-inicial.md", "onboarding", len(chunks), len(memory_doc.encode("utf-8")), user_id=user.id)
     return {
         "status": "ok",
@@ -709,7 +708,6 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     """Envia uma mensagem e obtém resposta completa."""
     ensure_db()
     session_id = _scoped_session_id(user.id, body.session_id)
-    rag_collection = rag_collection_for_user(user.id)
 
     if settings.enable_moderation:
         blocked = moderate_text(body.message)
@@ -725,7 +723,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     use_rag = body.use_rag or user_has_personal_rag(user.id)
     context = None
     if use_rag and settings.enable_rag:
-        context = retrieve_context(body.message, collection_name=rag_collection)
+        context = retrieve_user_context(user.id, body.message)
     runtime_context = await run_enabled_skill_context(user.id, body.message)
 
     memory = get_session(session_id)
@@ -776,7 +774,6 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             return EventSourceResponse(error_gen())
 
     session_id = _scoped_session_id(user.id, body.session_id)
-    rag_collection = rag_collection_for_user(user.id)
     memory = get_session(session_id)
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
@@ -787,7 +784,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         async def fetch_rag():
             nonlocal rag_context
             rag_context = await asyncio.get_event_loop().run_in_executor(
-                None, retrieve_context, body.message, 4, None, rag_collection
+                None, retrieve_user_context, user.id, body.message, 4, None
             )
         rag_task = asyncio.create_task(fetch_rag())
     else:
@@ -987,8 +984,8 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Texto vazio")
     chunks = split_text(body.text)
-    metadatas = [{"source": body.source, "user_id": user.id, **(body.metadata or {})}] * len(chunks)
-    ids = add_documents(chunks, metadatas=metadatas, collection_name=rag_collection_for_user(user.id))
+    metadatas = [{"source": body.source, **(body.metadata or {})}] * len(chunks)
+    ids = add_user_documents(user.id, chunks, metadatas=metadatas)
     DOCUMENTS_INGESTED.inc()
     return IngestResponse(chunks_count=len(chunks), ids=ids)
 
@@ -1015,9 +1012,8 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         "filename": artifact.original_filename,
         "upload_path": artifact.relative_path,
         "checksum": artifact.checksum,
-        "user_id": user.id,
     }] * len(chunks)
-    ids = add_documents(chunks, metadatas=metadatas, collection_name=rag_collection_for_user(user.id))
+    ids = add_user_documents(user.id, chunks, metadatas=metadatas)
     DocumentRepo.save(artifact.original_filename, "upload", len(chunks), file_size, user_id=user.id)
     DOCUMENTS_INGESTED.inc()
     return {
