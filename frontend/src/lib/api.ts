@@ -74,6 +74,18 @@ export interface SkillInfo {
   enabled: boolean
 }
 
+export interface SkillRunInfo {
+  id: number
+  user_id: number
+  skill_name: string
+  status: string
+  input_json: string
+  output_summary: string
+  error_message: string
+  started_at: string | null
+  finished_at: string | null
+}
+
 export interface WorkspaceNode {
   name: string
   path: string
@@ -155,6 +167,8 @@ export const api = {
     extra?: Record<string, unknown>
   }) => req<any>('/onboarding', { method: 'POST', body: JSON.stringify(body) }),
   listSkills: () => req<SkillInfo[]>('/skills'),
+  listSkillRuns: (limit = 10) =>
+    req<{ runs: SkillRunInfo[] }>(`/skills/runs?limit=${limit}`),
   toggleSkill: (name: string, enabled: boolean, config?: Record<string, unknown>) =>
     req<any>(`/skills/${encodeURIComponent(name)}`, {
       method: 'PUT',

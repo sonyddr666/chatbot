@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { X } from 'lucide-react'
-import { api, type SkillInfo } from '../lib/api'
+import { api, type SkillInfo, type SkillRunInfo } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -10,12 +10,18 @@ interface Props {
 
 export function SkillsPanel({ open, onClose }: Props) {
   const [skills, setSkills] = useState<SkillInfo[]>([])
+  const [runs, setRuns] = useState<SkillRunInfo[]>([])
   const [loading, setLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      setSkills(await api.listSkills())
+      const [nextSkills, nextRuns] = await Promise.all([
+        api.listSkills(),
+        api.listSkillRuns(10),
+      ])
+      setSkills(nextSkills)
+      setRuns(nextRuns.runs)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao carregar skills')
     } finally {
@@ -56,7 +62,18 @@ export function SkillsPanel({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div className="mt-5 space-y-3">
+        <div className="mt-5 max-h-[calc(100vh-105px)] space-y-5 overflow-y-auto pr-1">
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-black" style={{ color: 'var(--text-primary)' }}>Skills disponiveis</h3>
+              <button
+                onClick={load}
+                className="rounded-lg px-2 py-1 text-xs font-semibold"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                Atualizar
+              </button>
+            </div>
           {loading ? (
             <p style={{ color: 'var(--text-secondary)' }}>Carregando...</p>
           ) : skills.length === 0 ? (
@@ -90,6 +107,48 @@ export function SkillsPanel({ open, onClose }: Props) {
               </div>
             </div>
           ))}
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-sm font-black" style={{ color: 'var(--text-primary)' }}>Execucoes recentes</h3>
+            {runs.length === 0 ? (
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Nenhuma skill executada ainda.</p>
+            ) : (
+              <div className="space-y-2">
+                {runs.map(run => (
+                  <div
+                    key={run.id}
+                    className="rounded-2xl border p-3"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-bold" style={{ color: 'var(--text-primary)' }}>{run.skill_name}</p>
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                        style={{
+                          background: run.status === 'completed' ? '#dcfce7' : '#fee2e2',
+                          color: run.status === 'completed' ? '#16a34a' : '#dc2626',
+                        }}
+                      >
+                        {run.status}
+                      </span>
+                    </div>
+                    {run.output_summary && (
+                      <p className="mt-2 line-clamp-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {run.output_summary}
+                      </p>
+                    )}
+                    {run.error_message && (
+                      <p className="mt-2 text-xs" style={{ color: '#dc2626' }}>{run.error_message}</p>
+                    )}
+                    <p className="mt-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      {run.started_at ? new Date(run.started_at).toLocaleString() : 'sem data'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </aside>
     </>

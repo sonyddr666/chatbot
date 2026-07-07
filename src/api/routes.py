@@ -31,7 +31,7 @@ from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
-from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo
+from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo, SkillRunRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token, rag_collection_for_user
@@ -187,6 +187,12 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
 async def list_skills(user=Depends(get_current_user)):
     ensure_db()
     return SkillRepo.list_for_user(user.id)
+
+
+@router.get("/skills/runs")
+async def list_skill_runs(limit: int = 50, user=Depends(get_current_user)):
+    ensure_db()
+    return {"runs": SkillRunRepo.list_for_user(user.id, limit=limit)}
 
 
 @router.put("/skills/{skill_name}")

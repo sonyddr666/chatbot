@@ -5,7 +5,11 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi.testclient import TestClient
+
+from src.api.app import app
 from src.config import settings
+from src.core.auth import create_access_token
 from src.db.models import init_db
 from src.db.repository import SkillRepo, UserRepo
 
@@ -45,6 +49,30 @@ class SkillRunsTest(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "completed")
         self.assertIn("pesquise python", runs[0]["input_json"])
         self.assertIn("Fonte A", runs[0]["output_summary"])
+
+    def test_skill_runs_endpoint_returns_only_current_user_runs(self):
+        from src.db.repository import SkillRunRepo
+
+        other = UserRepo.create_user(
+            f"other-skill-runs-{uuid.uuid4().hex[:8]}@example.test",
+            f"other_skill_runs_{uuid.uuid4().hex[:8]}",
+            "secret123",
+            "Other",
+        )
+        SkillRunRepo.create(self.user.id, "web_search", "completed", {"message": "meu"}, "saida minha")
+        SkillRunRepo.create(other.id, "web_search", "completed", {"message": "outro"}, "saida outro")
+
+        token = create_access_token(self.user.id, self.user.username)
+        response = TestClient(app).get(
+            "/api/v1/skills/runs",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["runs"]), 1)
+        self.assertEqual(data["runs"][0]["user_id"], self.user.id)
+        self.assertIn("saida minha", data["runs"][0]["output_summary"])
 
 
 if __name__ == "__main__":
