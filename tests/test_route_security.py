@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.params import Depends
 
 from src.api.routes import router
+from src.api.workspace_routes import router as workspace_router
 
 
 class RouteSecurityTest(unittest.TestCase):
@@ -18,10 +19,11 @@ class RouteSecurityTest(unittest.TestCase):
             "/profiles",
             "/config",
             "/metrics",
+            "/workspace",
         )
         violations = []
 
-        for route in router.routes:
+        for route in [*router.routes, *workspace_router.routes]:
             path = getattr(route, "path", "")
             if not path.startswith(sensitive_prefixes):
                 continue

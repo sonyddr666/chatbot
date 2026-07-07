@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from src.api.routes import router
+from src.api.workspace_routes import router as workspace_router
 from src.config import settings
 from src.core.auth import rag_collection_for_user
 from src.core.auth_required import resolve_authorized_user
@@ -226,3 +227,4 @@ async def websocket_chat(websocket: WebSocket):
 
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(workspace_router, prefix="/api/v1")

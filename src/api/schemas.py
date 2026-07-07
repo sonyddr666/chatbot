@@ -103,3 +103,41 @@ class OnboardingRequest(BaseModel):
 class SkillToggleRequest(BaseModel):
     enabled: bool
     config: Optional[dict[str, Any]] = None
+
+
+class WorkspacePathRequest(BaseModel):
+    path: str
+
+
+class WorkspaceWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+class WorkspaceMoveRequest(BaseModel):
+    source: str
+    target: str
+
+
+class WorkspaceNodeResponse(BaseModel):
+    name: str
+    path: str
+    kind: str
+    size: int
+
+
+class WorkspaceTreeResponse(BaseModel):
+    path: str
+    nodes: list[WorkspaceNodeResponse]
+
+
+class WorkspaceFileResponse(BaseModel):
+    path: str
+    content: str
+
+
+class WorkspaceInfoResponse(BaseModel):
+    name: str
+    path: str
+    kind: str
+    size: int
