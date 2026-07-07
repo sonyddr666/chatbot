@@ -17,7 +17,7 @@ from src.api.schemas import (
     ChatRequest, ChatResponse, ChatStreamRequest,
     IngestRequest, IngestResponse, FeedbackRequest, StatsResponse,
     ConversationResponse, RegisterRequest, LoginRequest, AuthResponse, UserResponse,
-    OnboardingRequest, SkillToggleRequest, PreferenceUpdateRequest,
+    OnboardingRequest, SkillToggleRequest, PreferenceUpdateRequest, PreferenceSuggestionResolveRequest,
 )
 from src.core.memory import get_session
 from src.core.chat import ChatEngine
@@ -28,10 +28,11 @@ from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, A
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+from src.core.preference_suggestions import create_suggestion_from_message
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
 from src.rag.retriever import retrieve_context
-from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
+from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token, rag_collection_for_user
@@ -105,6 +106,14 @@ async def get_current_user(user=Depends(get_optional_user)):
     if not user:
         raise HTTPException(status_code=401, detail="Nao autenticado")
     return user
+
+
+def observe_preference_suggestion(user_id: int, message: str) -> None:
+    try:
+        create_suggestion_from_message(user_id, message)
+    except Exception:
+        # Preferencias sugeridas nunca devem derrubar o fluxo principal do chat.
+        return
 
 
 async def async_add_message(session_id: str, role: str, content: str, user_id: int | None = None, **metadata) -> "Message":
@@ -221,6 +230,24 @@ async def set_preference(key: str, body: PreferenceUpdateRequest, user=Depends(g
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "ok", "key": key, "preferences": UserPreferenceRepo.list_for_user(user.id)}
+
+
+@router.get("/preference-suggestions")
+async def list_preference_suggestions(user=Depends(get_current_user)):
+    ensure_db()
+    return {"suggestions": PreferenceSuggestionRepo.list_pending(user.id)}
+
+
+@router.post("/preference-suggestions/{suggestion_id}/resolve")
+async def resolve_preference_suggestion(
+    suggestion_id: int,
+    body: PreferenceSuggestionResolveRequest,
+    user=Depends(get_current_user),
+):
+    ensure_db()
+    if not PreferenceSuggestionRepo.resolve(user.id, suggestion_id, accept=body.accept):
+        raise HTTPException(status_code=404, detail="Sugestao nao encontrada")
+    return {"status": "accepted" if body.accept else "rejected", "suggestion_id": suggestion_id}
 
 # CONFIG / PROFILES
 # ═══════════════════════════════════════════════════════════════
@@ -691,6 +718,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         response = await engine.chat(body.message)
         MESSAGES_TOTAL.labels(role="assistant").inc()
         user_msg = await async_add_message(session_id, "user", body.message, user_id=user.id)
+        observe_preference_suggestion(user.id, user_msg.content)
         ai_msg = await async_add_message(session_id, "assistant", response, user_id=user.id, **model_meta)
         return ChatResponse(
             response=response,
@@ -774,7 +802,8 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             MESSAGES_TOTAL.labels(role="assistant").inc()
 
             # Aguarda salvamento da mensagem do usuário (já deve ter terminado)
-            await save_task
+            user_msg = await save_task
+            observe_preference_suggestion(user.id, user_msg.content)
             ai_msg = await async_add_message(session_id, "assistant", full_response, user_id=user.id, **model_meta)
             yield {"event": "done", "data": json.dumps({
                 "message_id": ai_msg.id,

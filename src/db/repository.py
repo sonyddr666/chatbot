@@ -15,6 +15,7 @@ from src.db.models import (
     User,
     UserProfile,
     UserPreference,
+    PreferenceSuggestion,
     Skill,
     UserSkill,
     SkillRun,
@@ -260,6 +261,123 @@ class UserPreferenceRepo:
             confidence = info.get("confidence", 1)
             lines.append(f"- {key}: {value} (fonte={source}, confianca={confidence})")
         return "\n".join(lines)
+
+
+class PreferenceSuggestionRepo:
+    @staticmethod
+    def _to_dict(row: PreferenceSuggestion) -> dict:
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "suggestion_type": row.suggestion_type,
+            "current_value": json.loads(row.current_value_json or "null"),
+            "suggested_value": json.loads(row.suggested_value_json or "null"),
+            "reason": row.reason,
+            "confidence": row.confidence / 100,
+            "status": row.status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+        }
+
+    @staticmethod
+    def create(
+        user_id: int,
+        suggestion_type: str,
+        current_value,
+        suggested_value,
+        reason: str,
+        confidence: float = 0.7,
+    ) -> PreferenceSuggestion:
+        clean_type = suggestion_type.strip()
+        if not clean_type:
+            raise ValueError("Tipo de sugestao invalido")
+        db = get_session_db()
+        try:
+            suggestion = PreferenceSuggestion(
+                user_id=user_id,
+                suggestion_type=clean_type,
+                current_value_json=json.dumps(current_value, ensure_ascii=False),
+                suggested_value_json=json.dumps(suggested_value, ensure_ascii=False),
+                reason=reason[:1000],
+                confidence=max(0, min(100, int(confidence * 100))),
+                status="pending",
+            )
+            db.add(suggestion)
+            db.commit()
+            db.refresh(suggestion)
+            db.expunge(suggestion)
+            return suggestion
+        finally:
+            db.close()
+
+    @staticmethod
+    def has_pending(user_id: int, suggestion_type: str) -> bool:
+        db = get_session_db()
+        try:
+            return (
+                db.query(PreferenceSuggestion)
+                .filter(
+                    PreferenceSuggestion.user_id == user_id,
+                    PreferenceSuggestion.suggestion_type == suggestion_type,
+                    PreferenceSuggestion.status == "pending",
+                )
+                .first()
+                is not None
+            )
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_pending(user_id: int, limit: int = 20) -> list[dict]:
+        db = get_session_db()
+        try:
+            rows = (
+                db.query(PreferenceSuggestion)
+                .filter(
+                    PreferenceSuggestion.user_id == user_id,
+                    PreferenceSuggestion.status == "pending",
+                )
+                .order_by(PreferenceSuggestion.created_at.desc(), PreferenceSuggestion.id.desc())
+                .limit(limit)
+                .all()
+            )
+            return [PreferenceSuggestionRepo._to_dict(row) for row in rows]
+        finally:
+            db.close()
+
+    @staticmethod
+    def resolve(user_id: int, suggestion_id: int, accept: bool) -> bool:
+        db = get_session_db()
+        try:
+            suggestion = (
+                db.query(PreferenceSuggestion)
+                .filter(
+                    PreferenceSuggestion.id == suggestion_id,
+                    PreferenceSuggestion.user_id == user_id,
+                    PreferenceSuggestion.status == "pending",
+                )
+                .first()
+            )
+            if not suggestion:
+                return False
+            suggestion.status = "accepted" if accept else "rejected"
+            suggestion.resolved_at = datetime.now(timezone.utc)
+            suggested_value = json.loads(suggestion.suggested_value_json or "null")
+            suggestion_type = suggestion.suggestion_type
+            confidence = suggestion.confidence / 100
+            db.commit()
+        finally:
+            db.close()
+
+        if accept:
+            UserPreferenceRepo.set(
+                user_id,
+                suggestion_type,
+                suggested_value,
+                source="suggestion",
+                confidence=confidence,
+            )
+        return True
 
 
 class ConversationRepo:

@@ -61,6 +61,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+    from src.core.preference_suggestions import create_suggestion_from_message
     from src.rag.retriever import retrieve_context
     from src.db.repository import ConversationRepo, SkillRepo, UserPreferenceRepo
     from src.db.models import init_db
@@ -72,6 +73,12 @@ async def websocket_chat(websocket: WebSocket):
             None,
             lambda: ConversationRepo.add_message(session_id, role, content, user_id=user_id, **metadata),
         )
+
+    def _observe_preference_suggestion(user_id: int, message: str) -> None:
+        try:
+            create_suggestion_from_message(user_id, message)
+        except Exception:
+            return
 
     def _scoped_session_id(user_id: int, raw_session_id: str) -> str:
         if raw_session_id.startswith(f"u{user_id}:"):
@@ -199,7 +206,8 @@ async def websocket_chat(websocket: WebSocket):
                     continue
 
                 MESSAGES_TOTAL.labels(role="assistant").inc()
-                await save_task
+                user_msg = await save_task
+                _observe_preference_suggestion(user.id, user_msg.content)
                 ai_msg = await _add_msg(session_id, "assistant", full_response, user_id=user.id, **model_meta)
 
                 total_time = time.time() - t_start

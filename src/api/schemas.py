@@ -111,6 +111,10 @@ class PreferenceUpdateRequest(BaseModel):
     confidence: float = 1.0
 
 
+class PreferenceSuggestionResolveRequest(BaseModel):
+    accept: bool
+
+
 class WorkspacePathRequest(BaseModel):
     path: str
 

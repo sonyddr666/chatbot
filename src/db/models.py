@@ -60,6 +60,21 @@ class UserPreference(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class PreferenceSuggestion(Base):
+    __tablename__ = "preference_suggestions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    suggestion_type = Column(String(120), nullable=False, index=True)
+    current_value_json = Column(Text, default="null")
+    suggested_value_json = Column(Text, default="null")
+    reason = Column(Text, default="")
+    confidence = Column(Integer, default=70)
+    status = Column(String(40), default="pending", index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    resolved_at = Column(DateTime, nullable=True)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -199,6 +214,11 @@ def init_db():
                 row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }:
                 UserPreference.__table__.create(bind=conn)
+
+            if "preference_suggestions" not in {
+                row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }:
+                PreferenceSuggestion.__table__.create(bind=conn)
 
             conn.execute(text("""
                 UPDATE conversations
