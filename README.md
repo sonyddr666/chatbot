@@ -21,7 +21,13 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edite .env com suas chaves
 
-python -m src.main
+# Terminal 1: API backend
+python -m src.main serve
+
+# Terminal 2: frontend web
+cd frontend
+npm install
+npm run dev
 ```
 
 ## Comandos
@@ -35,4 +41,8 @@ python -m src.main ingest --file documento.pdf
 
 # API server
 python -m src.main serve
+
+# Frontend web
+cd frontend
+npm run dev
 ```
