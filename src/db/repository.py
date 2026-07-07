@@ -16,6 +16,7 @@ from src.db.models import (
     UserProfile,
     Skill,
     UserSkill,
+    SkillRun,
 )
 
 
@@ -523,3 +524,63 @@ class SkillRepo:
                 f"- {skill['name']} ({skill['kind']}): {skill['description']} Definicao: {definition_text}"
             )
         return "\n".join(lines)
+
+
+class SkillRunRepo:
+    @staticmethod
+    def create(
+        user_id: int,
+        skill_name: str,
+        status: str,
+        input_data: dict,
+        output_summary: str = "",
+        error_message: str = "",
+    ) -> SkillRun:
+        db = get_session_db()
+        try:
+            now = datetime.now(timezone.utc)
+            run = SkillRun(
+                user_id=user_id,
+                skill_name=skill_name,
+                status=status,
+                input_json=json.dumps(input_data, ensure_ascii=False),
+                output_summary=output_summary[:2000],
+                error_message=error_message[:2000],
+                started_at=now,
+                finished_at=now,
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+            db.expunge(run)
+            return run
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_for_user(user_id: int, limit: int = 50) -> list[dict]:
+        db = get_session_db()
+        try:
+            runs = (
+                db.query(SkillRun)
+                .filter(SkillRun.user_id == user_id)
+                .order_by(SkillRun.started_at.desc(), SkillRun.id.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "id": run.id,
+                    "user_id": run.user_id,
+                    "skill_name": run.skill_name,
+                    "status": run.status,
+                    "input_json": run.input_json,
+                    "output_summary": run.output_summary,
+                    "error_message": run.error_message,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                }
+                for run in runs
+            ]
+        finally:
+            db.close()

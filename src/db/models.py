@@ -123,6 +123,20 @@ class UserSkill(Base):
     skill = relationship("Skill")
 
 
+class SkillRun(Base):
+    __tablename__ = "skill_runs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    skill_name = Column(String(120), nullable=False, index=True)
+    status = Column(String(40), nullable=False, default="completed")
+    input_json = Column(Text, default="{}")
+    output_summary = Column(Text, default="")
+    error_message = Column(Text, default="")
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime, nullable=True)
+
+
 def get_engine():
     return create_engine(settings.database_url, echo=False)
 
@@ -162,6 +176,11 @@ def init_db():
             document_cols = _sqlite_columns(conn, "knowledge_documents")
             if "user_id" not in document_cols:
                 conn.execute(text("ALTER TABLE knowledge_documents ADD COLUMN user_id INTEGER"))
+
+            if "skill_runs" not in {
+                row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }:
+                SkillRun.__table__.create(bind=conn)
 
             conn.execute(text("""
                 UPDATE conversations

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from src.db.repository import SkillRepo
+from src.db.repository import SkillRepo, SkillRunRepo
 from src.tools.web_search import web_search
 
 
@@ -59,10 +59,27 @@ async def run_enabled_skill_context(user_id: int, message: str) -> str:
     sections: list[str] = []
 
     if should_run_web_search(message, skills):
-        result = await web_search(message, max_results=3)
-        context = build_runtime_context("web_search", result)
-        if context:
-            sections.append(context)
+        try:
+            result = await web_search(message, max_results=3)
+            SkillRunRepo.create(
+                user_id,
+                "web_search",
+                "completed",
+                {"message": message, "max_results": 3},
+                output_summary=result or "",
+            )
+            context = build_runtime_context("web_search", result)
+            if context:
+                sections.append(context)
+        except Exception as exc:
+            SkillRunRepo.create(
+                user_id,
+                "web_search",
+                "failed",
+                {"message": message, "max_results": 3},
+                error_message=str(exc),
+            )
+            raise
 
     return "\n\n".join(sections)
 
