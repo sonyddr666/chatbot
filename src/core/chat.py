@@ -11,8 +11,9 @@ from src.core.memory import ConversationMemory
 class ChatEngine:
     """Motor de conversa que orquestra LLM + memória."""
 
-    def __init__(self, memory: ConversationMemory):
+    def __init__(self, memory: ConversationMemory, provider_config: dict | None = None):
         self.memory = memory
+        self.provider_config = provider_config
 
     async def chat_stream(
         self, user_input: str
@@ -30,7 +31,7 @@ class ChatEngine:
         full_reasoning_parts: list[str] = []
         full_content_parts: list[str] = []
 
-        async for typ, text in generate_stream(messages):
+        async for typ, text in generate_stream(messages, provider_config=self.provider_config):
             if typ == "reasoning":
                 full_reasoning_parts.append(text)
             else:

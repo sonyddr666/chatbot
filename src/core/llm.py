@@ -47,7 +47,7 @@ async def get_codex_account() -> Optional[dict]:
     return await get_best_account("codex-chatgpt")
 
 
-def get_llm() -> BaseChatModel:
+def get_llm(provider_config: dict | None = None) -> BaseChatModel:
     """Retorna o modelo de LLM configurado.
     
     NOTA: Para Codex ChatGPT, NÃO use esta função diretamente.
@@ -57,7 +57,7 @@ def get_llm() -> BaseChatModel:
     1. Provider manager
     2. Settings / .env (fallback)
     """
-    pm_cfg = get_active_config()
+    pm_cfg = provider_config or get_active_config()
     
     # Se for Codex, retorna None — o chat.py lida separadamente
     if _is_codex_provider(pm_cfg.get("provider_id", "")):
@@ -163,6 +163,7 @@ async def generate_codex_stream(
 
 async def generate_stream(
     messages: list[BaseMessage],
+    provider_config: dict | None = None,
 ) -> AsyncGenerator[Tuple[str, str], None]:
     """Gera resposta em streaming, emitindo tuplas (tipo, texto).
 
@@ -175,7 +176,7 @@ async def generate_stream(
         - ("content", str)   → texto final da resposta
         - ("error", str)     → erro (Codex)
     """
-    pm_cfg = get_active_config()
+    pm_cfg = provider_config or get_active_config()
     
     # ─── Codex ChatGPT ───
     if _is_codex_provider(pm_cfg.get("provider_id", "")):
@@ -189,7 +190,7 @@ async def generate_stream(
         return
 
     # ─── Outros provedores (OpenAI, Anthropic, etc.) ───
-    llm = get_llm()
+    llm = get_llm(provider_config=pm_cfg)
     if llm is None:
         yield ("error", "Nenhum LLM disponível para o provider ativo.")
         return
@@ -205,10 +206,10 @@ async def generate_stream(
             yield ("content", chunk.content)
 
 
-async def generate(messages: list[BaseMessage]) -> str:
+async def generate(messages: list[BaseMessage], provider_config: dict | None = None) -> str:
     """Gera resposta completa (sem streaming)."""
     full = ""
-    async for typ, text in generate_stream(messages):
+    async for typ, text in generate_stream(messages, provider_config=provider_config):
         if typ == "content":
             full += text
     return full

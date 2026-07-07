@@ -34,6 +34,7 @@ from src.core.user_provider_manager import (
     create_user_provider,
     get_active_config_for_user,
     list_user_providers,
+    metadata_from_config,
 )
 from src.rag.chunker import split_text, split_documents
 from src.rag.vector_store import add_documents
@@ -737,12 +738,12 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         sys_prompt = build_system_prompt_multilang(lang) if settings.enable_multilang else build_system_prompt()
         memory.messages[0] = SystemMessage(content=sys_prompt)
 
-    engine = ChatEngine(memory)
+    provider_config = get_active_config_for_user(user.id)
+    model_meta = metadata_from_config(provider_config)
+    engine = ChatEngine(memory, provider_config=provider_config)
     MESSAGES_TOTAL.labels(role="user").inc()
 
     try:
-        from src.core.provider_manager import get_active_model_metadata
-        model_meta = get_active_model_metadata()
         response = await engine.chat(body.message)
         MESSAGES_TOTAL.labels(role="assistant").inc()
         user_msg = await async_add_message(session_id, "user", body.message, user_id=user.id)
@@ -792,15 +793,15 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     else:
         rag_task = None
 
-    engine = ChatEngine(memory)
+    provider_config = get_active_config_for_user(user.id)
+    model_meta = metadata_from_config(provider_config)
+    engine = ChatEngine(memory, provider_config=provider_config)
 
     async def event_generator():
         nonlocal rag_context
         full_response = ""
         MESSAGES_TOTAL.labels(role="user").inc()
         has_reasoning = False
-        from src.core.provider_manager import get_active_model_metadata
-        model_meta = get_active_model_metadata()
 
         # Sinaliza início imediato da conexão
         yield {"event": "start", "data": json.dumps({"session_id": body.session_id, **model_meta})}
@@ -859,10 +860,12 @@ async def regenerate(session_id: str = "default", user=Depends(get_current_user)
     if not user_msg:
         raise HTTPException(status_code=400, detail="Nao ha pergunta para regenerar")
 
-    engine = ChatEngine(memory)
+    provider_config = get_active_config_for_user(user.id)
+    model_meta = metadata_from_config(provider_config)
+    engine = ChatEngine(memory, provider_config=provider_config)
     response = await engine.chat(user_msg)
-    ConversationRepo.add_message(scoped_session_id, "assistant", response, user_id=user.id)
-    return ChatResponse(response=response, session_id=raw_session_id)
+    ai_msg = ConversationRepo.add_message(scoped_session_id, "assistant", response, user_id=user.id, **model_meta)
+    return ChatResponse(response=response, session_id=raw_session_id, message_id=ai_msg.id, **model_meta)
 
 
 # ═══════════════════════════════════════════════════════════════

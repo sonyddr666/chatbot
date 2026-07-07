@@ -70,6 +70,19 @@ def _internal_config(row: UserProviderConfig) -> dict:
     }
 
 
+def metadata_from_config(config: dict) -> dict:
+    return {
+        "provider_id": config.get("provider_id", ""),
+        "provider_name": config.get("name", config.get("provider_id", "")),
+        "model_id": config.get("model_id", ""),
+        "model_name": config.get("model_name", config.get("model_id", "")),
+    }
+
+
+def get_active_model_metadata_for_user(user_id: int) -> dict:
+    return metadata_from_config(get_active_config_for_user(user_id))
+
+
 def create_user_provider(user_id: int, data: dict) -> dict:
     provider_id = str(data.get("provider_id", "")).strip()
     model = str(data.get("model", "")).strip()

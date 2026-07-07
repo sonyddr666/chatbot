@@ -1,6 +1,7 @@
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -109,6 +110,44 @@ class UserProviderConfigTest(unittest.TestCase):
         self.assertNotIn("local-secret", str(list_response.json()))
         self.assertEqual(active_response.json()["provider_id"], "personal-local")
         self.assertTrue(active_response.json()["has_key"])
+
+    def test_chat_route_passes_active_user_provider_to_chat_engine(self):
+        from src.core.user_provider_manager import create_user_provider
+
+        token = create_access_token(self.user.id, self.user.username)
+        client = TestClient(app)
+        seen = []
+
+        class FakeChatEngine:
+            def __init__(self, memory, provider_config=None):
+                seen.append(provider_config)
+
+            async def chat(self, message):
+                return "ok"
+
+        create_user_provider(
+            self.user.id,
+            {
+                "provider_id": "personal-chat",
+                "display_name": "Chat Personal",
+                "base_url": "https://chat.example.test/v1",
+                "model": "chat-user-model",
+                "api_key": "chat-secret",
+                "is_default": True,
+            },
+        )
+
+        with patch("src.api.routes.ChatEngine", new=FakeChatEngine):
+            response = client.post(
+                "/api/v1/chat",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"message": "oi", "session_id": "provider-hotpath"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen[0]["provider_id"], "personal-chat")
+        self.assertEqual(seen[0]["model_id"], "chat-user-model")
+        self.assertEqual(response.json()["provider_id"], "personal-chat")
 
 
 if __name__ == "__main__":

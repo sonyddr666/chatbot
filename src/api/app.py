@@ -62,6 +62,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
     from src.core.preference_suggestions import create_suggestion_from_message
+    from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
     from src.rag.retriever import retrieve_context
     from src.db.repository import ConversationRepo, SkillRepo, UserPreferenceRepo
     from src.db.models import init_db
@@ -156,8 +157,8 @@ async def websocket_chat(websocket: WebSocket):
                         await websocket.send_json({"type": "done"})
                         continue
 
-                from src.core.provider_manager import get_active_model_metadata
-                model_meta = get_active_model_metadata()
+                provider_config = get_active_config_for_user(user.id)
+                model_meta = metadata_from_config(provider_config)
 
                 # Start
                 await websocket.send_json({"type": "start", "route": route, "session_id": session_id, **model_meta})
@@ -187,7 +188,7 @@ async def websocket_chat(websocket: WebSocket):
                 memory.update_system_prompt(prompt_context)
 
                 # Streaming LLM
-                engine = ChatEngine(memory)
+                engine = ChatEngine(memory, provider_config=provider_config)
                 full_response = ""
                 has_reasoning = False
                 t_start = time.time()
