@@ -36,6 +36,7 @@ from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token, rag_collection_for_user
 from src.core.auth_required import resolve_authorized_user
+from src.core.userspace import write_profile_text
 
 router = APIRouter()
 _SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
@@ -165,12 +166,20 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
         "Objetivos: " + "; ".join(body.goals),
         "Evitar: " + "; ".join(body.avoid),
     ])
+    write_profile_text(user.id, "onboarding.md", memory_doc)
     chunks = split_text(memory_doc)
     collection = rag_collection_for_user(user.id)
     metadatas = [{"source": "onboarding", "user_id": user.id, "filename": "perfil-inicial.md"}] * len(chunks)
     ids = add_documents(chunks, metadatas=metadatas, collection_name=collection)
     DocumentRepo.save("perfil-inicial.md", "onboarding", len(chunks), len(memory_doc.encode("utf-8")), user_id=user.id)
-    return {"status": "ok", "profile_id": profile.id, "rag_collection": collection, "chunks": len(chunks), "ids": ids}
+    return {
+        "status": "ok",
+        "profile_id": profile.id,
+        "profile_file": "profile/onboarding.md",
+        "rag_collection": collection,
+        "chunks": len(chunks),
+        "ids": ids,
+    }
 
 
 @router.get("/skills")

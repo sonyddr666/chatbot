@@ -6,6 +6,7 @@ import json
 from sqlalchemy import func, or_
 
 from src.core.auth import hash_password, verify_password
+from src.core.userspace import ensure_user_space
 from src.db.models import (
     get_session_db,
     Conversation,
@@ -68,6 +69,7 @@ class UserRepo:
                 db.add(UserProfile(user_id=user.id, language="pt", preferred_tone="direto"))
                 db.commit()
                 db.refresh(user)
+            ensure_user_space(user.id)
             return user
         finally:
             db.close()
@@ -87,6 +89,7 @@ class UserRepo:
             )
             db.add(user)
             db.flush()
+            ensure_user_space(user.id)
             db.add(UserProfile(user_id=user.id, language="pt", preferred_tone="direto"))
             db.commit()
             db.refresh(user)
