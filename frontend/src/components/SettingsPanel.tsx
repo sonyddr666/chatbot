@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { api, getAuthToken } from '../lib/api'
+import { api, getAuthToken, type PreferenceSuggestionInfo } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -51,6 +51,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [answerTone, setAnswerTone] = useState('direto')
   const [answerDetail, setAnswerDetail] = useState('pratico')
   const [ragAggressiveness, setRagAggressiveness] = useState('balanced')
+  const [preferenceSuggestions, setPreferenceSuggestions] = useState<PreferenceSuggestionInfo[]>([])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme)
@@ -83,6 +84,15 @@ export function SettingsPanel({ open, onClose }: Props) {
     }
   }, [])
 
+  const loadPreferenceSuggestions = useCallback(async () => {
+    try {
+      const data = await api.listPreferenceSuggestions()
+      setPreferenceSuggestions(data.suggestions)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao carregar sugestoes')
+    }
+  }, [])
+
   const savePreferences = async () => {
     try {
       await Promise.all([
@@ -92,6 +102,17 @@ export function SettingsPanel({ open, onClose }: Props) {
       toast.success('Preferencias salvas')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao salvar preferencias')
+    }
+  }
+
+  const resolvePreferenceSuggestion = async (suggestion: PreferenceSuggestionInfo, accept: boolean) => {
+    try {
+      await api.resolvePreferenceSuggestion(suggestion.id, accept)
+      toast.success(accept ? 'Sugestao aceita' : 'Sugestao rejeitada')
+      await loadPreferenceSuggestions()
+      if (accept) await loadPreferences()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao resolver sugestao')
     }
   }
 
@@ -110,8 +131,9 @@ export function SettingsPanel({ open, onClose }: Props) {
     if (open) {
       fetchActiveProvider()
       loadPreferences()
+      loadPreferenceSuggestions()
     }
-  }, [open, fetchActiveProvider, loadPreferences])
+  }, [open, fetchActiveProvider, loadPreferences, loadPreferenceSuggestions])
 
   // Escuta mudanças externas
   useEffect(() => {
@@ -244,6 +266,54 @@ export function SettingsPanel({ open, onClose }: Props) {
             </div>
           </div>
 
+          {preferenceSuggestions.length > 0 && (
+            <div>
+              <label className="text-sm font-medium mb-2 block" style={{ color: 'var(--text-primary)' }}>
+                Sugestoes inteligentes
+              </label>
+              <div className="space-y-2">
+                {preferenceSuggestions.map(suggestion => (
+                  <div
+                    key={suggestion.id}
+                    className="rounded-xl border p-3"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold uppercase tracking-wide" style={{ color: 'var(--accent)' }}>
+                        {preferenceLabel(suggestion.suggestion_type)}
+                      </p>
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        {Math.round(suggestion.confidence * 100)}%
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {suggestion.reason}
+                    </p>
+                    <p className="mt-2 rounded-lg px-2 py-1 text-[11px]" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                      {formatSuggestionValue(suggestion.suggested_value)}
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => resolvePreferenceSuggestion(suggestion, true)}
+                        className="flex-1 rounded-lg px-2 py-1.5 text-xs font-bold"
+                        style={{ background: 'var(--accent)', color: '#fff' }}
+                      >
+                        Aceitar
+                      </button>
+                      <button
+                        onClick={() => resolvePreferenceSuggestion(suggestion, false)}
+                        className="flex-1 rounded-lg border px-2 py-1.5 text-xs font-bold"
+                        style={{ background: 'transparent', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+                      >
+                        Rejeitar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ─── TOGGLES: Thinking + RAG ─── */}
           <div>
             <label className="text-sm font-medium mb-2 block" style={{ color: 'var(--text-primary)' }}>
@@ -367,6 +437,25 @@ function fmtCtx(n: number): string {
 
 function isAnswerStyle(value: unknown): value is { tone?: unknown; detail?: unknown } {
   return typeof value === 'object' && value !== null
+}
+
+function preferenceLabel(type: string): string {
+  const labels: Record<string, string> = {
+    answer_style: 'Estilo de resposta',
+    default_language: 'Idioma padrao',
+    rag_aggressiveness: 'Uso do RAG',
+  }
+  return labels[type] || type
+}
+
+function formatSuggestionValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return 'Valor sugerido'
+  }
 }
 
 function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {

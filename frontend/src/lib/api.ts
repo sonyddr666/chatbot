@@ -93,6 +93,19 @@ export interface UserPreferenceInfo {
   updated_at: string | null
 }
 
+export interface PreferenceSuggestionInfo {
+  id: number
+  user_id: number
+  suggestion_type: string
+  current_value: unknown
+  suggested_value: unknown
+  reason: string
+  confidence: number
+  status: string
+  created_at: string | null
+  resolved_at: string | null
+}
+
 export interface WorkspaceNode {
   name: string
   path: string
@@ -187,6 +200,13 @@ export const api = {
     req<any>(`/preferences/${encodeURIComponent(key)}`, {
       method: 'PUT',
       body: JSON.stringify({ value, source, confidence }),
+    }),
+  listPreferenceSuggestions: () =>
+    req<{ suggestions: PreferenceSuggestionInfo[] }>('/preference-suggestions'),
+  resolvePreferenceSuggestion: (id: number, accept: boolean) =>
+    req<{ status: string; suggestion_id: number }>(`/preference-suggestions/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
     }),
 
   // Config
