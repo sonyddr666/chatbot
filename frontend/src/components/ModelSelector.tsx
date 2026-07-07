@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ChevronDown, Cpu, Server, Settings, AlertCircle } from 'lucide-react'
 import { useChatStore } from '../hooks/useChatStore'
+import { getAuthToken } from '../lib/api'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -25,6 +26,21 @@ interface ProviderInfo {
 }
 
 const API = '/api/v1'
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getAuthToken()
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  }
+}
+
+async function apiFetch(url: string, opts?: RequestInit) {
+  return fetch(url, {
+    ...opts,
+    headers: authHeaders(opts?.headers),
+  })
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -63,7 +79,7 @@ export function ModelSelector() {
     if (!open) return
     setLoading(true)
     setError(null)
-    fetch(`${API}/providers/manage`)
+    apiFetch(`${API}/providers/manage`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -83,7 +99,7 @@ export function ModelSelector() {
   useEffect(() => {
     const refresh = () => {
       if (!open) {
-        fetch(`${API}/providers/manage`)
+        apiFetch(`${API}/providers/manage`)
           .then(r => r.json())
           .then(data => setProviders(data))
           .catch(() => {})
@@ -111,7 +127,7 @@ export function ModelSelector() {
     const provider = providers.find(p => p.id === providerId)
     if (!provider?.active) {
       try {
-        const r = await fetch(`${API}/providers/manage/${providerId}/activate`, { method: 'POST' })
+        const r = await apiFetch(`${API}/providers/manage/${providerId}/activate`, { method: 'POST' })
         if (!r.ok) throw new Error('Falha ao ativar provider')
       } catch {
         // Reverte optimistic update? Não por enquanto
@@ -121,7 +137,7 @@ export function ModelSelector() {
 
     // Ativa o modelo
     try {
-      const r = await fetch(`${API}/providers/activate-model`, {
+      const r = await apiFetch(`${API}/providers/activate-model`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_id: modelId }),

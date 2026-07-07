@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
+import { getAuthToken } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -9,6 +10,11 @@ interface Props {
 }
 
 const API = '/api/v1'
+
+function authHeaders(): HeadersInit {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 interface ModelInfo {
   id: string
@@ -62,7 +68,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   // Busca provider ativo
   const fetchActiveProvider = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/providers/manage`)
+      const r = await fetch(`${API}/providers/manage`, { headers: authHeaders() })
       const data: ProviderInfo[] = await r.json()
       const active = data.find(p => p.active) || null
       setActiveProvider(active)
