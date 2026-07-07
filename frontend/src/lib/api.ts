@@ -74,6 +74,30 @@ export interface SkillInfo {
   enabled: boolean
 }
 
+export interface WorkspaceNode {
+  name: string
+  path: string
+  kind: 'file' | 'folder'
+  size: number
+}
+
+export interface WorkspaceTree {
+  path: string
+  nodes: WorkspaceNode[]
+}
+
+export interface WorkspaceFile {
+  path: string
+  content: string
+}
+
+export interface WorkspaceInfo {
+  name: string
+  path: string
+  kind: 'file' | 'folder'
+  size: number
+}
+
 /** Chunk do streaming SSE */
 export interface StreamChunk {
   type: 'content' | 'reasoning' | 'done' | 'start' | 'status'
@@ -281,6 +305,29 @@ export const api = {
     return res.json()
   },
   deleteDocument: (id: number) => req<any>(`/documents/${id}`, { method: 'DELETE' }),
+
+  // Workspace
+  workspaceTree: (path = '') =>
+    req<WorkspaceTree>(`/workspace/tree?path=${encodeURIComponent(path)}`),
+  workspaceReadFile: (path: string) =>
+    req<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+  workspaceWriteFile: (path: string, content: string) =>
+    req<WorkspaceInfo>('/workspace/file', {
+      method: 'PUT',
+      body: JSON.stringify({ path, content }),
+    }),
+  workspaceMkdir: (path: string) =>
+    req<WorkspaceInfo>('/workspace/mkdir', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  workspaceDeletePath: (path: string) =>
+    req<{ deleted: boolean; path: string }>(`/workspace/path?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  workspaceMovePath: (source: string, target: string) =>
+    req<WorkspaceInfo>('/workspace/move', {
+      method: 'POST',
+      body: JSON.stringify({ source, target }),
+    }),
 
   // Stats
   getStats: () => req<Stats>('/stats'),

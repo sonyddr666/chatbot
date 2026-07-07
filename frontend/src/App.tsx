@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { ArrowDown, LogOut, Menu, Server, Settings, Sparkles, Wifi, WifiOff } from 'lucide-react'
+import { ArrowDown, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
@@ -10,6 +10,7 @@ import { ModelSelector } from './components/ModelSelector'
 import { AuthPanel } from './components/AuthPanel'
 import { OnboardingModal } from './components/OnboardingModal'
 import { SkillsPanel } from './components/SkillsPanel'
+import { WorkspacePanel } from './components/WorkspacePanel'
 import { useChatStore } from './hooks/useChatStore'
 import { api, getAuthToken, setAuthToken, type ChatMessage, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -26,6 +27,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [providerManagerOpen, setProviderManagerOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -254,6 +256,7 @@ export default function App() {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ProviderManager open={providerManagerOpen} onClose={() => setProviderManagerOpen(false)} />
       <SkillsPanel open={skillsOpen} onClose={() => setSkillsOpen(false)} />
+      <WorkspacePanel open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       {showOnboarding && <OnboardingModal user={user} onDone={handleOnboardingDone} />}
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -303,6 +306,13 @@ export default function App() {
               )}
             </span>
             <ModelSelector />
+            <button
+              onClick={() => setWorkspaceOpen(true)}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="Workspace"
+            >
+              <FolderOpen size={18} style={{ color: 'var(--text-secondary)' }} />
+            </button>
             <button
               onClick={() => setSkillsOpen(true)}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
