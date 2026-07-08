@@ -166,6 +166,33 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(listed["status"], "indexed")
         self.assertEqual(listed["parser"], "text")
 
+    def test_upload_route_records_failed_parser_without_orphaning_original(self):
+        user, headers = self._create_auth_headers()
+        client = TestClient(app)
+
+        with (
+            patch("src.api.routes.add_user_documents") as add_mock,
+            patch("src.api.routes.extract_text_for_ingestion", side_effect=ValueError("Falha ao extrair texto do PDF")),
+        ):
+            upload_response = client.post(
+                "/api/v1/upload",
+                headers=headers,
+                files={"file": ("broken.pdf", b"not a real pdf", "application/pdf")},
+            )
+        documents = client.get("/api/v1/documents", headers=headers).json()
+        saved = list((Path(self.tmp.name) / str(user.id) / "uploads" / "original").glob("*/broken.pdf"))
+
+        self.assertEqual(upload_response.status_code, 400)
+        add_mock.assert_not_called()
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0]["filename"], "broken.pdf")
+        self.assertEqual(documents[0]["status"], "error")
+        self.assertEqual(documents[0]["parser"], "pdf")
+        self.assertEqual(documents[0]["chunks"], 0)
+        self.assertEqual(documents[0]["upload_path"].split("/")[0], "original")
+        self.assertIn("PDF", documents[0]["error_message"])
+
     def test_delete_document_removes_original_upload_and_rag_chunks(self):
         user, headers = self._create_auth_headers()
         client = TestClient(app)

@@ -1029,8 +1029,24 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         raise HTTPException(status_code=400, detail=f"Arquivo muito grande (máx {settings.max_upload_size_mb}MB)")
     try:
         artifact = save_upload_original(user.id, file.filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
         text = extract_text_for_ingestion(artifact.original_filename, content)
     except ValueError as exc:
+        DocumentRepo.save(
+            artifact.original_filename,
+            "upload",
+            0,
+            file_size,
+            user_id=user.id,
+            upload_path=artifact.relative_path,
+            checksum=artifact.checksum,
+            status="error",
+            parser=_parser_name(artifact.original_filename),
+            error_message=str(exc),
+            vector_ids=[],
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     chunks = split_text(text)
     metadatas = [{
@@ -1075,6 +1091,7 @@ async def list_documents(user=Depends(get_current_user)):
             "checksum": d.checksum or "",
             "status": d.status or "",
             "parser": d.parser or "",
+            "error_message": d.error_message or "",
             "created_at": d.created_at.isoformat(),
         }
         for d in docs
