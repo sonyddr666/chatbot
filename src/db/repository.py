@@ -606,13 +606,29 @@ class MessageRepo:
 
 class DocumentRepo:
     @staticmethod
-    def save(filename: str, source: str, chunk_count: int, file_size: int, user_id: int | None = None) -> KnowledgeDocument:
+    def save(
+        filename: str,
+        source: str,
+        chunk_count: int,
+        file_size: int,
+        user_id: int | None = None,
+        upload_path: str = "",
+        checksum: str = "",
+        status: str = "indexed",
+        parser: str = "",
+        error_message: str = "",
+    ) -> KnowledgeDocument:
         db = get_session_db()
         try:
             doc = KnowledgeDocument(
                 user_id=user_id,
                 filename=filename,
                 source=source,
+                upload_path=upload_path,
+                checksum=checksum,
+                status=status,
+                parser=parser,
+                error_message=error_message,
                 chunk_count=chunk_count,
                 file_size=file_size,
             )

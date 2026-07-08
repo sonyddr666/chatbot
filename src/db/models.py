@@ -134,6 +134,11 @@ class KnowledgeDocument(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     filename = Column(String(255), nullable=False)
     source = Column(String(255), default="upload")
+    upload_path = Column(String(1000), default="")
+    checksum = Column(String(128), default="")
+    status = Column(String(60), default="indexed")
+    parser = Column(String(80), default="")
+    error_message = Column(Text, default="")
     chunk_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     file_size = Column(Integer, default=0)
@@ -219,8 +224,16 @@ def init_db():
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN user_id INTEGER"))
 
             document_cols = _sqlite_columns(conn, "knowledge_documents")
-            if "user_id" not in document_cols:
-                conn.execute(text("ALTER TABLE knowledge_documents ADD COLUMN user_id INTEGER"))
+            for name, ddl in {
+                "user_id": "ALTER TABLE knowledge_documents ADD COLUMN user_id INTEGER",
+                "upload_path": "ALTER TABLE knowledge_documents ADD COLUMN upload_path VARCHAR(1000) DEFAULT ''",
+                "checksum": "ALTER TABLE knowledge_documents ADD COLUMN checksum VARCHAR(128) DEFAULT ''",
+                "status": "ALTER TABLE knowledge_documents ADD COLUMN status VARCHAR(60) DEFAULT 'indexed'",
+                "parser": "ALTER TABLE knowledge_documents ADD COLUMN parser VARCHAR(80) DEFAULT ''",
+                "error_message": "ALTER TABLE knowledge_documents ADD COLUMN error_message TEXT DEFAULT ''",
+            }.items():
+                if name not in document_cols:
+                    conn.execute(text(ddl))
 
             if "skill_runs" not in {
                 row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))

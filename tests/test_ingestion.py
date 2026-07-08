@@ -144,6 +144,28 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(len(saved), 1)
         self.assertEqual(saved[0].read_bytes(), b"# Notes")
 
+    def test_upload_route_persists_original_metadata_for_document_list(self):
+        _, headers = self._create_auth_headers()
+        client = TestClient(app)
+
+        with patch("src.api.routes.add_user_documents", return_value=["chunk-1"]):
+            upload_response = client.post(
+                "/api/v1/upload",
+                headers=headers,
+                files={"file": ("audit.md", b"# Audit", "text/markdown")},
+            )
+        list_response = client.get("/api/v1/documents", headers=headers)
+
+        self.assertEqual(upload_response.status_code, 200)
+        self.assertEqual(list_response.status_code, 200)
+        uploaded = upload_response.json()
+        listed = list_response.json()[0]
+        self.assertEqual(listed["filename"], "audit.md")
+        self.assertEqual(listed["upload_path"], uploaded["upload_path"])
+        self.assertEqual(listed["checksum"], uploaded["checksum"])
+        self.assertEqual(listed["status"], "indexed")
+        self.assertEqual(listed["parser"], "text")
+
     def test_upload_route_ingests_pdf_with_real_parser(self):
         _, headers = self._create_auth_headers()
         client = TestClient(app)

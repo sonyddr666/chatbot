@@ -122,6 +122,17 @@ def observe_preference_suggestion(user_id: int, message: str) -> None:
         return
 
 
+def _parser_name(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in {".txt", ".md", ".csv", ".json"}:
+        return "text"
+    if ext == ".pdf":
+        return "pdf"
+    if ext == ".docx":
+        return "docx"
+    return ext.lstrip(".") or "unknown"
+
+
 async def async_add_message(session_id: str, role: str, content: str, user_id: int | None = None, **metadata) -> "Message":
     """Executa add_message em thread separada para nao bloquear o event loop."""
     loop = asyncio.get_event_loop()
@@ -1014,7 +1025,17 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         "checksum": artifact.checksum,
     }] * len(chunks)
     ids = add_user_documents(user.id, chunks, metadatas=metadatas)
-    DocumentRepo.save(artifact.original_filename, "upload", len(chunks), file_size, user_id=user.id)
+    DocumentRepo.save(
+        artifact.original_filename,
+        "upload",
+        len(chunks),
+        file_size,
+        user_id=user.id,
+        upload_path=artifact.relative_path,
+        checksum=artifact.checksum,
+        status="indexed",
+        parser=_parser_name(artifact.original_filename),
+    )
     DOCUMENTS_INGESTED.inc()
     return {
         "filename": artifact.original_filename,
@@ -1034,6 +1055,10 @@ async def list_documents(user=Depends(get_current_user)):
         {
             "id": d.id, "filename": d.filename, "source": d.source,
             "chunks": d.chunk_count, "size": d.file_size,
+            "upload_path": d.upload_path or "",
+            "checksum": d.checksum or "",
+            "status": d.status or "",
+            "parser": d.parser or "",
             "created_at": d.created_at.isoformat(),
         }
         for d in docs
