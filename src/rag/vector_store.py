@@ -40,6 +40,17 @@ def add_documents(
     return ids
 
 
+def delete_documents(
+    ids: List[str],
+    collection_name: str = "documents",
+) -> None:
+    """Remove documentos do banco vetorial pelos IDs conhecidos."""
+    if not ids:
+        return
+    vector_store = get_vector_store(collection_name)
+    vector_store.delete(ids=ids)
+
+
 def similarity_search(
     query: str,
     k: int = 4,

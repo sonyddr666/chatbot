@@ -29,6 +29,17 @@ class PersonalRAGIsolationTest(unittest.TestCase):
         self.assertEqual(retrieve_mock.call_args.kwargs["k"], 3)
         self.assertEqual(retrieve_mock.call_args.kwargs["collection_name"], "user_7_documents")
 
+    def test_delete_user_documents_uses_only_user_collection(self):
+        from src.rag.personal import delete_user_documents
+
+        with patch("src.rag.personal.delete_documents") as delete_mock:
+            delete_user_documents(9, ["chunk-a", "chunk-b"])
+
+        delete_mock.assert_called_once_with(
+            ["chunk-a", "chunk-b"],
+            collection_name="user_9_documents",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -166,6 +166,29 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(listed["status"], "indexed")
         self.assertEqual(listed["parser"], "text")
 
+    def test_delete_document_removes_original_upload_and_rag_chunks(self):
+        user, headers = self._create_auth_headers()
+        client = TestClient(app)
+
+        with patch("src.api.routes.add_user_documents", return_value=["chunk-1", "chunk-2"]):
+            upload_response = client.post(
+                "/api/v1/upload",
+                headers=headers,
+                files={"file": ("delete-me.md", b"# Delete me", "text/markdown")},
+            )
+        document = client.get("/api/v1/documents", headers=headers).json()[0]
+        saved = list((Path(self.tmp.name) / str(user.id) / "uploads" / "original").glob("*/delete-me.md"))
+
+        with patch("src.api.routes.delete_user_documents") as delete_rag:
+            delete_response = client.delete(f"/api/v1/documents/{document['id']}", headers=headers)
+
+        self.assertEqual(upload_response.status_code, 200)
+        self.assertEqual(delete_response.status_code, 200)
+        delete_rag.assert_called_once_with(user.id, ["chunk-1", "chunk-2"])
+        self.assertEqual(delete_response.json()["rag_ids_deleted"], 2)
+        self.assertFalse(saved[0].exists())
+        self.assertEqual(client.get("/api/v1/documents", headers=headers).json(), [])
+
     def test_upload_route_ingests_pdf_with_real_parser(self):
         _, headers = self._create_auth_headers()
         client = TestClient(app)

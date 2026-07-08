@@ -37,14 +37,14 @@ from src.core.user_provider_manager import (
     metadata_from_config,
 )
 from src.rag.chunker import split_text, split_documents
-from src.rag.personal import add_user_documents, retrieve_user_context, user_rag_collection
+from src.rag.personal import add_user_documents, delete_user_documents, retrieve_user_context, user_rag_collection
 from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
 from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original
-from src.core.userspace import write_profile_text
+from src.core.userspace import safe_user_path, write_profile_text
 
 router = APIRouter()
 _SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
@@ -207,7 +207,16 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
     collection = user_rag_collection(user.id)
     metadatas = [{"source": "onboarding", "user_id": user.id, "filename": "perfil-inicial.md"}] * len(chunks)
     ids = add_user_documents(user.id, chunks, metadatas=metadatas)
-    DocumentRepo.save("perfil-inicial.md", "onboarding", len(chunks), len(memory_doc.encode("utf-8")), user_id=user.id)
+    DocumentRepo.save(
+        "perfil-inicial.md",
+        "onboarding",
+        len(chunks),
+        len(memory_doc.encode("utf-8")),
+        user_id=user.id,
+        status="indexed",
+        parser="text",
+        vector_ids=ids,
+    )
     return {
         "status": "ok",
         "profile_id": profile.id,
@@ -1041,6 +1050,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         checksum=artifact.checksum,
         status="indexed",
         parser=_parser_name(artifact.original_filename),
+        vector_ids=ids,
     )
     DOCUMENTS_INGESTED.inc()
     return {
@@ -1075,8 +1085,30 @@ async def list_documents(user=Depends(get_current_user)):
 async def delete_document(doc_id: int, user=Depends(get_current_user)):
     """Deleta um documento da base."""
     ensure_db()
+    doc = DocumentRepo.get(doc_id, user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nao encontrado")
+
+    vector_ids = json.loads(doc.vector_ids_json or "[]")
+    delete_user_documents(user.id, vector_ids)
+
+    upload_deleted = False
+    if doc.upload_path:
+        try:
+            original_path = safe_user_path(user.id, "uploads", doc.upload_path)
+            if original_path.is_file():
+                original_path.unlink()
+                upload_deleted = True
+        except ValueError:
+            upload_deleted = False
+
     DocumentRepo.delete(doc_id, user.id)
-    return {"status": "ok", "deleted": doc_id}
+    return {
+        "status": "ok",
+        "deleted": doc_id,
+        "rag_ids_deleted": len(vector_ids),
+        "upload_deleted": upload_deleted,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -4,7 +4,7 @@ from typing import Optional
 
 from src.core.auth import rag_collection_for_user
 from src.rag.retriever import retrieve_context
-from src.rag.vector_store import add_documents
+from src.rag.vector_store import add_documents, delete_documents
 
 
 def user_rag_collection(user_id: int) -> str:
@@ -38,3 +38,7 @@ def retrieve_user_context(
         min_score=min_score,
         collection_name=user_rag_collection(user_id),
     )
+
+
+def delete_user_documents(user_id: int, ids: list[str]) -> None:
+    delete_documents(ids, collection_name=user_rag_collection(user_id))

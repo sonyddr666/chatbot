@@ -139,6 +139,7 @@ class KnowledgeDocument(Base):
     status = Column(String(60), default="indexed")
     parser = Column(String(80), default="")
     error_message = Column(Text, default="")
+    vector_ids_json = Column(Text, default="[]")
     chunk_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     file_size = Column(Integer, default=0)
@@ -231,6 +232,7 @@ def init_db():
                 "status": "ALTER TABLE knowledge_documents ADD COLUMN status VARCHAR(60) DEFAULT 'indexed'",
                 "parser": "ALTER TABLE knowledge_documents ADD COLUMN parser VARCHAR(80) DEFAULT ''",
                 "error_message": "ALTER TABLE knowledge_documents ADD COLUMN error_message TEXT DEFAULT ''",
+                "vector_ids_json": "ALTER TABLE knowledge_documents ADD COLUMN vector_ids_json TEXT DEFAULT '[]'",
             }.items():
                 if name not in document_cols:
                     conn.execute(text(ddl))

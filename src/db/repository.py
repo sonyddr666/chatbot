@@ -617,6 +617,7 @@ class DocumentRepo:
         status: str = "indexed",
         parser: str = "",
         error_message: str = "",
+        vector_ids: list[str] | None = None,
     ) -> KnowledgeDocument:
         db = get_session_db()
         try:
@@ -629,6 +630,7 @@ class DocumentRepo:
                 status=status,
                 parser=parser,
                 error_message=error_message,
+                vector_ids_json=json.dumps(vector_ids or [], ensure_ascii=False),
                 chunk_count=chunk_count,
                 file_size=file_size,
             )
@@ -651,6 +653,20 @@ class DocumentRepo:
             for doc in docs:
                 db.expunge(doc)
             return docs
+        finally:
+            db.close()
+
+    @staticmethod
+    def get(doc_id: int, user_id: int | None = None) -> Optional[KnowledgeDocument]:
+        db = get_session_db()
+        try:
+            query = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id)
+            if user_id is not None:
+                query = query.filter(KnowledgeDocument.user_id == user_id)
+            doc = query.first()
+            if doc:
+                db.expunge(doc)
+            return doc
         finally:
             db.close()
 
