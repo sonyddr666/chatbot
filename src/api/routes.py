@@ -1138,6 +1138,13 @@ async def delete_document(doc_id: int, user=Depends(get_current_user)):
             if original_path.is_file():
                 original_path.unlink()
                 upload_deleted = True
+                upload_root = safe_user_path(user.id, "uploads")
+                upload_folder = original_path.parent
+                if upload_folder != upload_root and upload_root in upload_folder.parents:
+                    try:
+                        upload_folder.rmdir()
+                    except OSError:
+                        pass
         except ValueError:
             upload_deleted = False
 

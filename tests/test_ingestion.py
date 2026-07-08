@@ -240,6 +240,7 @@ class IngestionServiceTest(unittest.TestCase):
         delete_rag.assert_called_once_with(user.id, ["chunk-1", "chunk-2"])
         self.assertEqual(delete_response.json()["rag_ids_deleted"], 2)
         self.assertFalse(saved[0].exists())
+        self.assertFalse(saved[0].parent.exists())
         self.assertEqual(client.get("/api/v1/documents", headers=headers).json(), [])
 
     def test_upload_route_ingests_pdf_with_real_parser(self):
