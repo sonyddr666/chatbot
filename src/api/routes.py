@@ -114,6 +114,12 @@ async def get_current_user(user=Depends(get_optional_user)):
     return user
 
 
+async def get_admin_user(user=Depends(get_current_user)):
+    if not bool(getattr(user, "is_admin", False)):
+        raise HTTPException(status_code=403, detail="Admin necessario")
+    return user
+
+
 def observe_preference_suggestion(user_id: int, message: str) -> None:
     try:
         create_suggestion_from_message(user_id, message)
@@ -389,7 +395,7 @@ async def provider_get(provider_id: str, include_keys: bool = False, user=Depend
 
 
 @router.post("/providers/manage")
-async def provider_create(body: dict, user=Depends(get_current_user)):
+async def provider_create(body: dict, user=Depends(get_admin_user)):
     """Cria um novo provedor customizado."""
     try:
         return pm_create(body)
@@ -398,7 +404,7 @@ async def provider_create(body: dict, user=Depends(get_current_user)):
 
 
 @router.put("/providers/manage/{provider_id}")
-async def provider_update(provider_id: str, body: dict, user=Depends(get_current_user)):
+async def provider_update(provider_id: str, body: dict, user=Depends(get_admin_user)):
     """Atualiza um provedor."""
     try:
         p = pm_update(provider_id, body)
@@ -410,7 +416,7 @@ async def provider_update(provider_id: str, body: dict, user=Depends(get_current
 
 
 @router.put("/providers/manage/{provider_id}/api-key")
-async def provider_set_api_key(provider_id: str, body: dict, user=Depends(get_current_user)):
+async def provider_set_api_key(provider_id: str, body: dict, user=Depends(get_admin_user)):
     """Salva chave de API para qualquer provider (built-in ou custom)."""
     api_key = body.get("api_key", "")
     pm_set_api_key(provider_id, api_key)
@@ -418,7 +424,7 @@ async def provider_set_api_key(provider_id: str, body: dict, user=Depends(get_cu
 
 
 @router.delete("/providers/manage/{provider_id}")
-async def provider_delete(provider_id: str, user=Depends(get_current_user)):
+async def provider_delete(provider_id: str, user=Depends(get_admin_user)):
     """Remove um provedor customizado."""
     ok = pm_delete(provider_id)
     if not ok:
@@ -427,7 +433,7 @@ async def provider_delete(provider_id: str, user=Depends(get_current_user)):
 
 
 @router.post("/providers/manage/{provider_id}/activate")
-async def provider_activate(provider_id: str, user=Depends(get_current_user)):
+async def provider_activate(provider_id: str, user=Depends(get_admin_user)):
     """Define o provedor ativo."""
     ok = pm_set_active(provider_id)
     if not ok:
@@ -436,7 +442,7 @@ async def provider_activate(provider_id: str, user=Depends(get_current_user)):
 
 
 @router.post("/providers/activate-model")
-async def model_activate(body: dict, user=Depends(get_current_user)):
+async def model_activate(body: dict, user=Depends(get_admin_user)):
     """Define o modelo ativo dentro do provider ativo."""
     model_id = body.get("model_id", "")
     if not model_id:
@@ -645,7 +651,7 @@ async def provider_models(provider_id: str, user=Depends(get_current_user)):
 
 
 @router.post("/providers/manage/{provider_id}/models")
-async def model_add(provider_id: str, body: dict, user=Depends(get_current_user)):
+async def model_add(provider_id: str, body: dict, user=Depends(get_admin_user)):
     """Adiciona um modelo a um provedor custom."""
     m = pm_add_model(provider_id, body)
     if not m:
@@ -654,7 +660,7 @@ async def model_add(provider_id: str, body: dict, user=Depends(get_current_user)
 
 
 @router.put("/providers/manage/{provider_id}/models/{model_id}")
-async def model_update(provider_id: str, model_id: str, body: dict, user=Depends(get_current_user)):
+async def model_update(provider_id: str, model_id: str, body: dict, user=Depends(get_admin_user)):
     """Atualiza um modelo."""
     try:
         m = pm_update_model(provider_id, model_id, body)
@@ -666,7 +672,7 @@ async def model_update(provider_id: str, model_id: str, body: dict, user=Depends
 
 
 @router.delete("/providers/manage/{provider_id}/models/{model_id}")
-async def model_delete(provider_id: str, model_id: str, user=Depends(get_current_user)):
+async def model_delete(provider_id: str, model_id: str, user=Depends(get_admin_user)):
     """Remove um modelo de um provedor custom."""
     ok = pm_delete_model(provider_id, model_id)
     if not ok:
