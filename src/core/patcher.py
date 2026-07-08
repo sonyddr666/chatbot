@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import difflib
 import hashlib
+import json
 from pathlib import PurePosixPath
 
 from src.core.userspace import safe_user_path
@@ -50,6 +51,27 @@ def _snapshot_relative_path(path: str) -> str:
     return f".snapshots/{stamp}-{digest}-{clean_name}"
 
 
+def _append_patch_audit_log(
+    user_id: int,
+    path: str,
+    expected_checksum: str,
+    new_checksum: str,
+    snapshot_path: str,
+) -> None:
+    log_path = safe_user_path(user_id, "skills", "audit/workspace_patches.jsonl")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": "applied",
+        "path": path,
+        "expected_checksum": expected_checksum,
+        "new_checksum": new_checksum,
+        "snapshot_path": snapshot_path,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def preview_workspace_patch(user_id: int, path: str, new_content: str) -> WorkspacePatchPreview:
     current = read_text_file(user_id, path)
     return WorkspacePatchPreview(
@@ -77,9 +99,11 @@ def apply_workspace_patch(
     snapshot_file.write_text(current, encoding="utf-8")
 
     info = write_text_file(user_id, path, new_content)
+    new_checksum = _checksum(new_content)
+    _append_patch_audit_log(user_id, info.path, expected_checksum, new_checksum, snapshot_path)
     return WorkspacePatchResult(
         path=info.path,
         applied=True,
-        checksum=_checksum(new_content),
+        checksum=new_checksum,
         snapshot_path=snapshot_path,
     )

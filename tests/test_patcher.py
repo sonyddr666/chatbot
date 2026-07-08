@@ -43,6 +43,22 @@ class WorkspacePatcherTest(unittest.TestCase):
         self.assertTrue(snapshot.is_file())
         self.assertEqual(snapshot.read_text(encoding="utf-8"), "antes\n")
 
+    def test_apply_patch_records_audit_log_outside_workspace(self):
+        from src.core.patcher import apply_workspace_patch, preview_workspace_patch
+        from src.core.workspace import write_text_file
+
+        write_text_file(3, "notes.md", "antes\n")
+        preview = preview_workspace_patch(3, "notes.md", "depois\n")
+
+        result = apply_workspace_patch(3, "notes.md", "depois\n", preview.expected_checksum)
+
+        audit_log = Path(self.tmp.name) / "3" / "skills" / "audit" / "workspace_patches.jsonl"
+        self.assertTrue(audit_log.is_file())
+        log_text = audit_log.read_text(encoding="utf-8")
+        self.assertIn('"path": "notes.md"', log_text)
+        self.assertIn(f'"snapshot_path": "{result.snapshot_path}"', log_text)
+        self.assertIn('"status": "applied"', log_text)
+
     def test_apply_patch_blocks_when_file_changed_after_preview(self):
         from src.core.patcher import apply_workspace_patch, preview_workspace_patch
         from src.core.workspace import read_text_file, write_text_file
