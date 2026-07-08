@@ -149,6 +149,60 @@ class UserProviderConfigTest(unittest.TestCase):
         self.assertEqual(seen[0]["model_id"], "chat-user-model")
         self.assertEqual(response.json()["provider_id"], "personal-chat")
 
+    def test_provider_test_without_body_uses_active_user_provider(self):
+        from src.core.user_provider_manager import create_user_provider
+
+        token = create_access_token(self.user.id, self.user.username)
+        client = TestClient(app)
+
+        create_user_provider(
+            self.user.id,
+            {
+                "provider_id": "personal-test",
+                "display_name": "Personal Test",
+                "base_url": "https://example.test/v1",
+                "model": "personal-test-model",
+                "api_key": "",
+                "is_default": True,
+            },
+        )
+
+        response = client.post(
+            "/api/v1/providers/test",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ok"], False)
+        self.assertEqual(response.json()["provider"], "personal-test")
+        self.assertEqual(response.json()["model"], "personal-test-model")
+        self.assertEqual(response.json()["error_type"], "no_key")
+
+    def test_health_with_token_reports_active_user_provider(self):
+        from src.core.user_provider_manager import create_user_provider
+
+        token = create_access_token(self.user.id, self.user.username)
+        client = TestClient(app)
+
+        create_user_provider(
+            self.user.id,
+            {
+                "provider_id": "personal-health",
+                "display_name": "Personal Health",
+                "base_url": "https://example.test/v1",
+                "model": "personal-health-model",
+                "api_key": "",
+                "is_default": True,
+            },
+        )
+
+        response = client.get("/api/v1/health", headers={"Authorization": f"Bearer {token}"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["provider"], "personal-health")
+        self.assertEqual(response.json()["model"], "personal-health-model")
+
 
 if __name__ == "__main__":
     unittest.main()

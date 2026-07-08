@@ -483,7 +483,7 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
             "model_name": model.get("name", model.get("id", "")),
         }
     else:
-        cfg = pm_active_config()
+        cfg = get_active_config_for_user(user.id)
         if model_id:
             provider = pm_get(cfg.get("provider_id", ""), include_keys=True)
             model = next((m for m in provider.get("models", []) if m.get("id") == model_id and m.get("enabled", True)), None) if provider else None
@@ -668,8 +668,8 @@ async def model_delete(provider_id: str, model_id: str, user=Depends(get_current
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/health")
-async def health():
-    cfg = pm_active_config()
+async def health(user=Depends(get_optional_user)):
+    cfg = get_active_config_for_user(user.id) if user else pm_active_config()
     return {
         "status": "ok",
         "provider": cfg.get("provider_id", settings.llm_provider),
