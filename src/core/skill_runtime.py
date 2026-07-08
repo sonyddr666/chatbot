@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from src.db.repository import SkillRepo, SkillRunRepo
+from src.core.skill_permissions import executable_skill_names
 from src.tools.web_search import web_search
 
 
@@ -26,7 +27,7 @@ SEARCH_TRIGGERS = (
 
 
 def _enabled_names(skills: Iterable[dict]) -> set[str]:
-    return {str(skill.get("name", "")) for skill in skills if skill.get("enabled")}
+    return executable_skill_names(list(skills))
 
 
 def should_force_rag(skills: Iterable[dict]) -> bool:
