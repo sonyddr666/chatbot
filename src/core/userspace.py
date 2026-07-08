@@ -58,6 +58,7 @@ def ensure_user_space(user_id: int) -> UserSpacePaths:
         paths.rag / "extracted",
         paths.rag / "manifests",
         paths.skills / "user",
+        paths.skills / "audit",
     ):
         path.mkdir(parents=True, exist_ok=True)
 

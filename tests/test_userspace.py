@@ -33,6 +33,7 @@ class UserSpaceServiceTest(unittest.TestCase):
         self.assertTrue((paths.rag / "manifests").is_dir())
         self.assertTrue(paths.skills.is_dir())
         self.assertTrue((paths.skills / "user").is_dir())
+        self.assertTrue((paths.skills / "audit").is_dir())
 
     def test_safe_user_path_accepts_normal_relative_path(self):
         from src.core.userspace import safe_user_path
@@ -99,6 +100,7 @@ class UserSpaceServiceTest(unittest.TestCase):
         self.assertTrue((root / "uploads" / "original").is_dir())
         self.assertTrue((root / "rag" / "documents").is_dir())
         self.assertTrue((root / "skills" / "user").is_dir())
+        self.assertTrue((root / "skills" / "audit").is_dir())
 
     def test_default_user_initializes_user_space(self):
         from src.db.models import init_db
@@ -119,6 +121,7 @@ class UserSpaceServiceTest(unittest.TestCase):
         self.assertTrue((root / "uploads" / "original").is_dir())
         self.assertTrue((root / "rag" / "documents").is_dir())
         self.assertTrue((root / "skills" / "user").is_dir())
+        self.assertTrue((root / "skills" / "audit").is_dir())
 
 
 if __name__ == "__main__":
