@@ -50,6 +50,36 @@ class SkillRunsTest(unittest.TestCase):
         self.assertIn("pesquise python", runs[0]["input_json"])
         self.assertIn("Fonte A", runs[0]["output_summary"])
 
+    def test_personal_rag_forced_in_chat_is_logged_for_user(self):
+        from src.db.repository import SkillRunRepo
+
+        SkillRepo.set_enabled(self.user.id, "personal_rag", True)
+        token = create_access_token(self.user.id, self.user.username)
+
+        class FakeChatEngine:
+            def __init__(self, memory, provider_config=None):
+                pass
+
+            async def chat(self, message):
+                return "resposta"
+
+        with (
+            patch("src.api.routes.retrieve_user_context", return_value="contexto pessoal"),
+            patch("src.api.routes.ChatEngine", new=FakeChatEngine),
+        ):
+            response = TestClient(app).post(
+                "/api/v1/chat",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"message": "use minha memoria", "session_id": "personal-rag-log", "use_rag": False},
+            )
+
+        runs = SkillRunRepo.list_for_user(self.user.id)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(run["skill_name"] == "personal_rag" for run in runs))
+        personal_rag_run = next(run for run in runs if run["skill_name"] == "personal_rag")
+        self.assertEqual(personal_rag_run["status"], "completed")
+        self.assertIn("use minha memoria", personal_rag_run["input_json"])
+
     def test_skill_runs_endpoint_returns_only_current_user_runs(self):
         from src.db.repository import SkillRunRepo
 

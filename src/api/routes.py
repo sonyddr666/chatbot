@@ -758,7 +758,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         lang = detect_language(body.message)
         await async_set_language(session_id, lang, user.id)
 
-    use_rag = body.use_rag or user_has_personal_rag(user.id)
+    use_rag = body.use_rag or user_has_personal_rag(user.id, body.message, log_run=True)
     context = None
     if use_rag and settings.enable_rag:
         context = retrieve_user_context(user.id, body.message)
@@ -816,7 +816,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
-    use_rag = body.use_rag or user_has_personal_rag(user.id)
+    use_rag = body.use_rag or user_has_personal_rag(user.id, body.message, log_run=True)
     if use_rag and settings.enable_rag:
         # Dispara RAG em task separada, não bloqueia o primeiro token
         async def fetch_rag():

@@ -144,7 +144,7 @@ async def websocket_chat(websocket: WebSocket):
                 if route == "fast":
                     use_rag = False
                     use_thinking = False
-                if user_has_personal_rag(user.id):
+                if user_has_personal_rag(user.id, message, log_run=True):
                     use_rag = True
 
                 # Moderação

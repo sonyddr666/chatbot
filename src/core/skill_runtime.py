@@ -85,5 +85,14 @@ async def run_enabled_skill_context(user_id: int, message: str) -> str:
     return "\n\n".join(sections)
 
 
-def user_has_personal_rag(user_id: int) -> bool:
-    return should_force_rag(SkillRepo.list_for_user(user_id))
+def user_has_personal_rag(user_id: int, message: str = "", log_run: bool = False) -> bool:
+    enabled = should_force_rag(SkillRepo.list_for_user(user_id))
+    if enabled and log_run:
+        SkillRunRepo.create(
+            user_id,
+            "personal_rag",
+            "completed",
+            {"message": message},
+            output_summary="RAG pessoal habilitado para esta mensagem.",
+        )
+    return enabled
