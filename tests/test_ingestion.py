@@ -123,6 +123,32 @@ class IngestionServiceTest(unittest.TestCase):
         token = create_access_token(user.id, user.username)
         return user, {"Authorization": f"Bearer {token}"}
 
+    def test_manual_ingest_route_persists_document_metadata(self):
+        _, headers = self._create_auth_headers()
+        client = TestClient(app)
+
+        with patch("src.api.routes.add_user_documents", return_value=["manual-chunk"]):
+            ingest_response = client.post(
+                "/api/v1/ingest",
+                headers=headers,
+                json={
+                    "text": "Conteudo manual para o RAG pessoal",
+                    "source": "manual",
+                    "metadata": {"filename": "manual-note.md"},
+                },
+            )
+        documents = client.get("/api/v1/documents", headers=headers).json()
+
+        self.assertEqual(ingest_response.status_code, 200)
+        self.assertEqual(ingest_response.json()["ids"], ["manual-chunk"])
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0]["filename"], "manual-note.md")
+        self.assertEqual(documents[0]["source"], "manual")
+        self.assertEqual(documents[0]["status"], "indexed")
+        self.assertEqual(documents[0]["parser"], "text")
+        self.assertEqual(documents[0]["chunks"], 1)
+        self.assertEqual(documents[0]["upload_path"], "")
+
     def test_upload_route_saves_original_before_rag_ingestion(self):
         user, headers = self._create_auth_headers()
         client = TestClient(app)

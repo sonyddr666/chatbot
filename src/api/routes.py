@@ -139,6 +139,18 @@ def _parser_name(filename: str) -> str:
     return ext.lstrip(".") or "unknown"
 
 
+def _manual_ingest_filename(source: str | None, metadata: dict | None) -> str:
+    raw = str((metadata or {}).get("filename") or "").strip()
+    if not raw:
+        raw = f"{(source or 'manual').strip() or 'manual'}.txt"
+    name = os.path.basename(raw.replace("\\", "/")).strip()
+    if not name or name in {".", ".."}:
+        name = "manual.txt"
+    if "." not in name:
+        name = f"{name}.txt"
+    return name
+
+
 async def async_add_message(session_id: str, role: str, content: str, user_id: int | None = None, **metadata) -> "Message":
     """Executa add_message em thread separada para nao bloquear o event loop."""
     loop = asyncio.get_event_loop()
@@ -1012,6 +1024,16 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
     chunks = split_text(body.text)
     metadatas = [{"source": body.source, **(body.metadata or {})}] * len(chunks)
     ids = add_user_documents(user.id, chunks, metadatas=metadatas)
+    DocumentRepo.save(
+        _manual_ingest_filename(body.source, body.metadata),
+        body.source or "manual",
+        len(chunks),
+        len(body.text.encode("utf-8")),
+        user_id=user.id,
+        status="indexed",
+        parser="text",
+        vector_ids=ids,
+    )
     DOCUMENTS_INGESTED.inc()
     return IngestResponse(chunks_count=len(chunks), ids=ids)
 
