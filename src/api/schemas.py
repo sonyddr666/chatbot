@@ -129,6 +129,17 @@ class WorkspaceMoveRequest(BaseModel):
     target: str
 
 
+class WorkspacePatchPreviewRequest(BaseModel):
+    path: str
+    content: str
+
+
+class WorkspacePatchApplyRequest(BaseModel):
+    path: str
+    content: str
+    expected_checksum: str
+
+
 class WorkspaceNodeResponse(BaseModel):
     name: str
     path: str
@@ -151,3 +162,17 @@ class WorkspaceInfoResponse(BaseModel):
     path: str
     kind: str
     size: int
+
+
+class WorkspacePatchPreviewResponse(BaseModel):
+    path: str
+    expected_checksum: str
+    new_checksum: str
+    diff: str
+
+
+class WorkspacePatchApplyResponse(BaseModel):
+    path: str
+    applied: bool
+    checksum: str
+    snapshot_path: str

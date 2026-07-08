@@ -94,6 +94,41 @@ class WorkspaceRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_workspace_patch_preview_and_apply_require_expected_checksum(self):
+        self.client.put(
+            "/api/v1/workspace/file",
+            headers=self.headers,
+            json={"path": "notes.md", "content": "antes\n"},
+        )
+
+        preview_response = self.client.post(
+            "/api/v1/workspace/patch/preview",
+            headers=self.headers,
+            json={"path": "notes.md", "content": "depois\n"},
+        )
+        apply_response = self.client.post(
+            "/api/v1/workspace/patch/apply",
+            headers=self.headers,
+            json={
+                "path": "notes.md",
+                "content": "depois\n",
+                "expected_checksum": preview_response.json()["expected_checksum"],
+            },
+        )
+        read_response = self.client.get(
+            "/api/v1/workspace/file",
+            headers=self.headers,
+            params={"path": "notes.md"},
+        )
+
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertIn("-antes", preview_response.json()["diff"])
+        self.assertIn("+depois", preview_response.json()["diff"])
+        self.assertEqual(apply_response.status_code, 200)
+        self.assertTrue(apply_response.json()["applied"])
+        self.assertTrue(apply_response.json()["snapshot_path"].startswith(".snapshots/"))
+        self.assertEqual(read_response.json()["content"], "depois\n")
+
 
 if __name__ == "__main__":
     unittest.main()

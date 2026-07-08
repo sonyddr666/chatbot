@@ -7,6 +7,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from src.api.schemas import (
     WorkspaceFileResponse,
     WorkspaceInfoResponse,
+    WorkspacePatchApplyRequest,
+    WorkspacePatchApplyResponse,
+    WorkspacePatchPreviewRequest,
+    WorkspacePatchPreviewResponse,
     WorkspaceMoveRequest,
     WorkspacePathRequest,
     WorkspaceTreeResponse,
@@ -21,6 +25,7 @@ from src.core.workspace import (
     read_text_file,
     write_text_file,
 )
+from src.core.patcher import apply_workspace_patch, preview_workspace_patch
 
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -89,5 +94,21 @@ async def workspace_delete_path(path: str, user=Depends(get_current_user)):
 async def workspace_move_path(body: WorkspaceMoveRequest, user=Depends(get_current_user)):
     try:
         return move_path(user.id, body.source, body.target)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.post("/patch/preview", response_model=WorkspacePatchPreviewResponse)
+async def workspace_patch_preview(body: WorkspacePatchPreviewRequest, user=Depends(get_current_user)):
+    try:
+        return preview_workspace_patch(user.id, body.path, body.content)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.post("/patch/apply", response_model=WorkspacePatchApplyResponse)
+async def workspace_patch_apply(body: WorkspacePatchApplyRequest, user=Depends(get_current_user)):
+    try:
+        return apply_workspace_patch(user.id, body.path, body.content, body.expected_checksum)
     except Exception as exc:
         raise _workspace_error(exc)

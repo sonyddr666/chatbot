@@ -146,6 +146,20 @@ export interface WorkspaceInfo {
   size: number
 }
 
+export interface WorkspacePatchPreview {
+  path: string
+  expected_checksum: string
+  new_checksum: string
+  diff: string
+}
+
+export interface WorkspacePatchApplyResult {
+  path: string
+  applied: boolean
+  checksum: string
+  snapshot_path: string
+}
+
 /** Chunk do streaming SSE */
 export interface StreamChunk {
   type: 'content' | 'reasoning' | 'done' | 'start' | 'status'
@@ -410,6 +424,16 @@ export const api = {
     req<WorkspaceInfo>('/workspace/move', {
       method: 'POST',
       body: JSON.stringify({ source, target }),
+    }),
+  workspacePatchPreview: (path: string, content: string) =>
+    req<WorkspacePatchPreview>('/workspace/patch/preview', {
+      method: 'POST',
+      body: JSON.stringify({ path, content }),
+    }),
+  workspacePatchApply: (path: string, content: string, expectedChecksum: string) =>
+    req<WorkspacePatchApplyResult>('/workspace/patch/apply', {
+      method: 'POST',
+      body: JSON.stringify({ path, content, expected_checksum: expectedChecksum }),
     }),
 
   // Stats
