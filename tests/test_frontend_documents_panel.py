@@ -41,6 +41,13 @@ class FrontendDocumentsPanelTest(unittest.TestCase):
         self.assertIn("document.error_message", panel)
         self.assertIn("Erro na ingestao", panel)
 
+    def test_failed_upload_refreshes_document_list_for_recorded_errors(self):
+        panel = Path("frontend/src/components/DocumentsPanel.tsx").read_text(encoding="utf-8")
+        upload_fn = panel.split("const uploadFile", 1)[1].split("const deleteDocument", 1)[0]
+        upload_catch = upload_fn.split("catch (err)", 1)[1].split("finally", 1)[0]
+
+        self.assertIn("await loadDocuments()", upload_catch)
+
 
 if __name__ == "__main__":
     unittest.main()
