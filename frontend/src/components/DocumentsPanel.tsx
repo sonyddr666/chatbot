@@ -150,32 +150,70 @@ export function DocumentsPanel({ open, onClose }: Props) {
             <p className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
               Nenhum documento ingerido ainda.
             </p>
-          ) : documents.map(document => (
-            <div
-              key={document.id}
-              className="flex items-center gap-3 rounded-2xl border p-3"
-              style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
-            >
-              <div className="grid h-10 w-10 place-items-center rounded-xl" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                <FileText size={18} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
-                  {document.filename}
-                </p>
-                <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                  {document.chunks} chunks - {(document.size / 1024).toFixed(1)}KB
-                </p>
-              </div>
-              <button
-                onClick={() => deleteDocument(document.id)}
-                className="rounded-xl p-2 hover:bg-red-100 dark:hover:bg-red-900/30"
-                title="Remover documento"
+          ) : documents.map(document => {
+            const documentStatus = document.status || 'indexed'
+            const hasIngestionError = documentStatus === 'error'
+
+            return (
+              <div
+                key={document.id}
+                className="flex items-start gap-3 rounded-2xl border p-3"
+                style={{
+                  background: 'var(--bg-secondary)',
+                  borderColor: hasIngestionError ? 'var(--danger)' : 'var(--border)',
+                }}
               >
-                <Trash2 size={16} style={{ color: 'var(--danger)' }} />
-              </button>
-            </div>
-          ))}
+                <div
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+                  style={{
+                    background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : 'var(--accent-light)',
+                    color: hasIngestionError ? 'var(--danger)' : 'var(--accent)',
+                  }}
+                >
+                  <FileText size={18} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                      {document.filename}
+                    </p>
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.16em]"
+                      style={{
+                        background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : 'var(--accent-light)',
+                        color: hasIngestionError ? 'var(--danger)' : 'var(--accent)',
+                      }}
+                    >
+                      {hasIngestionError ? 'Erro na ingestao' : documentStatus}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    {document.chunks} chunks - {(document.size / 1024).toFixed(1)}KB
+                  </p>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    Origem: {document.source || 'upload'} - Parser: {document.parser || 'nao informado'}
+                  </p>
+                  {document.checksum ? (
+                    <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                      Checksum: {document.checksum.slice(0, 12)}
+                    </p>
+                  ) : null}
+                  {document.error_message ? (
+                    <p className="mt-2 rounded-xl px-3 py-2 text-xs" style={{ background: 'rgba(239, 68, 68, 0.12)', color: 'var(--danger)' }}>
+                      {document.error_message}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  onClick={() => deleteDocument(document.id)}
+                  className="rounded-xl p-2 hover:bg-red-100 dark:hover:bg-red-900/30"
+                  title="Remover documento"
+                >
+                  <Trash2 size={16} style={{ color: 'var(--danger)' }} />
+                </button>
+              </div>
+            )
+          })}
         </div>
       </aside>
     </>

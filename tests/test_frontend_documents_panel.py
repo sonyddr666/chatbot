@@ -21,6 +21,26 @@ class FrontendDocumentsPanelTest(unittest.TestCase):
         self.assertIn("api.deleteDocument", panel)
         self.assertIn("Arraste arquivos", panel)
 
+    def test_documents_panel_shows_ingestion_status_and_errors(self):
+        api_ts = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
+        panel = Path("frontend/src/components/DocumentsPanel.tsx").read_text(encoding="utf-8")
+
+        for field in (
+            "source",
+            "upload_path",
+            "checksum",
+            "status",
+            "parser",
+            "error_message",
+        ):
+            self.assertIn(field, api_ts)
+
+        self.assertIn("document.status", panel)
+        self.assertIn("document.parser", panel)
+        self.assertIn("document.source", panel)
+        self.assertIn("document.error_message", panel)
+        self.assertIn("Erro na ingestao", panel)
+
 
 if __name__ == "__main__":
     unittest.main()

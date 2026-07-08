@@ -36,7 +36,17 @@ export interface Conversation {
   message_count: number; created_at: string; updated_at: string
 }
 export interface DocumentInfo {
-  id: number; filename: string; chunks: number; size: number; created_at: string
+  id: number
+  filename: string
+  source: string
+  chunks: number
+  size: number
+  upload_path?: string | null
+  checksum?: string | null
+  status?: string
+  parser?: string | null
+  error_message?: string | null
+  created_at: string
 }
 export interface Stats {
   total_messages: number; total_conversations: number
