@@ -1,7 +1,8 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import toast from 'react-hot-toast'
 import { ArrowLeft, FileText, Folder, FolderPlus, Pencil, Save, Trash2, X } from 'lucide-react'
-import { api, type WorkspaceNode } from '../lib/api'
+import { api, type WorkspaceNode, type WorkspacePatchPreview } from '../lib/api'
+import { DiffViewer } from './DiffViewer'
 
 interface Props {
   open: boolean
@@ -15,6 +16,8 @@ export function WorkspacePanel({ open, onClose }: Props) {
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [patchPreview, setPatchPreview] = useState<WorkspacePatchPreview | null>(null)
+  const [patching, setPatching] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [moveTarget, setMoveTarget] = useState('')
 
@@ -40,6 +43,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
       setSelectedFile('')
       setContent('')
       setMoveTarget('')
+      setPatchPreview(null)
       await loadTree(node.path)
       return
     }
@@ -49,6 +53,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
       setSelectedFile(file.path)
       setContent(file.content)
       setMoveTarget(file.path)
+      setPatchPreview(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao abrir arquivo')
     }
@@ -60,6 +65,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
     setSelectedFile('')
     setContent('')
     setMoveTarget('')
+    setPatchPreview(null)
     await loadTree(parent)
   }
 
@@ -88,6 +94,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
       setSelectedFile(file.path)
       setContent(file.content)
       setMoveTarget(file.path)
+      setPatchPreview(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao criar arquivo')
     }
@@ -99,11 +106,41 @@ export function WorkspacePanel({ open, onClose }: Props) {
     try {
       await api.workspaceWriteFile(selectedFile, content)
       toast.success('Arquivo salvo')
+      setPatchPreview(null)
       await loadTree(path)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao salvar')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const previewPatch = async () => {
+    if (!selectedFile) return
+    setPatching(true)
+    try {
+      const preview = await api.workspacePatchPreview(selectedFile, content)
+      setPatchPreview(preview)
+      toast.success('Preview patch gerado')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao gerar preview patch')
+    } finally {
+      setPatching(false)
+    }
+  }
+
+  const applyApprovedPatch = async () => {
+    if (!selectedFile || !patchPreview) return
+    setPatching(true)
+    try {
+      await api.workspacePatchApply(selectedFile, content, patchPreview.expected_checksum)
+      toast.success('Patch aprovado aplicado')
+      setPatchPreview(null)
+      await loadTree(path)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao aplicar patch aprovado')
+    } finally {
+      setPatching(false)
     }
   }
 
@@ -114,6 +151,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
       toast.success('Arquivo movido')
       setSelectedFile(info.path)
       setMoveTarget(info.path)
+      setPatchPreview(null)
       await loadTree(path)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao mover arquivo')
@@ -128,6 +166,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
       setSelectedFile('')
       setContent('')
       setMoveTarget('')
+      setPatchPreview(null)
       await loadTree(path)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao remover')
@@ -229,6 +268,10 @@ export function WorkspacePanel({ open, onClose }: Props) {
                     <h3 className="truncate font-bold" style={{ color: 'var(--text-primary)' }}>{selectedFile}</h3>
                   </div>
                   <div className="flex gap-2">
+                    <button onClick={previewPatch} disabled={patching} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                      <Pencil size={14} />
+                      {patching ? 'Gerando...' : 'Preview patch'}
+                    </button>
                     <button onClick={saveFile} disabled={saving} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--accent)', color: '#fff' }}>
                       <Save size={14} />
                       {saving ? 'Salvando...' : 'Salvar'}
@@ -255,11 +298,25 @@ export function WorkspacePanel({ open, onClose }: Props) {
 
                 <textarea
                   value={content}
-                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setContent(event.target.value)}
+                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                    setContent(event.target.value)
+                    setPatchPreview(null)
+                  }}
                   className="mt-3 min-h-0 flex-1 resize-none rounded-2xl border p-4 font-mono text-sm outline-none"
                   style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                   spellCheck={false}
                 />
+                {patchPreview && (
+                  <>
+                    <p className="sr-only">Aplicar patch aprovado</p>
+                    <DiffViewer
+                      preview={patchPreview}
+                      applying={patching}
+                      onApply={applyApprovedPatch}
+                      onCancel={() => setPatchPreview(null)}
+                    />
+                  </>
+                )}
               </>
             ) : (
               <div className="grid flex-1 place-items-center text-center">
