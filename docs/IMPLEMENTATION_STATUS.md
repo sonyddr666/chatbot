@@ -116,7 +116,18 @@ Resultado consolidado: `47` testes passaram em `4.371s`.
 
 Aviso nao bloqueante observado: `StarletteDeprecationWarning` para o adaptador atual de `TestClient` e `httpx`.
 
+## Build do frontend
+
+Comando executado com corte automatico de 45 segundos:
+
+```powershell
+npm run build
+```
+
+Resultado: TypeScript e Vite concluiram o build de producao em `1.03s`.
+
+Aviso nao bloqueante observado: o bundle JavaScript principal ficou em `1,136.61 kB` (`369.07 kB` gzip), acima do limite de aviso de `500 kB`. Isso nao impede a execucao; code splitting pode reduzir o tamanho em uma etapa futura.
+
 ## Fora desta validacao
 
-- Build do frontend nao foi executado nesta rodada.
 - Smoke manual com backend e frontend em dois terminais nao foi executado nesta rodada.

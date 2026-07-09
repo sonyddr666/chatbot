@@ -31,7 +31,8 @@ O que ainda falta para ficar realmente redondo:
 - [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.
 - [x] Skills de busca, RAG pessoal, leitura explicita de workspace e preview de escrita sem aplicacao automatica.
 - [x] Bateria curta de UserSpace, Workspace, ingestao, RAG, Skills, auth e painel de documentos: 47 testes passaram em 4.371 segundos com corte de 45 segundos.
-- [ ] Smoke manual completo e build do frontend antes de exposicao publica.
+- [x] Build de producao do frontend: TypeScript e Vite concluiram em 1.03 segundos.
+- [ ] Smoke manual completo com backend e frontend antes de exposicao publica.
 
 ## Regra de ouro anti-travamento
 
