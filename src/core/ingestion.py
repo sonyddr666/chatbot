@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
+import json
 from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
@@ -65,6 +67,48 @@ def save_upload_original(user_id: int, filename: str, content: bytes) -> UploadA
         storage_path=storage_path,
         relative_path=relative_path,
     )
+
+
+def write_rag_manifest(
+    user_id: int,
+    *,
+    document_id: int | None,
+    filename: str,
+    source: str,
+    status: str,
+    parser: str,
+    chunk_count: int,
+    file_size: int,
+    vector_ids: list[str] | None = None,
+    upload_path: str = "",
+    checksum: str = "",
+    error_message: str = "",
+    metadata: dict | None = None,
+) -> str:
+    safe_name = sanitize_upload_filename(filename)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    manifest_name = f"{stamp}-{uuid4().hex[:10]}-{Path(safe_name).stem}.json"
+    relative_path = manifest_name
+    manifest_path = safe_user_path(user_id, "rag", f"manifests/{relative_path}")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "document_id": document_id,
+        "user_id": user_id,
+        "filename": safe_name,
+        "source": source,
+        "status": status,
+        "parser": parser,
+        "chunk_count": chunk_count,
+        "file_size": file_size,
+        "vector_ids": vector_ids or [],
+        "upload_path": upload_path,
+        "checksum": checksum,
+        "error_message": error_message,
+        "metadata": metadata or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return f"manifests/{relative_path}"
 
 
 def extract_text_for_ingestion(filename: str, content: bytes) -> str:

@@ -43,7 +43,7 @@ from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
-from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original
+from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original, write_rag_manifest
 from src.core.userspace import safe_user_path, write_profile_text
 
 router = APIRouter()
@@ -1024,8 +1024,9 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
     chunks = split_text(body.text)
     metadatas = [{"source": body.source, **(body.metadata or {})}] * len(chunks)
     ids = add_user_documents(user.id, chunks, metadatas=metadatas)
-    DocumentRepo.save(
-        _manual_ingest_filename(body.source, body.metadata),
+    filename = _manual_ingest_filename(body.source, body.metadata)
+    doc = DocumentRepo.save(
+        filename,
         body.source or "manual",
         len(chunks),
         len(body.text.encode("utf-8")),
@@ -1034,6 +1035,21 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
         parser="text",
         vector_ids=ids,
     )
+    try:
+        write_rag_manifest(
+            user.id,
+            document_id=doc.id,
+            filename=filename,
+            source=body.source or "manual",
+            status="indexed",
+            parser="text",
+            chunk_count=len(chunks),
+            file_size=len(body.text.encode("utf-8")),
+            vector_ids=ids,
+            metadata=body.metadata or {},
+        )
+    except Exception:
+        pass
     DOCUMENTS_INGESTED.inc()
     return IngestResponse(chunks_count=len(chunks), ids=ids)
 
@@ -1056,7 +1072,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
     try:
         text = extract_text_for_ingestion(artifact.original_filename, content)
     except ValueError as exc:
-        DocumentRepo.save(
+        doc = DocumentRepo.save(
             artifact.original_filename,
             "upload",
             0,
@@ -1069,6 +1085,23 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
             error_message=str(exc),
             vector_ids=[],
         )
+        try:
+            write_rag_manifest(
+                user.id,
+                document_id=doc.id,
+                filename=artifact.original_filename,
+                source="upload",
+                status="error",
+                parser=_parser_name(artifact.original_filename),
+                chunk_count=0,
+                file_size=file_size,
+                vector_ids=[],
+                upload_path=artifact.relative_path,
+                checksum=artifact.checksum,
+                error_message=str(exc),
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=400, detail=str(exc))
     chunks = split_text(text)
     metadatas = [{
@@ -1078,7 +1111,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         "checksum": artifact.checksum,
     }] * len(chunks)
     ids = add_user_documents(user.id, chunks, metadatas=metadatas)
-    DocumentRepo.save(
+    doc = DocumentRepo.save(
         artifact.original_filename,
         "upload",
         len(chunks),
@@ -1090,6 +1123,23 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         parser=_parser_name(artifact.original_filename),
         vector_ids=ids,
     )
+    manifest_path = ""
+    try:
+        manifest_path = write_rag_manifest(
+            user.id,
+            document_id=doc.id,
+            filename=artifact.original_filename,
+            source="upload",
+            status="indexed",
+            parser=_parser_name(artifact.original_filename),
+            chunk_count=len(chunks),
+            file_size=file_size,
+            vector_ids=ids,
+            upload_path=artifact.relative_path,
+            checksum=artifact.checksum,
+        )
+    except Exception:
+        manifest_path = ""
     DOCUMENTS_INGESTED.inc()
     return {
         "filename": artifact.original_filename,
@@ -1098,6 +1148,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         "ids": ids,
         "upload_path": artifact.relative_path,
         "checksum": artifact.checksum,
+        "manifest_path": manifest_path,
     }
 
 
