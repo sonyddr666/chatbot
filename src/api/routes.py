@@ -1175,6 +1175,26 @@ async def list_documents(user=Depends(get_current_user)):
     ]
 
 
+@router.get("/documents/{doc_id}/manifest")
+async def get_document_manifest(doc_id: int, user=Depends(get_current_user)):
+    ensure_db()
+    doc = DocumentRepo.get(doc_id, user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nao encontrado")
+    if not doc.manifest_path:
+        raise HTTPException(status_code=404, detail="Manifesto nao encontrado")
+    try:
+        manifest_path = safe_user_path(user.id, "rag", doc.manifest_path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Manifesto invalido")
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Manifesto nao encontrado")
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Manifesto corrompido")
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: int, user=Depends(get_current_user)):
     """Deleta um documento da base."""

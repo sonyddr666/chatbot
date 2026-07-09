@@ -413,6 +413,7 @@ export const api = {
     return res.json()
   },
   deleteDocument: (id: number) => req<any>(`/documents/${id}`, { method: 'DELETE' }),
+  getDocumentManifest: (id: number) => req<Record<string, unknown>>(`/documents/${id}/manifest`),
 
   // Workspace
   workspaceTree: (path = '') =>
