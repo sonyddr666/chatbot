@@ -78,7 +78,13 @@ export function SkillsPanel({ open, onClose }: Props) {
             <p style={{ color: 'var(--text-secondary)' }}>Carregando...</p>
           ) : skills.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)' }}>Nenhuma skill cadastrada.</p>
-          ) : skills.map(skill => (
+          ) : skills.map(skill => {
+            const command = typeof skill.definition.command === 'string' ? skill.definition.command : ''
+            const examples = Array.isArray(skill.definition.examples)
+              ? skill.definition.examples.filter((example): example is string => typeof example === 'string')
+              : []
+
+            return (
             <div
               key={skill.name}
               className="rounded-2xl border p-4"
@@ -105,8 +111,20 @@ export function SkillsPanel({ open, onClose }: Props) {
                   {skill.enabled ? 'ON' : 'OFF'}
                 </button>
               </div>
+              {command && (
+                <div className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                  <p className="mb-1 font-semibold">Comando</p>
+                  <code className="whitespace-pre-wrap break-all">{command}</code>
+                </div>
+              )}
+              {examples.length > 0 && (
+                <p className="mt-3 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                  Exemplo: <span style={{ color: 'var(--text-secondary)' }}>{examples[0]}</span>
+                </p>
+              )}
             </div>
-          ))}
+            )
+          })}
           </section>
 
           <section>

@@ -83,6 +83,7 @@ export interface SkillInfo {
   requires_shell: boolean
   risk_level: number
   enabled: boolean
+  config?: Record<string, unknown>
 }
 
 export interface SkillRunInfo {

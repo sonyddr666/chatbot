@@ -2,7 +2,18 @@
 
 from typing import Optional
 import httpx
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+
+
+def _source_url(href: str) -> str:
+    """Unwrap DuckDuckGo result links so the chat can cite a useful source URL."""
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urlparse(href)
+    redirect_url = parse_qs(parsed.query).get("uddg", [""])[0]
+    return unquote(redirect_url) if redirect_url else href
 
 
 async def web_search(query: str, max_results: int = 3) -> Optional[str]:
@@ -53,7 +64,12 @@ async def web_search(query: str, max_results: int = 3) -> Optional[str]:
 
             result_texts = []
             for r in parser.results[:max_results]:
-                result_texts.append(f"- **{r.get('title', '?')}**\n  {r.get('snippet', '')[:200]}")
+                source = _source_url(r.get("href", ""))
+                source_line = f"\n  Fonte: {source}" if source else ""
+                result_texts.append(
+                    f"- **{r.get('title', '?')}**\n"
+                    f"  {r.get('snippet', '')[:200]}{source_line}"
+                )
 
             return f"Resultados para '{query}':\n\n" + "\n\n".join(result_texts)
 

@@ -519,6 +519,8 @@ Skills padrao:
 - `simple_search`
 - `search_and_answer`
 - `personal_rag`
+- `workspace_read`
+- `workspace_write_preview`
 
 Implementado:
 
@@ -529,6 +531,8 @@ Implementado:
 - Skills com `requires_shell=True` ficam bloqueadas.
 - Busca web so roda quando skill de busca esta habilitada e a mensagem indica intencao de pesquisa.
 - `personal_rag` registra execucao quando forca uso do RAG pessoal.
+- `workspace_read` so le arquivo com comando explicito `@workspace:read caminho/do/arquivo.md`.
+- `workspace_write_preview` so gera diff com `@workspace:preview caminho/do/arquivo.md`, uma linha `---` e o novo conteudo; nunca aplica a alteracao.
 
 Rotas:
 
@@ -901,6 +905,8 @@ Para testar o fluxo principal:
 14. Aceitar/rejeitar sugestao.
 15. Ativar/desativar skill.
 16. Conferir logs de skills.
+17. Com `workspace_read` ativa, enviar `@workspace:read caminho/do/arquivo.md`.
+18. Com `workspace_write_preview` ativa, enviar `@workspace:preview caminho/do/arquivo.md`, depois `---` e o conteudo proposto.
 
 ## Resumo Final
 

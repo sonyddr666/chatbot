@@ -125,6 +125,8 @@ def move_path(user_id: int, source: str, target: str) -> WorkspaceFileInfo:
     target_path = _workspace_path(user_id, target)
     if not source_path.exists():
         raise FileNotFoundError(source)
+    if source_path == target_path or source_path in target_path.parents:
+        raise ValueError("Nao e permitido mover uma pasta para dentro dela mesma")
     if target_path.exists():
         raise FileExistsError(target)
     target_path.parent.mkdir(parents=True, exist_ok=True)

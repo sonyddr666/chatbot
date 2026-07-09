@@ -7,6 +7,7 @@ from sqlalchemy import func, or_
 
 from src.core.auth import hash_password, verify_password
 from src.core.userspace import ensure_user_space, safe_user_path
+from src.core.skill_registry import DEFAULT_SKILLS
 from src.db.models import (
     get_session_db,
     Conversation,
@@ -20,37 +21,6 @@ from src.db.models import (
     UserSkill,
     SkillRun,
 )
-
-
-DEFAULT_SKILLS = [
-    {
-        "name": "simple_search",
-        "description": "Ajuda a montar uma pesquisa simples e resumir resultados fornecidos por uma ferramenta externa.",
-        "kind": "knowledge",
-        "definition": {"trigger": "pesquisar", "output": "query + resumo com fontes"},
-        "requires_network": True,
-        "requires_shell": False,
-        "risk_level": 1,
-    },
-    {
-        "name": "search_and_answer",
-        "description": "Fluxo composto: criar termos de busca, consultar recurso interno de pesquisa e responder com fontes.",
-        "kind": "workflow",
-        "definition": {"steps": ["query_planning", "search", "answer_with_sources"]},
-        "requires_network": True,
-        "requires_shell": False,
-        "risk_level": 2,
-    },
-    {
-        "name": "personal_rag",
-        "description": "Usa a base de conhecimento pessoal do usuario antes de responder.",
-        "kind": "internal_tool",
-        "definition": {"collection": "per_user"},
-        "requires_network": False,
-        "requires_shell": False,
-        "risk_level": 1,
-    },
-]
 
 
 class UserRepo:
@@ -722,6 +692,15 @@ class SkillRepo:
                         requires_shell=item["requires_shell"],
                         risk_level=item["risk_level"],
                     ))
+                else:
+                    # Keep the persisted catalogue aligned with the code registry
+                    # without changing which skills each user has enabled.
+                    skill.description = item["description"]
+                    skill.kind = item["kind"]
+                    skill.definition_json = json.dumps(item["definition"], ensure_ascii=False)
+                    skill.requires_network = item["requires_network"]
+                    skill.requires_shell = item["requires_shell"]
+                    skill.risk_level = item["risk_level"]
             db.commit()
         finally:
             db.close()
@@ -736,8 +715,14 @@ class SkillRepo:
                 row.skill_id: row
                 for row in db.query(UserSkill).filter(UserSkill.user_id == user_id).all()
             }
-            return [
-                {
+            result = []
+            for skill in skills:
+                user_skill = enabled.get(skill.id)
+                try:
+                    config = json.loads(user_skill.config_json or "{}") if user_skill else {}
+                except json.JSONDecodeError:
+                    config = {}
+                result.append({
                     "id": skill.id,
                     "name": skill.name,
                     "description": skill.description,
@@ -746,10 +731,11 @@ class SkillRepo:
                     "requires_network": skill.requires_network,
                     "requires_shell": skill.requires_shell,
                     "risk_level": skill.risk_level,
-                    "enabled": enabled.get(skill.id).is_enabled if skill.id in enabled else False,
+                    "enabled": user_skill.is_enabled if user_skill else False,
+                    "config": config,
                 }
-                for skill in skills
-            ]
+                )
+            return result
         finally:
             db.close()
 

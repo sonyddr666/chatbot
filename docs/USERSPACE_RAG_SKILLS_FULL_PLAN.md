@@ -15,14 +15,22 @@ O projeto ja tem uma fundacao importante:
 
 O que ainda falta para ficar realmente redondo:
 
-- Isolamento forte de dados por usuario em todos os fluxos.
-- Workspace fisico por usuario, separado do RAG.
-- Upload que salva arquivo original antes de ingerir.
-- Parsers reais para PDF/DOCX.
-- Providers/preferencias realmente por usuario.
-- Sugestoes de memoria/preferencia com confirmacao.
-- Skills com registry, permissao, logs e runtime previsivel.
-- Testes curtos por camada, sem rodar comandos que travam.
+- Validar cada fluxo em ambiente real e com os testes curtos, quando isso for solicitado.
+- Revisar a disponibilidade do mecanismo externo de busca antes de producao.
+- Fazer hardening operacional de CORS, secrets, backup e observabilidade antes de exposicao publica.
+
+## Estado implementado
+
+- [x] Login, cadastro, sessao e isolamento de conversas, mensagens e documentos por `user_id`.
+- [x] UserSpace por usuario com `profile`, `workspace`, `uploads`, `rag` e `skills`.
+- [x] Onboarding salvo no banco, em `profile/onboarding.md` e no RAG pessoal.
+- [x] Workspace autenticado, com bloqueio de path traversal, preview com checksum e snapshot antes de aplicar patch.
+- [x] Upload original separado do indice RAG, parser para TXT/MD/CSV/JSON/PDF/DOCX e manifesto de ingestao.
+- [x] RAG com collection e metadata por usuario.
+- [x] Providers e preferencias pessoais, com chave mascarada na API/UI.
+- [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.
+- [x] Skills de busca, RAG pessoal, leitura explicita de workspace e preview de escrita sem aplicacao automatica.
+- [ ] Validacao automatizada e smoke manual desta fase: deliberadamente nao executados enquanto a orientacao for fazer alteracoes sem testes.
 
 ## Regra de ouro anti-travamento
 
