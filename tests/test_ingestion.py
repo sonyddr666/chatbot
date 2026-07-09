@@ -83,6 +83,16 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertTrue(artifact.storage_path.is_file())
         self.assertTrue(str(artifact.storage_path).startswith(str(Path(self.tmp.name).resolve())))
 
+    def test_save_extracted_text_stores_parser_output_in_user_rag_area(self):
+        from src.core.ingestion import save_extracted_text
+
+        relative_path = save_extracted_text(5, "notes.md", "# Extracted")
+        stored_path = Path(self.tmp.name) / "5" / "rag" / relative_path
+
+        self.assertEqual(relative_path.split("/")[0], "extracted")
+        self.assertTrue(stored_path.is_file())
+        self.assertEqual(stored_path.read_text(encoding="utf-8"), "# Extracted")
+
     def test_extract_text_for_ingestion_accepts_text_formats(self):
         from src.core.ingestion import extract_text_for_ingestion
 
@@ -191,6 +201,39 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(listed["checksum"], uploaded["checksum"])
         self.assertEqual(listed["status"], "indexed")
         self.assertEqual(listed["parser"], "text")
+
+    def test_documents_upload_waits_for_explicit_rag_ingestion(self):
+        user, headers = self._create_auth_headers()
+        client = TestClient(app)
+
+        upload_response = client.post(
+            "/api/v1/documents/upload",
+            headers=headers,
+            files={"file": ("later.md", b"# Index later", "text/markdown")},
+        )
+        uploaded = upload_response.json()
+        before_ingestion = client.get("/api/v1/documents", headers=headers).json()[0]
+
+        with patch("src.api.routes.add_user_documents", return_value=["later-chunk"]):
+            ingest_response = client.post(
+                f"/api/v1/documents/{uploaded['document_id']}/ingest",
+                headers=headers,
+            )
+
+        after_ingestion = client.get("/api/v1/documents", headers=headers).json()[0]
+        extracted_path = Path(self.tmp.name) / str(user.id) / "rag" / after_ingestion["extracted_path"]
+
+        self.assertEqual(upload_response.status_code, 200)
+        self.assertEqual(uploaded["status"], "uploaded")
+        self.assertEqual(uploaded["chunks"], 0)
+        self.assertEqual(before_ingestion["status"], "uploaded")
+        self.assertEqual(before_ingestion["extracted_path"], "")
+        self.assertEqual(ingest_response.status_code, 200)
+        self.assertEqual(ingest_response.json()["ids"], ["later-chunk"])
+        self.assertEqual(after_ingestion["status"], "indexed")
+        self.assertEqual(after_ingestion["chunks"], 1)
+        self.assertTrue(after_ingestion["extracted_path"].startswith("extracted/"))
+        self.assertTrue(extracted_path.is_file())
 
     def test_upload_route_records_failed_parser_without_orphaning_original(self):
         user, headers = self._create_auth_headers()

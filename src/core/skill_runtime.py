@@ -92,6 +92,7 @@ def _workspace_error_context(skill_name: str, error: Exception) -> str:
 
 async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
     skill_name = str(skill["name"])
+    audit_skill_name = skill_name if skill.get("definition") else "web_search"
     config = skill.get("config") or {}
     try:
         max_results = int(config.get("max_results", 3))
@@ -105,7 +106,7 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
             raise RuntimeError(result or "Busca nao retornou resultados")
         SkillRunRepo.create(
             user_id,
-            skill_name,
+            audit_skill_name,
             "completed",
             {"query": message, "max_results": max_results, "executor": "web_search"},
             output_summary=result,
@@ -114,12 +115,12 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
     except Exception as exc:
         SkillRunRepo.create(
             user_id,
-            skill_name,
+            audit_skill_name,
             "failed",
             {"query": message, "max_results": max_results, "executor": "web_search"},
             error_message=str(exc),
         )
-        return _workspace_error_context(skill_name, exc)
+        return ""
 
 
 def _run_workspace_read_skill(user_id: int, skill: dict, path: str) -> str:

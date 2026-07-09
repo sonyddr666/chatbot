@@ -7,7 +7,14 @@ def skill_permissions(skill: dict) -> dict:
     """Read the declared capability flags while remaining compatible with old rows."""
     definition = skill.get("definition") or {}
     permissions = definition.get("permissions") or {}
-    return permissions if isinstance(permissions, dict) else {}
+    if isinstance(permissions, dict) and permissions:
+        return permissions
+    return {
+        "network": bool(skill.get("requires_network")) or skill.get("name") in {"simple_search", "search_and_answer"},
+        "workspace_read": False,
+        "workspace_write": False,
+        "shell": bool(skill.get("requires_shell")),
+    }
 
 
 def can_execute_skill(skill: dict, required_permission: str | None = None) -> bool:

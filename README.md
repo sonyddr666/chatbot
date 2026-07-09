@@ -921,6 +921,8 @@ Para testar o fluxo principal:
 
 ## Resumo Final
 
+O estado detalhado de implementacao, separacao de dados, APIs, Skills e validacao esta em `docs/IMPLEMENTATION_STATUS.md`.
+
 Este projeto agora cobre o nucleo pedido:
 
 - Login.

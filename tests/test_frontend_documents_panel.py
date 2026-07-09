@@ -17,7 +17,8 @@ class FrontendDocumentsPanelTest(unittest.TestCase):
 
         self.assertIn("Documentos RAG", panel)
         self.assertIn("api.listDocuments", panel)
-        self.assertIn("api.uploadDocument", panel)
+        self.assertIn("api.uploadOriginalDocument", panel)
+        self.assertIn("api.ingestDocument", panel)
         self.assertIn("api.deleteDocument", panel)
         self.assertIn("Arraste arquivos", panel)
 
@@ -28,6 +29,7 @@ class FrontendDocumentsPanelTest(unittest.TestCase):
         for field in (
             "source",
             "upload_path",
+            "extracted_path",
             "checksum",
             "status",
             "parser",
@@ -40,6 +42,9 @@ class FrontendDocumentsPanelTest(unittest.TestCase):
         self.assertIn("document.source", panel)
         self.assertIn("document.error_message", panel)
         self.assertIn("Erro na ingestao", panel)
+        self.assertIn("Aguardando RAG", panel)
+        self.assertIn("Ingerir no RAG", panel)
+        self.assertIn("Texto extraido: rag/", panel)
 
     def test_failed_upload_refreshes_document_list_for_recorded_errors(self):
         panel = Path("frontend/src/components/DocumentsPanel.tsx").read_text(encoding="utf-8")

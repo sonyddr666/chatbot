@@ -15,7 +15,7 @@ O projeto ja tem uma fundacao importante:
 
 O que ainda falta para ficar realmente redondo:
 
-- Validar cada fluxo em ambiente real e com os testes curtos, quando isso for solicitado.
+- Executar smoke manual com backend e frontend antes de exposicao publica.
 - Revisar a disponibilidade do mecanismo externo de busca antes de producao.
 - Fazer hardening operacional de CORS, secrets, backup e observabilidade antes de exposicao publica.
 
@@ -30,7 +30,8 @@ O que ainda falta para ficar realmente redondo:
 - [x] Providers e preferencias pessoais, com chave mascarada na API/UI.
 - [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.
 - [x] Skills de busca, RAG pessoal, leitura explicita de workspace e preview de escrita sem aplicacao automatica.
-- [ ] Validacao automatizada e smoke manual desta fase: deliberadamente nao executados enquanto a orientacao for fazer alteracoes sem testes.
+- [x] Bateria curta de UserSpace, Workspace, ingestao, RAG, Skills, auth e painel de documentos: 47 testes passaram em 4.371 segundos com corte de 45 segundos.
+- [ ] Smoke manual completo e build do frontend antes de exposicao publica.
 
 ## Regra de ouro anti-travamento
 
