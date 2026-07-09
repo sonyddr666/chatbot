@@ -15,6 +15,7 @@ O projeto hoje e uma base funcional de chatbot multiusuario. As funcionalidades 
 - Conversas e mensagens por usuario.
 - Onboarding inicial.
 - Perfil inicial salvo no banco, em arquivo e no RAG pessoal.
+- Refazer onboarding substitui o perfil anterior no RAG pessoal.
 - RAG pessoal por usuario.
 - Upload de documentos separado do workspace.
 - Arquivos originais preservados em pasta propria.

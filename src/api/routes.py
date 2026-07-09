@@ -139,6 +139,22 @@ def _parser_name(filename: str) -> str:
     return ext.lstrip(".") or "unknown"
 
 
+def _remove_superseded_onboarding_documents(user_id: int, documents: list) -> int:
+    """Remove old onboarding chunks only after the replacement was indexed."""
+    removed = 0
+    for document in documents:
+        try:
+            raw_ids = json.loads(document.vector_ids_json or "[]")
+            vector_ids = [item for item in raw_ids if isinstance(item, str)] if isinstance(raw_ids, list) else []
+            if vector_ids:
+                delete_user_documents(user_id, vector_ids)
+            if DocumentRepo.delete(document.id, user_id):
+                removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 def _store_document_manifest(
     user_id: int,
     doc,
@@ -340,6 +356,7 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
         "Evitar: " + "; ".join(body.avoid),
     ])
     write_profile_text(user.id, "onboarding.md", memory_doc)
+    old_onboarding_docs = DocumentRepo.list_by_source(user.id, "onboarding")
     chunks = split_text(memory_doc)
     collection = user_rag_collection(user.id)
     metadatas = [{"source": "onboarding", "user_id": user.id, "filename": "perfil-inicial.md"}] * len(chunks)
@@ -354,6 +371,7 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
         parser="text",
         vector_ids=ids,
     )
+    replaced_documents = _remove_superseded_onboarding_documents(user.id, old_onboarding_docs)
     return {
         "status": "ok",
         "profile_id": profile.id,
@@ -361,6 +379,7 @@ async def save_onboarding(body: OnboardingRequest, user=Depends(get_current_user
         "rag_collection": collection,
         "chunks": len(chunks),
         "ids": ids,
+        "replaced_documents": replaced_documents,
     }
 
 

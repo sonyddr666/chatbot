@@ -678,6 +678,26 @@ class DocumentRepo:
             db.close()
 
     @staticmethod
+    def list_by_source(user_id: int, source: str) -> list[KnowledgeDocument]:
+        """Return documents of one source, scoped to exactly one user."""
+        db = get_session_db()
+        try:
+            docs = (
+                db.query(KnowledgeDocument)
+                .filter(
+                    KnowledgeDocument.user_id == user_id,
+                    KnowledgeDocument.source == source,
+                )
+                .order_by(KnowledgeDocument.created_at.desc(), KnowledgeDocument.id.desc())
+                .all()
+            )
+            for doc in docs:
+                db.expunge(doc)
+            return docs
+        finally:
+            db.close()
+
+    @staticmethod
     def get(doc_id: int, user_id: int | None = None) -> Optional[KnowledgeDocument]:
         db = get_session_db()
         try:
