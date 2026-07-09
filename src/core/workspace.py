@@ -96,6 +96,8 @@ def mkdir(user_id: int, path: str) -> WorkspaceFileInfo:
 
 
 def delete_path(user_id: int, path: str) -> bool:
+    if not (path or "").strip():
+        raise ValueError("Nao e permitido deletar a raiz do workspace")
     target = _workspace_path(user_id, path)
     if not target.exists():
         return False

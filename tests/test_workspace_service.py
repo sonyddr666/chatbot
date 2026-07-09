@@ -59,6 +59,17 @@ class WorkspaceServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             delete_path(1, "projetos")
 
+    def test_delete_path_rejects_workspace_root(self):
+        from src.core.userspace import safe_user_path
+        from src.core.workspace import delete_path
+
+        workspace_root = safe_user_path(1, "workspace")
+
+        with self.assertRaises(ValueError):
+            delete_path(1, "")
+
+        self.assertTrue(workspace_root.is_dir())
+
     def test_move_path_moves_file_without_overwriting(self):
         from src.core.workspace import move_path, read_text_file, write_text_file
 
