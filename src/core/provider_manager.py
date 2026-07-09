@@ -578,6 +578,7 @@ def create_provider(body: dict) -> dict:
         "id": provider_id,
         "name": body.get("name", provider_id),
         "base_url": body.get("base_url", ""),
+        "endpoint": body.get("endpoint", ""),
         "api_key": body.get("api_key", ""),
         "api_format": body.get("api_format", "chat_completions"),
         "enabled": body.get("enabled", True),
@@ -592,6 +593,7 @@ def create_provider(body: dict) -> dict:
         "id": provider_id,
         "name": new_provider["name"],
         "base_url": new_provider["base_url"],
+        "endpoint": new_provider["endpoint"],
         "api_format": new_provider["api_format"],
         "provider_type": "custom",
         "enabled": new_provider["enabled"],
@@ -632,6 +634,8 @@ def update_provider(provider_id: str, data: dict) -> Optional[dict]:
                 cp["name"] = data["name"]
             if "base_url" in data:
                 cp["base_url"] = data["base_url"]
+            if "endpoint" in data:
+                cp["endpoint"] = data["endpoint"]
             if "api_key" in data and data["api_key"]:
                 cp["api_key"] = data["api_key"]
             if "api_format" in data:

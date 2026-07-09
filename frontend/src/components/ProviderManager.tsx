@@ -13,6 +13,9 @@ import { api, getAuthToken, type UserProviderInfo } from '../lib/api'
 interface ModelInfo {
   id: string
   name: string
+  alias?: string
+  usage?: string
+  status?: string
   context_length: number
   enabled: boolean
   active?: boolean
@@ -22,6 +25,7 @@ interface ProviderInfo {
   id: string
   name: string
   base_url: string
+  endpoint?: string
   api_key?: string
   api_format: string
   provider_type: 'builtin' | 'custom'
@@ -77,6 +81,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   // Form state
   const [formName, setFormName] = useState('')
   const [formBaseUrl, setFormBaseUrl] = useState('')
+  const [formEndpoint, setFormEndpoint] = useState('')
   const [formApiKey, setFormApiKey] = useState('')
   const [formApiFormat, setFormApiFormat] = useState('chat_completions')
   const [showKey, setShowKey] = useState(false)
@@ -308,6 +313,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const resetForm = () => {
     setFormName('')
     setFormBaseUrl('')
+    setFormEndpoint('')
     setFormApiKey('')
     setFormApiFormat('chat_completions')
     setFormModelId('')
@@ -326,6 +332,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     }
     setFormName(p.name)
     setFormBaseUrl(p.base_url)
+    setFormEndpoint(p.endpoint || '')
     setFormApiKey('')
     setFormApiFormat(p.api_format)
     setEditing(true)
@@ -341,7 +348,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     setSaving(true)
     try {
       if (editing && selectedId) {
-        const body: Record<string, any> = { name: formName.trim(), base_url: formBaseUrl.trim(), api_format: formApiFormat }
+        const body: Record<string, any> = {
+          name: formName.trim(),
+          base_url: formBaseUrl.trim(),
+          endpoint: formEndpoint.trim(),
+          api_format: formApiFormat,
+        }
         if (formApiKey.trim()) body.api_key = formApiKey.trim()
         const updated = await apiReq<ProviderInfo>(`${API}/providers/manage/${selectedId}`, {
           method: 'PUT', body: JSON.stringify(body),
@@ -362,6 +374,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         const body = {
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
+          endpoint: formEndpoint.trim(),
           api_key: formApiKey.trim(),
           api_format: formApiFormat,
           models,
@@ -731,6 +744,25 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Endpoint</label>
+                    <input
+                      type="text"
+                      value={formEndpoint}
+                      onChange={e => setFormEndpoint(e.target.value)}
+                      placeholder="/responses ou /chat/completions"
+                      className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                      style={{
+                        background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        borderColor: 'var(--border)',
+                      }}
+                    />
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                      Caminho separado da Base URL. Deixe vazio para usar o padrao do formato da API.
+                    </p>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Modelo</label>
@@ -1068,6 +1100,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <InfoCard label="API Format" value={formatLabels[selected.api_format] || selected.api_format} icon={<Globe size={16} />} />
                 <InfoCard label="Provider Type" value={selected.provider_type === 'builtin' ? 'Built-in' : 'Custom'} icon={<Server size={16} />} />
+                <InfoCard label="Endpoint" value={selected.endpoint || 'Padrao do formato'} icon={<Globe size={16} />} />
                 <InfoCard
                   label="API Key"
                   value={selected.id === 'codex-chatgpt' && selected.has_key ? 'OAuth conectado' : (selected.has_key ? `${(selected.api_key || '').substring(0, 12)}...` : 'Não configurada')}
@@ -1403,6 +1436,12 @@ function ModelRow({
       : String(model.context_length)
 
   const isActive = model.active === true
+  const statusLabels: Record<string, { label: string, background: string, color: string }> = {
+    oficial: { label: 'Oficial', background: '#dcfce7', color: '#15803d' },
+    'confirmar no provider': { label: 'Confirmar', background: '#fef3c7', color: '#a16207' },
+    'nao confirmado na lista publica atual': { label: 'Nao confirmado', background: '#fee2e2', color: '#b91c1c' },
+  }
+  const status = model.status ? statusLabels[model.status] : null
 
   return (
     <div className="flex items-center justify-between px-4 py-3 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -1423,10 +1462,25 @@ function ModelRow({
                 ACTIVE
               </span>
             )}
+            {status && (
+              <span
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                style={{ background: status.background, color: status.color }}
+                title={model.status}
+              >
+                {status.label}
+              </span>
+            )}
           </div>
-          <p className="text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>
-            {model.id}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            <span className="font-mono">{model.id}</span>
+            {model.alias && <span>alias: {model.alias}</span>}
+          </div>
+          {model.usage && (
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+              {model.usage}
+            </p>
+          )}
         </div>
         <span
           className="text-[10px] px-1.5 py-0.5 rounded font-mono"
