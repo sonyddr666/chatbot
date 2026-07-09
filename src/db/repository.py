@@ -6,7 +6,7 @@ import json
 from sqlalchemy import func, or_
 
 from src.core.auth import hash_password, verify_password
-from src.core.userspace import ensure_user_space
+from src.core.userspace import ensure_user_space, safe_user_path
 from src.db.models import (
     get_session_db,
     Conversation,
@@ -778,6 +778,27 @@ class SkillRepo:
 
 class SkillRunRepo:
     @staticmethod
+    def _append_audit_file(run: SkillRun) -> None:
+        try:
+            audit_path = safe_user_path(run.user_id, "skills", "audit/skill_runs.jsonl")
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "id": run.id,
+                "user_id": run.user_id,
+                "skill_name": run.skill_name,
+                "status": run.status,
+                "input": json.loads(run.input_json or "{}"),
+                "output_summary": run.output_summary,
+                "error_message": run.error_message,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
+            with audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
     def create(
         user_id: int,
         skill_name: str,
@@ -802,6 +823,7 @@ class SkillRunRepo:
             db.add(run)
             db.commit()
             db.refresh(run)
+            SkillRunRepo._append_audit_file(run)
             db.expunge(run)
             return run
         finally:
