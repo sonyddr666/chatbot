@@ -15,6 +15,10 @@ export function DocumentsPanel({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [manifestLoadingId, setManifestLoadingId] = useState<number | null>(null)
+  const [manifestDocumentId, setManifestDocumentId] = useState<number | null>(null)
+  const [manifestTitle, setManifestTitle] = useState('')
+  const [manifest, setManifest] = useState<Record<string, unknown> | null>(null)
 
   const loadDocuments = useCallback(async () => {
     setLoading(true)
@@ -52,11 +56,30 @@ export function DocumentsPanel({ open, onClose }: Props) {
     try {
       await api.deleteDocument(documentId)
       toast.success('Documento removido')
+      if (manifestDocumentId === documentId) {
+        setManifest(null)
+        setManifestDocumentId(null)
+        setManifestTitle('')
+      }
       await loadDocuments()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao remover documento')
     }
-  }, [loadDocuments])
+  }, [loadDocuments, manifestDocumentId])
+
+  const openManifest = useCallback(async (document: DocumentInfo) => {
+    setManifestLoadingId(document.id)
+    try {
+      const data = await api.getDocumentManifest(document.id)
+      setManifest(data)
+      setManifestDocumentId(document.id)
+      setManifestTitle(document.filename)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao abrir manifesto RAG')
+    } finally {
+      setManifestLoadingId(null)
+    }
+  }, [])
 
   const handleDrop = useCallback(async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -204,6 +227,16 @@ export function DocumentsPanel({ open, onClose }: Props) {
                       {document.error_message}
                     </p>
                   ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => openManifest(document)}
+                      disabled={!document.manifest_path || manifestLoadingId === document.id}
+                      className="rounded-xl px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                      style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    >
+                      {manifestLoadingId === document.id ? 'Abrindo...' : 'Ver manifesto'}
+                    </button>
+                  </div>
                 </div>
                 <button
                   onClick={() => deleteDocument(document.id)}
@@ -216,6 +249,38 @@ export function DocumentsPanel({ open, onClose }: Props) {
             )
           })}
         </div>
+
+        {manifest ? (
+          <div
+            className="mt-3 max-h-64 overflow-auto rounded-2xl border p-3"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+          >
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
+                  Manifesto RAG
+                </p>
+                <p className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                  {manifestTitle}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setManifest(null)
+                  setManifestDocumentId(null)
+                  setManifestTitle('')
+                }}
+                className="rounded-lg px-2 py-1 text-xs font-bold"
+                style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}
+              >
+                Fechar
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap break-words text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              {JSON.stringify(manifest, null, 2)}
+            </pre>
+          </div>
+        ) : null}
       </aside>
     </>
   )
