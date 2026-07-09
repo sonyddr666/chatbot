@@ -1223,12 +1223,23 @@ async def delete_document(doc_id: int, user=Depends(get_current_user)):
         except ValueError:
             upload_deleted = False
 
+    manifest_deleted = False
+    if doc.manifest_path:
+        try:
+            manifest_path = safe_user_path(user.id, "rag", doc.manifest_path)
+            if manifest_path.is_file():
+                manifest_path.unlink()
+                manifest_deleted = True
+        except ValueError:
+            manifest_deleted = False
+
     DocumentRepo.delete(doc_id, user.id)
     return {
         "status": "ok",
         "deleted": doc_id,
         "rag_ids_deleted": len(vector_ids),
         "upload_deleted": upload_deleted,
+        "manifest_deleted": manifest_deleted,
     }
 
 
