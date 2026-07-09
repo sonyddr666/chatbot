@@ -43,7 +43,7 @@ from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
-from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_upload_original, write_rag_manifest
+from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_extracted_text, save_upload_original, write_rag_manifest
 from src.core.userspace import safe_user_path, write_profile_text
 
 router = APIRouter()
@@ -182,6 +182,7 @@ def _store_document_manifest(
             upload_path=doc.upload_path or "",
             checksum=doc.checksum or "",
             error_message=error_message,
+            metadata={"extracted_path": doc.extracted_path or ""},
         )
         DocumentRepo.set_manifest_path(doc.id, user_id, manifest_path)
         return manifest_path
@@ -189,14 +190,27 @@ def _store_document_manifest(
         return ""
 
 
+def _delete_extracted_text(user_id: int, relative_path: str) -> None:
+    if not relative_path:
+        return
+    try:
+        extracted_path = safe_user_path(user_id, "rag", relative_path)
+        if extracted_path.is_file():
+            extracted_path.unlink()
+    except ValueError:
+        return
+
+
 def _ingest_stored_upload(user_id: int, doc) -> dict:
     """Index a user-owned original upload only after it was saved successfully."""
     parser = _parser_name(doc.filename)
+    previous_extracted_path = doc.extracted_path or ""
     try:
         original_path = safe_user_path(user_id, "uploads", doc.upload_path)
         if not original_path.is_file():
             raise ValueError("Arquivo original nao encontrado")
         text = extract_text_for_ingestion(doc.filename, original_path.read_bytes())
+        extracted_path = save_extracted_text(user_id, doc.filename, text)
     except (OSError, ValueError) as exc:
         error_message = str(exc) or "Falha ao ler o arquivo original"
         updated = DocumentRepo.update_ingestion(
@@ -207,6 +221,7 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
             chunk_count=0,
             vector_ids=[],
             error_message=error_message,
+            extracted_path="",
         ) or doc
         _store_document_manifest(
             user_id,
@@ -217,6 +232,7 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
             vector_ids=[],
             error_message=error_message,
         )
+        _delete_extracted_text(user_id, previous_extracted_path)
         raise ValueError(error_message) from exc
 
     chunks = split_text(text)
@@ -238,6 +254,7 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
             chunk_count=0,
             vector_ids=[],
             error_message=error_message,
+            extracted_path=extracted_path,
         ) or doc
         _store_document_manifest(
             user_id,
@@ -248,6 +265,8 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
             vector_ids=[],
             error_message=error_message,
         )
+        if previous_extracted_path != extracted_path:
+            _delete_extracted_text(user_id, previous_extracted_path)
         raise ValueError(error_message) from exc
 
     updated = DocumentRepo.update_ingestion(
@@ -257,9 +276,12 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
         parser=parser,
         chunk_count=len(chunks),
         vector_ids=ids,
+        extracted_path=extracted_path,
     )
     if not updated:
         raise ValueError("Documento nao encontrado")
+    if previous_extracted_path != extracted_path:
+        _delete_extracted_text(user_id, previous_extracted_path)
     manifest_path = _store_document_manifest(
         user_id,
         updated,
@@ -277,6 +299,7 @@ def _ingest_stored_upload(user_id: int, doc) -> dict:
         "chunks": len(chunks),
         "ids": ids,
         "upload_path": updated.upload_path,
+        "extracted_path": updated.extracted_path,
         "checksum": updated.checksum,
         "manifest_path": manifest_path,
     }
@@ -1370,6 +1393,7 @@ async def ingest_document(doc_id: int, user=Depends(get_current_user)):
             "chunks": doc.chunk_count,
             "ids": json.loads(doc.vector_ids_json or "[]"),
             "upload_path": doc.upload_path,
+            "extracted_path": doc.extracted_path,
             "checksum": doc.checksum,
             "manifest_path": doc.manifest_path,
             "already_indexed": True,
@@ -1389,6 +1413,7 @@ async def list_documents(user=Depends(get_current_user)):
             "id": d.id, "filename": d.filename, "source": d.source,
             "chunks": d.chunk_count, "size": d.file_size,
             "upload_path": d.upload_path or "",
+            "extracted_path": d.extracted_path or "",
             "checksum": d.checksum or "",
             "status": d.status or "",
             "parser": d.parser or "",
@@ -1448,6 +1473,16 @@ async def delete_document(doc_id: int, user=Depends(get_current_user)):
         except ValueError:
             upload_deleted = False
 
+    extracted_deleted = False
+    if doc.extracted_path:
+        try:
+            extracted_path = safe_user_path(user.id, "rag", doc.extracted_path)
+            if extracted_path.is_file():
+                extracted_path.unlink()
+                extracted_deleted = True
+        except ValueError:
+            extracted_deleted = False
+
     manifest_deleted = False
     if doc.manifest_path:
         try:
@@ -1464,6 +1499,7 @@ async def delete_document(doc_id: int, user=Depends(get_current_user)):
         "deleted": doc_id,
         "rag_ids_deleted": len(vector_ids),
         "upload_deleted": upload_deleted,
+        "extracted_deleted": extracted_deleted,
         "manifest_deleted": manifest_deleted,
     }
 

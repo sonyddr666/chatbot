@@ -69,6 +69,17 @@ def save_upload_original(user_id: int, filename: str, content: bytes) -> UploadA
     )
 
 
+def save_extracted_text(user_id: int, filename: str, text: str) -> str:
+    """Persist parser output inside the user's RAG area, never beside the original."""
+    safe_name = sanitize_upload_filename(filename)
+    extracted_name = f"{uuid4().hex}-{Path(safe_name).stem}.txt"
+    relative_path = f"extracted/{extracted_name}"
+    extracted_path = safe_user_path(user_id, "rag", relative_path)
+    extracted_path.parent.mkdir(parents=True, exist_ok=True)
+    extracted_path.write_text(text, encoding="utf-8")
+    return relative_path
+
+
 def write_rag_manifest(
     user_id: int,
     *,

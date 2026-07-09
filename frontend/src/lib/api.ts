@@ -42,6 +42,7 @@ export interface DocumentInfo {
   chunks: number
   size: number
   upload_path?: string | null
+  extracted_path?: string | null
   checksum?: string | null
   status?: string
   parser?: string | null

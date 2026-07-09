@@ -25,7 +25,7 @@ O que ainda falta para ficar realmente redondo:
 - [x] UserSpace por usuario com `profile`, `workspace`, `uploads`, `rag` e `skills`.
 - [x] Onboarding salvo no banco, em `profile/onboarding.md` e no RAG pessoal, mantendo somente a versao atual do perfil indexada.
 - [x] Workspace autenticado, com bloqueio de path traversal, preview com checksum e snapshot antes de aplicar patch.
-- [x] Upload original separado do indice RAG, com salvar primeiro, ingerir depois, parser para TXT/MD/CSV/JSON/PDF/DOCX e manifesto de ingestao.
+- [x] Upload original separado do indice RAG, com salvar primeiro, texto derivado em `rag/extracted`, ingerir depois, parser para TXT/MD/CSV/JSON/PDF/DOCX e manifesto de ingestao.
 - [x] RAG com collection e metadata por usuario.
 - [x] Providers e preferencias pessoais, com chave mascarada na API/UI.
 - [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.

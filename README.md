@@ -335,6 +335,7 @@ Campos retornados na listagem de documentos:
 - `chunks`
 - `size`
 - `upload_path`
+- `extracted_path`
 - `checksum`
 - `status`
 - `parser`
@@ -356,6 +357,7 @@ Implementado:
 - DocumentsPanel usa envio em duas etapas: salvar original e depois "Ingerir no RAG".
 - `/api/v1/upload` continua como caminho imediato para anexos do chat.
 - Caminho fisico fica dentro de `uploads/original/{upload_id}`.
+- Depois da ingestao pelo DocumentsPanel, o texto derivado fica em `rag/extracted/` do mesmo usuario.
 - Checksum salvo para rastreabilidade.
 - Parser usado fica salvo no banco.
 - Erro de parsing fica salvo em `error_message`.

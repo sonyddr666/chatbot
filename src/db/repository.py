@@ -589,6 +589,7 @@ class DocumentRepo:
         error_message: str = "",
         vector_ids: list[str] | None = None,
         manifest_path: str = "",
+        extracted_path: str = "",
     ) -> KnowledgeDocument:
         db = get_session_db()
         try:
@@ -603,6 +604,7 @@ class DocumentRepo:
                 error_message=error_message,
                 vector_ids_json=json.dumps(vector_ids or [], ensure_ascii=False),
                 manifest_path=manifest_path,
+                extracted_path=extracted_path,
                 chunk_count=chunk_count,
                 file_size=file_size,
             )
@@ -640,6 +642,7 @@ class DocumentRepo:
         chunk_count: int,
         vector_ids: list[str] | None = None,
         error_message: str = "",
+        extracted_path: str | None = None,
     ) -> Optional[KnowledgeDocument]:
         """Update RAG-derived document state without changing the stored original."""
         db = get_session_db()
@@ -656,6 +659,8 @@ class DocumentRepo:
             doc.chunk_count = chunk_count
             doc.vector_ids_json = json.dumps(vector_ids or [], ensure_ascii=False)
             doc.error_message = error_message
+            if extracted_path is not None:
+                doc.extracted_path = extracted_path
             db.commit()
             db.refresh(doc)
             db.expunge(doc)

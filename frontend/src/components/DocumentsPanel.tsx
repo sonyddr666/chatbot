@@ -234,6 +234,11 @@ export function DocumentsPanel({ open, onClose }: Props) {
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
                     Origem: {document.source || 'upload'} - Parser: {document.parser || 'nao informado'}
                   </p>
+                  {document.extracted_path ? (
+                    <p className="mt-1 text-xs font-mono" style={{ color: 'var(--text-tertiary)' }}>
+                      Texto extraido: rag/{document.extracted_path}
+                    </p>
+                  ) : null}
                   {document.checksum ? (
                     <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                       Checksum: {document.checksum.slice(0, 12)}
