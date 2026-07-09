@@ -80,7 +80,6 @@ async def run_enabled_skill_context(user_id: int, message: str) -> str:
                 {"message": message, "max_results": 3},
                 error_message=str(exc),
             )
-            raise
 
     return "\n\n".join(sections)
 

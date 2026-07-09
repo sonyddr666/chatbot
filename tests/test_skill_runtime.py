@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from src.core.skill_runtime import (
     build_runtime_context,
+    run_enabled_skill_context,
     should_force_rag,
     should_run_web_search,
 )
@@ -22,6 +24,29 @@ class SkillRuntimeTest(unittest.TestCase):
         context = build_runtime_context("web_search", "Resultados mockados")
         self.assertIn("Resultado da skill web_search", context)
         self.assertIn("Resultados mockados", context)
+
+
+class SkillRuntimeAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_web_search_failure_is_logged_without_breaking_chat_context(self):
+        with (
+            patch(
+                "src.core.skill_runtime.SkillRepo.list_for_user",
+                return_value=[{"name": "simple_search", "enabled": True, "requires_shell": False}],
+            ),
+            patch(
+                "src.core.skill_runtime.web_search",
+                new=AsyncMock(side_effect=RuntimeError("search offline")),
+            ),
+            patch("src.core.skill_runtime.SkillRunRepo.create") as create_run,
+        ):
+            context = await run_enabled_skill_context(7, "pesquise noticias de IA")
+
+        self.assertEqual(context, "")
+        create_run.assert_called_once()
+        self.assertEqual(create_run.call_args.args[0], 7)
+        self.assertEqual(create_run.call_args.args[1], "web_search")
+        self.assertEqual(create_run.call_args.args[2], "failed")
+        self.assertIn("search offline", create_run.call_args.kwargs["error_message"])
 
 
 if __name__ == "__main__":
