@@ -167,6 +167,8 @@ def _store_document_manifest(
 ) -> str:
     """Persist the current ingestion state without making manifests a hard dependency."""
     try:
+        # Avoid presenting a stale manifest if writing the replacement fails.
+        DocumentRepo.set_manifest_path(doc.id, user_id, "")
         manifest_path = write_rag_manifest(
             user_id,
             document_id=doc.id,
