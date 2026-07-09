@@ -32,6 +32,11 @@ def _workspace_path(user_id: int, relative_path: str = "") -> Path:
     return safe_user_path(user_id, "workspace", relative_path)
 
 
+def _require_relative_path(path: str, message: str) -> None:
+    if not (path or "").strip():
+        raise ValueError(message)
+
+
 def _relative_workspace_path(user_id: int, path: Path) -> str:
     root = _workspace_path(user_id).resolve()
     return path.resolve().relative_to(root).as_posix()
@@ -70,6 +75,7 @@ def list_tree(user_id: int, path: str = "") -> list[WorkspaceNode]:
 
 
 def read_text_file(user_id: int, path: str) -> str:
+    _require_relative_path(path, "Caminho do arquivo nao pode ser vazio")
     file_path = _workspace_path(user_id, path)
     if not file_path.exists() or not file_path.is_file():
         raise FileNotFoundError(path)
@@ -79,6 +85,7 @@ def read_text_file(user_id: int, path: str) -> str:
 
 
 def write_text_file(user_id: int, path: str, content: str) -> WorkspaceFileInfo:
+    _require_relative_path(path, "Caminho do arquivo nao pode ser vazio")
     data = content.encode("utf-8")
     if len(data) > MAX_TEXT_FILE_BYTES:
         raise ValueError("Arquivo muito grande para escrita textual")
@@ -90,14 +97,14 @@ def write_text_file(user_id: int, path: str, content: str) -> WorkspaceFileInfo:
 
 
 def mkdir(user_id: int, path: str) -> WorkspaceFileInfo:
+    _require_relative_path(path, "Caminho da pasta nao pode ser vazio")
     folder = _workspace_path(user_id, path)
     folder.mkdir(parents=True, exist_ok=True)
     return _info(user_id, folder)
 
 
 def delete_path(user_id: int, path: str) -> bool:
-    if not (path or "").strip():
-        raise ValueError("Nao e permitido deletar a raiz do workspace")
+    _require_relative_path(path, "Nao e permitido deletar a raiz do workspace")
     target = _workspace_path(user_id, path)
     if not target.exists():
         return False
@@ -112,10 +119,8 @@ def delete_path(user_id: int, path: str) -> bool:
 
 
 def move_path(user_id: int, source: str, target: str) -> WorkspaceFileInfo:
-    if not (source or "").strip():
-        raise ValueError("Nao e permitido mover a raiz do workspace")
-    if not (target or "").strip():
-        raise ValueError("Destino do workspace nao pode ser vazio")
+    _require_relative_path(source, "Nao e permitido mover a raiz do workspace")
+    _require_relative_path(target, "Destino do workspace nao pode ser vazio")
     source_path = _workspace_path(user_id, source)
     target_path = _workspace_path(user_id, target)
     if not source_path.exists():
