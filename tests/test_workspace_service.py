@@ -83,6 +83,21 @@ class WorkspaceServiceTest(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             move_path(1, "archive/new.md", "exists.md")
 
+    def test_move_path_rejects_workspace_root_or_empty_target(self):
+        from src.core.userspace import safe_user_path
+        from src.core.workspace import move_path, write_text_file
+
+        workspace_root = safe_user_path(1, "workspace")
+        write_text_file(1, "notes.md", "conteudo")
+
+        with self.assertRaises(ValueError):
+            move_path(1, "", "archive/root")
+        with self.assertRaises(ValueError):
+            move_path(1, "notes.md", "")
+
+        self.assertTrue(workspace_root.is_dir())
+        self.assertTrue((workspace_root / "notes.md").is_file())
+
     def test_workspace_blocks_path_traversal(self):
         from src.core.workspace import read_text_file, write_text_file
 

@@ -112,6 +112,10 @@ def delete_path(user_id: int, path: str) -> bool:
 
 
 def move_path(user_id: int, source: str, target: str) -> WorkspaceFileInfo:
+    if not (source or "").strip():
+        raise ValueError("Nao e permitido mover a raiz do workspace")
+    if not (target or "").strip():
+        raise ValueError("Destino do workspace nao pode ser vazio")
     source_path = _workspace_path(user_id, source)
     target_path = _workspace_path(user_id, target)
     if not source_path.exists():
