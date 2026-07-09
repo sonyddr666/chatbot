@@ -413,6 +413,16 @@ export const api = {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload failed')
     return res.json()
   },
+  async uploadOriginalDocument(file: File): Promise<{ document_id: number; filename: string; status: string; chunks: number }> {
+    const fd = new FormData(); fd.append('file', file)
+    const res = await fetch(`${API}/documents/upload`, { method: 'POST', headers: authHeaders(), body: fd })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload failed')
+    return res.json()
+  },
+  ingestDocument: (id: number) =>
+    req<{ document_id: number; filename: string; status: string; chunks: number }>(`/documents/${id}/ingest`, {
+      method: 'POST',
+    }),
   deleteDocument: (id: number) => req<any>(`/documents/${id}`, { method: 'DELETE' }),
   getDocumentManifest: (id: number) => req<Record<string, unknown>>(`/documents/${id}/manifest`),
 

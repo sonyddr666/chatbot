@@ -139,6 +139,131 @@ def _parser_name(filename: str) -> str:
     return ext.lstrip(".") or "unknown"
 
 
+def _store_document_manifest(
+    user_id: int,
+    doc,
+    *,
+    status: str,
+    parser: str,
+    chunk_count: int,
+    vector_ids: list[str] | None = None,
+    error_message: str = "",
+) -> str:
+    """Persist the current ingestion state without making manifests a hard dependency."""
+    try:
+        manifest_path = write_rag_manifest(
+            user_id,
+            document_id=doc.id,
+            filename=doc.filename,
+            source=doc.source,
+            status=status,
+            parser=parser,
+            chunk_count=chunk_count,
+            file_size=doc.file_size,
+            vector_ids=vector_ids,
+            upload_path=doc.upload_path or "",
+            checksum=doc.checksum or "",
+            error_message=error_message,
+        )
+        DocumentRepo.set_manifest_path(doc.id, user_id, manifest_path)
+        return manifest_path
+    except Exception:
+        return ""
+
+
+def _ingest_stored_upload(user_id: int, doc) -> dict:
+    """Index a user-owned original upload only after it was saved successfully."""
+    parser = _parser_name(doc.filename)
+    try:
+        original_path = safe_user_path(user_id, "uploads", doc.upload_path)
+        if not original_path.is_file():
+            raise ValueError("Arquivo original nao encontrado")
+        text = extract_text_for_ingestion(doc.filename, original_path.read_bytes())
+    except (OSError, ValueError) as exc:
+        error_message = str(exc) or "Falha ao ler o arquivo original"
+        updated = DocumentRepo.update_ingestion(
+            doc.id,
+            user_id,
+            status="error",
+            parser=parser,
+            chunk_count=0,
+            vector_ids=[],
+            error_message=error_message,
+        ) or doc
+        _store_document_manifest(
+            user_id,
+            updated,
+            status="error",
+            parser=parser,
+            chunk_count=0,
+            vector_ids=[],
+            error_message=error_message,
+        )
+        raise ValueError(error_message) from exc
+
+    chunks = split_text(text)
+    metadatas = [{
+        "source": "upload",
+        "filename": doc.filename,
+        "upload_path": doc.upload_path,
+        "checksum": doc.checksum,
+    }] * len(chunks)
+    try:
+        ids = add_user_documents(user_id, chunks, metadatas=metadatas)
+    except Exception as exc:
+        error_message = "Falha ao indexar o documento"
+        updated = DocumentRepo.update_ingestion(
+            doc.id,
+            user_id,
+            status="error",
+            parser=parser,
+            chunk_count=0,
+            vector_ids=[],
+            error_message=error_message,
+        ) or doc
+        _store_document_manifest(
+            user_id,
+            updated,
+            status="error",
+            parser=parser,
+            chunk_count=0,
+            vector_ids=[],
+            error_message=error_message,
+        )
+        raise ValueError(error_message) from exc
+
+    updated = DocumentRepo.update_ingestion(
+        doc.id,
+        user_id,
+        status="indexed",
+        parser=parser,
+        chunk_count=len(chunks),
+        vector_ids=ids,
+    )
+    if not updated:
+        raise ValueError("Documento nao encontrado")
+    manifest_path = _store_document_manifest(
+        user_id,
+        updated,
+        status="indexed",
+        parser=parser,
+        chunk_count=len(chunks),
+        vector_ids=ids,
+    )
+    DOCUMENTS_INGESTED.inc()
+    return {
+        "document_id": updated.id,
+        "filename": updated.filename,
+        "size": updated.file_size,
+        "status": "indexed",
+        "chunks": len(chunks),
+        "ids": ids,
+        "upload_path": updated.upload_path,
+        "checksum": updated.checksum,
+        "manifest_path": manifest_path,
+    }
+
+
 def _manual_ingest_filename(source: str | None, metadata: dict | None) -> str:
     raw = str((metadata or {}).get("filename") or "").strip()
     if not raw:
@@ -1055,6 +1180,57 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
     return IngestResponse(chunks_count=len(chunks), ids=ids)
 
 
+@router.post("/documents/upload")
+async def upload_original_document(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Store the original upload without automatically adding it to personal RAG."""
+    ensure_db()
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo invalido")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Extensao nao suportada: {ext}")
+    content = await file.read()
+    file_size = len(content)
+    if file_size > settings.max_upload_size_mb * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Arquivo muito grande (max {settings.max_upload_size_mb}MB)")
+    try:
+        artifact = save_upload_original(user.id, file.filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    doc = DocumentRepo.save(
+        artifact.original_filename,
+        "upload",
+        0,
+        file_size,
+        user_id=user.id,
+        upload_path=artifact.relative_path,
+        checksum=artifact.checksum,
+        status="uploaded",
+        parser=_parser_name(artifact.original_filename),
+        vector_ids=[],
+    )
+    manifest_path = _store_document_manifest(
+        user.id,
+        doc,
+        status="uploaded",
+        parser=doc.parser,
+        chunk_count=0,
+        vector_ids=[],
+    )
+    return {
+        "document_id": doc.id,
+        "filename": doc.filename,
+        "size": doc.file_size,
+        "status": "uploaded",
+        "chunks": 0,
+        "ids": [],
+        "upload_path": doc.upload_path,
+        "checksum": doc.checksum,
+        "manifest_path": manifest_path,
+    }
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), user=Depends(get_current_user)):
     if not file.filename:
@@ -1153,6 +1329,34 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         "checksum": artifact.checksum,
         "manifest_path": manifest_path,
     }
+
+
+@router.post("/documents/{doc_id}/ingest")
+async def ingest_document(doc_id: int, user=Depends(get_current_user)):
+    """Index a previously stored original upload into this user's personal RAG."""
+    ensure_db()
+    doc = DocumentRepo.get(doc_id, user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento nao encontrado")
+    if doc.source != "upload" or not doc.upload_path:
+        raise HTTPException(status_code=400, detail="Documento nao possui upload original para ingerir")
+    if doc.status == "indexed":
+        return {
+            "document_id": doc.id,
+            "filename": doc.filename,
+            "size": doc.file_size,
+            "status": "indexed",
+            "chunks": doc.chunk_count,
+            "ids": json.loads(doc.vector_ids_json or "[]"),
+            "upload_path": doc.upload_path,
+            "checksum": doc.checksum,
+            "manifest_path": doc.manifest_path,
+            "already_indexed": True,
+        }
+    try:
+        return _ingest_stored_upload(user.id, doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/documents")

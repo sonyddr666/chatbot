@@ -25,7 +25,7 @@ O que ainda falta para ficar realmente redondo:
 - [x] UserSpace por usuario com `profile`, `workspace`, `uploads`, `rag` e `skills`.
 - [x] Onboarding salvo no banco, em `profile/onboarding.md` e no RAG pessoal.
 - [x] Workspace autenticado, com bloqueio de path traversal, preview com checksum e snapshot antes de aplicar patch.
-- [x] Upload original separado do indice RAG, parser para TXT/MD/CSV/JSON/PDF/DOCX e manifesto de ingestao.
+- [x] Upload original separado do indice RAG, com salvar primeiro, ingerir depois, parser para TXT/MD/CSV/JSON/PDF/DOCX e manifesto de ingestao.
 - [x] RAG com collection e metadata por usuario.
 - [x] Providers e preferencias pessoais, com chave mascarada na API/UI.
 - [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.
@@ -404,10 +404,13 @@ Fluxo novo:
 POST /documents/upload
   salva original em uploads/original/{file_id}/filename
   cria metadado
-  se ingest=true, extrai texto e cria chunks
+  marca documento como uploaded, sem criar chunks
 
 POST /documents/{id}/ingest
   reprocessa arquivo salvo
+
+POST /upload
+  caminho imediato legado para anexos do chat: salva e ingere na mesma requisicao
 ```
 
 Parsers:

@@ -631,6 +631,39 @@ class DocumentRepo:
             db.close()
 
     @staticmethod
+    def update_ingestion(
+        doc_id: int,
+        user_id: int,
+        *,
+        status: str,
+        parser: str,
+        chunk_count: int,
+        vector_ids: list[str] | None = None,
+        error_message: str = "",
+    ) -> Optional[KnowledgeDocument]:
+        """Update RAG-derived document state without changing the stored original."""
+        db = get_session_db()
+        try:
+            doc = (
+                db.query(KnowledgeDocument)
+                .filter(KnowledgeDocument.id == doc_id, KnowledgeDocument.user_id == user_id)
+                .first()
+            )
+            if not doc:
+                return None
+            doc.status = status
+            doc.parser = parser
+            doc.chunk_count = chunk_count
+            doc.vector_ids_json = json.dumps(vector_ids or [], ensure_ascii=False)
+            doc.error_message = error_message
+            db.commit()
+            db.refresh(doc)
+            db.expunge(doc)
+            return doc
+        finally:
+            db.close()
+
+    @staticmethod
     def list_all(user_id: int | None = None) -> list[KnowledgeDocument]:
         db = get_session_db()
         try:

@@ -14,6 +14,7 @@ export function DocumentsPanel({ open, onClose }: Props) {
   const [documents, setDocuments] = useState<DocumentInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [ingestingId, setIngestingId] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
   const [manifestLoadingId, setManifestLoadingId] = useState<number | null>(null)
   const [manifestDocumentId, setManifestDocumentId] = useState<number | null>(null)
@@ -41,14 +42,28 @@ export function DocumentsPanel({ open, onClose }: Props) {
     if (!file) return
     setUploading(true)
     try {
-      await api.uploadDocument(file)
-      toast.success('Arquivo salvo em uploads e ingerido no RAG')
+      await api.uploadOriginalDocument(file)
+      toast.success('Arquivo salvo. Escolha quando ingerir no RAG.')
       await loadDocuments()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao enviar arquivo')
       await loadDocuments()
     } finally {
       setUploading(false)
+    }
+  }, [loadDocuments])
+
+  const ingestDocument = useCallback(async (document: DocumentInfo) => {
+    setIngestingId(document.id)
+    try {
+      await api.ingestDocument(document.id)
+      toast.success('Documento ingerido no RAG pessoal')
+      await loadDocuments()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao ingerir documento')
+      await loadDocuments()
+    } finally {
+      setIngestingId(null)
     }
   }, [loadDocuments])
 
@@ -105,7 +120,7 @@ export function DocumentsPanel({ open, onClose }: Props) {
               Uploads e conhecimento pessoal
             </h2>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              Arquivos enviados ficam em uploads/original e o texto extraido entra no RAG deste usuario.
+              Arquivos enviados ficam em uploads/original. A ingestao no RAG pessoal acontece somente quando voce pedir.
             </p>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 hover:bg-black/5 dark:hover:bg-white/10">
@@ -137,7 +152,7 @@ export function DocumentsPanel({ open, onClose }: Props) {
             className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold"
             style={{ background: 'var(--accent)', color: '#fff' }}
           >
-            {uploading ? 'Enviando...' : 'Enviar para RAG'}
+            {uploading ? 'Enviando...' : 'Enviar arquivo'}
             <input
               type="file"
               className="hidden"
@@ -152,7 +167,7 @@ export function DocumentsPanel({ open, onClose }: Props) {
 
         <div className="mt-5 flex items-center justify-between">
           <h3 className="font-bold" style={{ color: 'var(--text-primary)' }}>
-            Documentos ingeridos
+            Arquivos enviados
           </h3>
           <button
             onClick={loadDocuments}
@@ -172,11 +187,13 @@ export function DocumentsPanel({ open, onClose }: Props) {
             </p>
           ) : documents.length === 0 ? (
             <p className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
-              Nenhum documento ingerido ainda.
+              Nenhum arquivo enviado ainda.
             </p>
           ) : documents.map(document => {
             const documentStatus = document.status || 'indexed'
             const hasIngestionError = documentStatus === 'error'
+            const pendingIngestion = documentStatus === 'uploaded'
+            const canIngest = document.source === 'upload' && Boolean(document.upload_path) && documentStatus !== 'indexed'
 
             return (
               <div
@@ -190,8 +207,8 @@ export function DocumentsPanel({ open, onClose }: Props) {
                 <div
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
                   style={{
-                    background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : 'var(--accent-light)',
-                    color: hasIngestionError ? 'var(--danger)' : 'var(--accent)',
+                    background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : pendingIngestion ? 'rgba(234, 179, 8, 0.16)' : 'var(--accent-light)',
+                    color: hasIngestionError ? 'var(--danger)' : pendingIngestion ? '#a16207' : 'var(--accent)',
                   }}
                 >
                   <FileText size={18} />
@@ -204,11 +221,11 @@ export function DocumentsPanel({ open, onClose }: Props) {
                     <span
                       className="rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.16em]"
                       style={{
-                        background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : 'var(--accent-light)',
-                        color: hasIngestionError ? 'var(--danger)' : 'var(--accent)',
+                        background: hasIngestionError ? 'rgba(239, 68, 68, 0.14)' : pendingIngestion ? 'rgba(234, 179, 8, 0.16)' : 'var(--accent-light)',
+                        color: hasIngestionError ? 'var(--danger)' : pendingIngestion ? '#a16207' : 'var(--accent)',
                       }}
                     >
-                      {hasIngestionError ? 'Erro na ingestao' : documentStatus}
+                      {hasIngestionError ? 'Erro na ingestao' : pendingIngestion ? 'Aguardando RAG' : documentStatus}
                     </span>
                   </div>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
@@ -228,6 +245,16 @@ export function DocumentsPanel({ open, onClose }: Props) {
                     </p>
                   ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {canIngest && (
+                      <button
+                        onClick={() => ingestDocument(document)}
+                        disabled={ingestingId === document.id}
+                        className="rounded-xl px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                        style={{ background: 'var(--accent)', color: '#fff' }}
+                      >
+                        {ingestingId === document.id ? 'Ingerindo...' : hasIngestionError ? 'Tentar ingerir de novo' : 'Ingerir no RAG'}
+                      </button>
+                    )}
                     <button
                       onClick={() => openManifest(document)}
                       disabled={!document.manifest_path || manifestLoadingId === document.id}

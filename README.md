@@ -311,7 +311,8 @@ Implementado:
 - Metadata sempre recebe `user_id` do usuario autenticado.
 - Collection sempre deriva de `user_id`, nao de input livre do frontend.
 - Manual ingest registra documento no banco.
-- Upload registra documento no banco.
+- Upload de documentos pode registrar o original sem indexar.
+- Ingestao posterior usa somente o original salvo do mesmo usuario.
 - Delecao remove documento do banco e chunks vetoriais.
 
 Rotas:
@@ -319,6 +320,8 @@ Rotas:
 ```txt
 POST   /api/v1/ingest
 POST   /api/v1/upload
+POST   /api/v1/documents/upload
+POST   /api/v1/documents/{doc_id}/ingest
 GET    /api/v1/documents
 DELETE /api/v1/documents/{doc_id}
 ```
@@ -335,11 +338,13 @@ Campos retornados na listagem de documentos:
 - `status`
 - `parser`
 - `error_message`
+- `manifest_path`
 - `created_at`
 
 Status esperados:
 
 - `indexed`: documento salvo e indexado no RAG.
+- `uploaded`: original salvo, aguardando o usuario pedir ingestao.
 - `error`: upload registrado, mas parsing/indexacao falhou.
 
 ### Upload e Parsing
@@ -347,6 +352,8 @@ Status esperados:
 Implementado:
 
 - Upload original salvo antes de indexar.
+- DocumentsPanel usa envio em duas etapas: salvar original e depois "Ingerir no RAG".
+- `/api/v1/upload` continua como caminho imediato para anexos do chat.
 - Caminho fisico fica dentro de `uploads/original/{upload_id}`.
 - Checksum salvo para rastreabilidade.
 - Parser usado fica salvo no banco.
@@ -896,17 +903,18 @@ Para testar o fluxo principal:
 5. Fazer onboarding inicial.
 6. Enviar mensagem no chat.
 7. Subir documento em Documents.
-8. Perguntar algo sobre o documento.
-9. Criar arquivo no Workspace.
-10. Testar patch preview/apply.
-11. Criar provider pessoal.
-12. Ativar provider pessoal.
-13. Criar preferencia.
-14. Aceitar/rejeitar sugestao.
-15. Ativar/desativar skill.
-16. Conferir logs de skills.
-17. Com `workspace_read` ativa, enviar `@workspace:read caminho/do/arquivo.md`.
-18. Com `workspace_write_preview` ativa, enviar `@workspace:preview caminho/do/arquivo.md`, depois `---` e o conteudo proposto.
+8. Clicar "Ingerir no RAG" no documento enviado.
+9. Perguntar algo sobre o documento.
+10. Criar arquivo no Workspace.
+11. Testar patch preview/apply.
+12. Criar provider pessoal.
+13. Ativar provider pessoal.
+14. Criar preferencia.
+15. Aceitar/rejeitar sugestao.
+16. Ativar/desativar skill.
+17. Conferir logs de skills.
+18. Com `workspace_read` ativa, enviar `@workspace:read caminho/do/arquivo.md`.
+19. Com `workspace_write_preview` ativa, enviar `@workspace:preview caminho/do/arquivo.md`, depois `---` e o conteudo proposto.
 
 ## Resumo Final
 
