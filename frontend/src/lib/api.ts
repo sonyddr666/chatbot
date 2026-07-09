@@ -46,6 +46,7 @@ export interface DocumentInfo {
   status?: string
   parser?: string | null
   error_message?: string | null
+  manifest_path?: string | null
   created_at: string
 }
 export interface Stats {

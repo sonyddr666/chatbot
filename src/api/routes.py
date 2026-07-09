@@ -1036,7 +1036,7 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
         vector_ids=ids,
     )
     try:
-        write_rag_manifest(
+        manifest_path = write_rag_manifest(
             user.id,
             document_id=doc.id,
             filename=filename,
@@ -1048,6 +1048,7 @@ async def ingest(body: IngestRequest, user=Depends(get_current_user)):
             vector_ids=ids,
             metadata=body.metadata or {},
         )
+        DocumentRepo.set_manifest_path(doc.id, user.id, manifest_path)
     except Exception:
         pass
     DOCUMENTS_INGESTED.inc()
@@ -1086,7 +1087,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
             vector_ids=[],
         )
         try:
-            write_rag_manifest(
+            manifest_path = write_rag_manifest(
                 user.id,
                 document_id=doc.id,
                 filename=artifact.original_filename,
@@ -1100,6 +1101,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
                 checksum=artifact.checksum,
                 error_message=str(exc),
             )
+            DocumentRepo.set_manifest_path(doc.id, user.id, manifest_path)
         except Exception:
             pass
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1138,6 +1140,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
             upload_path=artifact.relative_path,
             checksum=artifact.checksum,
         )
+        DocumentRepo.set_manifest_path(doc.id, user.id, manifest_path)
     except Exception:
         manifest_path = ""
     DOCUMENTS_INGESTED.inc()
@@ -1165,6 +1168,7 @@ async def list_documents(user=Depends(get_current_user)):
             "status": d.status or "",
             "parser": d.parser or "",
             "error_message": d.error_message or "",
+            "manifest_path": d.manifest_path or "",
             "created_at": d.created_at.isoformat(),
         }
         for d in docs

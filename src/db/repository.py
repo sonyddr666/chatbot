@@ -618,6 +618,7 @@ class DocumentRepo:
         parser: str = "",
         error_message: str = "",
         vector_ids: list[str] | None = None,
+        manifest_path: str = "",
     ) -> KnowledgeDocument:
         db = get_session_db()
         try:
@@ -631,6 +632,7 @@ class DocumentRepo:
                 parser=parser,
                 error_message=error_message,
                 vector_ids_json=json.dumps(vector_ids or [], ensure_ascii=False),
+                manifest_path=manifest_path,
                 chunk_count=chunk_count,
                 file_size=file_size,
             )
@@ -639,6 +641,22 @@ class DocumentRepo:
             db.refresh(doc)
             db.expunge(doc)
             return doc
+        finally:
+            db.close()
+
+    @staticmethod
+    def set_manifest_path(doc_id: int, user_id: int | None, manifest_path: str) -> bool:
+        db = get_session_db()
+        try:
+            query = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id)
+            if user_id is not None:
+                query = query.filter(KnowledgeDocument.user_id == user_id)
+            doc = query.first()
+            if not doc:
+                return False
+            doc.manifest_path = manifest_path
+            db.commit()
+            return True
         finally:
             db.close()
 
