@@ -59,7 +59,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.chat import ChatEngine
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
-    from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+    from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
     from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
     from src.core.preference_suggestions import create_suggestion_from_message
     from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
@@ -212,6 +212,9 @@ async def websocket_chat(websocket: WebSocket):
                     await rag_task
                 await websocket.send_json({"type": "status", "text": "Verificando skills e contexto..."})
                 runtime_context = await run_enabled_skill_context(user.id, message)
+                skill_activity = runtime_skill_activity(runtime_context)
+                if skill_activity:
+                    await websocket.send_json({"type": "skill_activity", "activity": skill_activity})
                 prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
                 memory.update_system_prompt(prompt_context)
                 await websocket.send_json({

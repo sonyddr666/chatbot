@@ -302,6 +302,17 @@ async function httpStream(
         msgs[msgs.length - 1] = { ...last, workspacePlan: chunk.workspacePlan }
         useChatStore.setState({ messages: msgs })
       }
+    } else if (chunk.type === 'skill_activity' && chunk.skillActivity) {
+      const s = useChatStore.getState()
+      const msgs = [...s.messages]
+      const last = msgs[msgs.length - 1]
+      if (last?.role === 'assistant') {
+        msgs[msgs.length - 1] = {
+          ...last,
+          skillActivities: [...(last.skillActivities || []), chunk.skillActivity],
+        }
+        useChatStore.setState({ messages: msgs })
+      }
     } else if (chunk.type === 'done') {
       const s = useChatStore.getState()
       const msgs = [...s.messages]

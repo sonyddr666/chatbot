@@ -263,6 +263,7 @@ Implementado:
 - OpenCode usa SSE direto para preservar `reasoning_content` do DeepSeek e os tokens da resposta final.
 - O balão mostra estados de processamento antes do primeiro token: contexto, skills e modelo pensando.
 - O bloco Thinking aparece durante o raciocinio e permanece acessivel enquanto a resposta final e transmitida.
+- O bloco expansivel `Ferramentas e Skills` confirma cada pesquisa concluida, informa a Skill usada e mostra links das fontes.
 - Respostas que chegam em um bloco grande sao divididas visualmente para evitar que o texto apareca inteiro de uma vez.
 - Regeneracao de resposta.
 - WebSocket autenticado.

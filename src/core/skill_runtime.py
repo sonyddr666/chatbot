@@ -36,6 +36,9 @@ WORKSPACE_PREVIEW_COMMAND = re.compile(
     r"^\s*@workspace:preview\s+([^\r\n]+)\r?\n---\r?\n([\s\S]+)$",
     re.IGNORECASE,
 )
+SKILL_RESULT_NAME = re.compile(r"Resultado da skill ([a-zA-Z0-9_-]+):")
+MARKDOWN_SOURCE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+BARE_SOURCE = re.compile(r"https?://[^\s)>]+")
 
 
 def _enabled_names(skills: Iterable[dict]) -> set[str]:
@@ -83,8 +86,53 @@ def build_runtime_context(skill_name: str, result: str | None) -> str:
     return (
         f"Resultado da skill {skill_name}:\n"
         f"{result}\n\n"
-        "Use este resultado como contexto auxiliar e cite fontes/titulos quando disponiveis."
+        "A pesquisa acima JA foi executada pelo backend para esta mensagem. "
+        "Nao peca autorizacao para pesquisar novamente e nao diga que a skill precisa ser ativada. "
+        "Responda usando o resultado atual e preserve as URLs das fontes em Markdown."
     )
+
+
+def runtime_skill_activity(runtime_context: str) -> dict | None:
+    """Build safe UI evidence only from a successfully returned search context."""
+    match = SKILL_RESULT_NAME.search(runtime_context or "")
+    if not match:
+        return None
+    skill_name = match.group(1)
+    if skill_name not in SEARCH_SKILLS:
+        return None
+
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_label, url in MARKDOWN_SOURCE.findall(runtime_context):
+        clean_url = url.rstrip(".,;:")
+        if clean_url in seen:
+            continue
+        seen.add(clean_url)
+        label = raw_label.strip()
+        if label.isdigit():
+            label = f"Fonte {label}"
+        sources.append({"label": label[:80] or f"Fonte {len(sources) + 1}", "url": clean_url})
+    for url in BARE_SOURCE.findall(runtime_context):
+        clean_url = url.rstrip(".,;:")
+        if clean_url in seen:
+            continue
+        seen.add(clean_url)
+        sources.append({"label": f"Fonte {len(sources) + 1}", "url": clean_url})
+
+    used_fallback = "Fallback de pesquisa simples" in runtime_context
+    if skill_name == "perplexo_search" and not used_fallback:
+        label = "Pesquisa Perplexo concluida"
+    elif used_fallback:
+        label = "Pesquisa concluida pelo fallback"
+    else:
+        label = "Pesquisa web concluida"
+    return {
+        "name": skill_name,
+        "status": "completed",
+        "label": label,
+        "source_count": len(sources),
+        "sources": sources[:8],
+    }
 
 
 def _truncate_for_context(value: str, limit: int = MAX_SKILL_CONTEXT_CHARS) -> str:

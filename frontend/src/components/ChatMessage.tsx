@@ -8,6 +8,7 @@ import type { ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { ThinkingBlock } from './ThinkingBlock'
 import { WorkspacePlanCard } from './WorkspacePlanCard'
+import { SkillActivityBlock } from './SkillActivityBlock'
 
 interface Props {
   message: ChatMessageType
@@ -189,6 +190,9 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate }: 
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{message.content}</p>
           ) : (
             <>
+              {!!message.skillActivities?.length && (
+                <SkillActivityBlock activities={message.skillActivities} />
+              )}
               {/* Thinking block — mostra reasoning se existir */}
               {(hasReasoning || isReasoning) && (
                 <ThinkingBlock

@@ -72,6 +72,21 @@ export default function App() {
       return
     }
 
+    if (chunk.type === 'skill_activity' && chunk.skillActivity) {
+      useChatStore.setState(state => {
+        const nextMessages = [...state.messages]
+        const last = nextMessages[nextMessages.length - 1]
+        if (last?.role === 'assistant') {
+          nextMessages[nextMessages.length - 1] = {
+            ...last,
+            skillActivities: [...(last.skillActivities || []), chunk.skillActivity!],
+          }
+        }
+        return { messages: nextMessages }
+      })
+      return
+    }
+
     if (chunk.type === 'done') {
       useChatStore.setState(state => {
         const nextMessages = [...state.messages]

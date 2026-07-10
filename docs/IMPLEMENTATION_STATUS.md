@@ -82,6 +82,9 @@ Shell permanece bloqueado. A compatibilidade com o formato legado de skills de b
 
 O painel de Skills permite salvar por usuario o modelo, foco, periodo e uso de fallback da `perplexo_search`. O teste de conexao consulta somente `/health`; a execucao consulta somente `/search`. Endpoints de tokens e credenciais do servidor externo nao sao expostos ao modelo.
 
+- Pesquisas concluidas geram um evento autenticado `skill_activity`. A resposta mostra um bloco verde expansivel `Ferramentas e Skills` com nome, estado e links reais das fontes.
+- O modelo recebe instrucao explicita de que resultados presentes no contexto ja foram executados, evitando pedir uma segunda autorizacao depois da pesquisa.
+
 ## Streaming e Thinking
 
 - OpenCode/DeepSeek usa o SSE nativo de `/chat/completions`, sem passar pelo adaptador que descartava `reasoning_content`.

@@ -22,6 +22,17 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
 export interface Profile {
   id: string; name: string; model: string; provider: string; active: boolean
 }
+export interface SkillSource {
+  label: string
+  url: string
+}
+export interface SkillActivity {
+  name: string
+  status: 'completed' | 'failed' | 'running'
+  label: string
+  source_count: number
+  sources: SkillSource[]
+}
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; content: string; timestamp: Date
   messageId?: number; feedbackScore?: number | null; tokens?: number
@@ -31,6 +42,7 @@ export interface ChatMessage {
   modelId?: string | null
   modelName?: string | null
   workspacePlan?: WorkspaceActionPlan
+  skillActivities?: SkillActivity[]
 }
 export interface Conversation {
   id: number; session_id: string; title: string; language: string
@@ -212,7 +224,7 @@ export interface WorkspaceActionPlan {
 
 /** Chunk do streaming SSE */
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan'
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity'
   text?: string
   messageId?: number
   hasReasoning?: boolean
@@ -223,6 +235,7 @@ export interface StreamChunk {
   modelId?: string
   modelName?: string
   workspacePlan?: WorkspaceActionPlan
+  skillActivity?: SkillActivity
   metrics?: {
     ttft_s?: number
     total_s?: number
@@ -379,6 +392,15 @@ export const api = {
               yield { type: 'workspace_plan', workspacePlan: JSON.parse(raw) }
             } catch {
               throw new Error('Plano de Workspace invalido')
+            }
+            continue
+          }
+
+          if (currentEvent === 'skill_activity') {
+            try {
+              yield { type: 'skill_activity', skillActivity: JSON.parse(raw) }
+            } catch {
+              throw new Error('Atividade de Skill invalida')
             }
             continue
           }

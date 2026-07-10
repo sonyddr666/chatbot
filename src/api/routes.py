@@ -28,7 +28,7 @@ from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, A
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.classifier import classify_route
 from src.core.llm import get_llm
-from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
 from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
@@ -1115,6 +1115,12 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             await rag_task
         yield {"event": "status", "data": "Verificando skills e contexto..."}
         runtime_context = await run_enabled_skill_context(user.id, body.message)
+        skill_activity = runtime_skill_activity(runtime_context)
+        if skill_activity:
+            yield {
+                "event": "skill_activity",
+                "data": json.dumps(skill_activity, ensure_ascii=False),
+            }
         prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
         memory.update_system_prompt(prompt_context)
         yield {

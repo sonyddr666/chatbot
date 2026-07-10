@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from src.core.skill_runtime import (
     build_runtime_context,
     run_enabled_skill_context,
+    runtime_skill_activity,
     should_force_rag,
     should_run_web_search,
 )
@@ -24,6 +25,22 @@ class SkillRuntimeTest(unittest.TestCase):
         context = build_runtime_context("web_search", "Resultados mockados")
         self.assertIn("Resultado da skill web_search", context)
         self.assertIn("Resultados mockados", context)
+
+    def test_perplexo_context_creates_visible_completed_activity_with_sources(self):
+        context = build_runtime_context(
+            "perplexo_search",
+            "Odin e um deus nordico.[1](https://example.test/odin) "
+            "[2](https://example.test/mitologia)",
+        )
+
+        activity = runtime_skill_activity(context)
+
+        self.assertIsNotNone(activity)
+        self.assertEqual(activity["name"], "perplexo_search")
+        self.assertEqual(activity["status"], "completed")
+        self.assertEqual(activity["source_count"], 2)
+        self.assertIn("Pesquisa Perplexo concluida", activity["label"])
+        self.assertIn("JA foi executada", context)
 
 
 class SkillRuntimeAsyncTest(unittest.IsolatedAsyncioTestCase):

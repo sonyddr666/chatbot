@@ -71,6 +71,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
             onChunk?.({ type: 'workspace_plan', workspacePlan: data.plan })
             break
 
+          case 'skill_activity':
+            onChunk?.({ type: 'skill_activity', skillActivity: data.activity })
+            break
+
           case 'done':
             onChunk?.({
               type: 'done',

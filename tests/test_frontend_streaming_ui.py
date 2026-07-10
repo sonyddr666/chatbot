@@ -23,6 +23,17 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("msg.id === messages[messages.length - 1]?.id", app)
         self.assertIn("onStatus: status =>", app)
 
+    def test_completed_skill_activity_is_visible_with_source_links(self):
+        api = (ROOT / "frontend/src/lib/api.ts").read_text(encoding="utf-8")
+        app = (ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
+        block = (ROOT / "frontend/src/components/SkillActivityBlock.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("type: 'skill_activity'", api)
+        self.assertIn("chunk.type === 'skill_activity'", app)
+        self.assertIn("Ferramentas e Skills", block)
+        self.assertIn("fontes verificadas", block)
+        self.assertIn('target="_blank"', block)
+
 
 if __name__ == "__main__":
     unittest.main()
