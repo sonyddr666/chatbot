@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.config import settings
 from src.core.workspace import read_text_file
-from src.core.workspace_agent import apply_workspace_plan, create_workspace_plan, get_workspace_plan
+from src.core.workspace_agent import apply_workspace_plan, create_workspace_plan, get_workspace_plan, workspace_plan_status_context
 from src.db.models import init_db
 from src.db.repository import DocumentRepo, SkillRepo, UserRepo
 
@@ -60,6 +60,7 @@ class WorkspaceAgentTest(unittest.TestCase):
         self.assertEqual(applied["status"], "applied")
         self.assertEqual(read_text_file(self.user.id, "sobre-mim/README.md"), "# Eu\n")
         self.assertEqual(DocumentRepo.list_all(self.user.id), [])
+        self.assertIn("status=applied", workspace_plan_status_context(self.user.id))
 
     def test_plan_is_stored_only_inside_its_owner_userspace(self):
         other = UserRepo.create_user(

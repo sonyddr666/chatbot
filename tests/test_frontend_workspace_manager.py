@@ -20,9 +20,14 @@ class FrontendWorkspaceManagerTest(unittest.TestCase):
 
         self.assertIn("WorkspacePlanCard", plan_card)
         self.assertIn("Confirmar e executar", plan_card)
+        self.assertIn("Tudo concluido", plan_card)
+        self.assertIn("#16a34a", plan_card)
         self.assertIn("Adicionar selecionados ao RAG", plan_card)
         self.assertIn("workspaceAiApplyPlan", api)
         self.assertIn("workspace_plan", api)
+
+        chat_message = Path("frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
+        self.assertIn("workspace-plan:[a-f0-9]{32}", chat_message)
 
     def test_sidebar_upload_no_longer_uses_immediate_rag_endpoint(self):
         sidebar = Path("frontend/src/components/Sidebar.tsx").read_text(encoding="utf-8")

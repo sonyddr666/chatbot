@@ -60,7 +60,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
-    from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message
+    from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
     from src.core.preference_suggestions import create_suggestion_from_message
     from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
     from src.rag.personal import retrieve_user_context
@@ -96,6 +96,9 @@ async def websocket_chat(websocket: WebSocket):
             sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
         if runtime_context:
             sections.append(runtime_context)
+        workspace_status = workspace_plan_status_context(user_id)
+        if workspace_status:
+            sections.append(workspace_status)
         preferences_context = UserPreferenceRepo.prompt_context_for_user(user_id)
         if preferences_context:
             sections.append(preferences_context)

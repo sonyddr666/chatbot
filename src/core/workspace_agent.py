@@ -71,6 +71,30 @@ def workspace_plan_message(plan: dict) -> str:
     )
 
 
+def workspace_plan_status_context(user_id: int, limit: int = 5) -> str:
+    """Expose recent real plan status so stale chat messages cannot override it."""
+    folder = safe_user_path(user_id, "skills", "audit/workspace_plans")
+    if not folder.is_dir():
+        return ""
+    plans: list[dict] = []
+    for path in sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+        try:
+            plan = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        plans.append(plan)
+    if not plans:
+        return ""
+    lines = [
+        "Estado real recente dos planos do Workspace:",
+        "Use apenas se o usuario perguntar sobre essas operacoes. Nao mencione espontaneamente.",
+        "O status abaixo prevalece sobre mensagens antigas; se estiver applied, nao peca nova confirmacao.",
+    ]
+    for plan in plans:
+        lines.append(f"- {plan.get('id')}: status={plan.get('status')}; resumo={plan.get('summary', '')}")
+    return "\n".join(lines)
+
+
 def _validate_relative_path(user_id: int, raw_path: str) -> str:
     value = str(raw_path or "").strip().replace("\\", "/")
     if value.startswith("/") or re.match(r"^[A-Za-z]:/", value):

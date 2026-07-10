@@ -28,7 +28,7 @@ from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, A
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
-from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message
+from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
     activate_user_provider,
@@ -95,6 +95,9 @@ def _user_prompt_context(
         sections.append("Base de conhecimento pessoal do usuario:\n" + rag_context)
     if runtime_context:
         sections.append(runtime_context)
+    workspace_status = workspace_plan_status_context(user_id)
+    if workspace_status:
+        sections.append(workspace_status)
     preferences_context = UserPreferenceRepo.prompt_context_for_user(user_id)
     if preferences_context:
         sections.append(preferences_context)

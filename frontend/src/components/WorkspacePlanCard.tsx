@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { Check, Database, FileEdit, FilePlus2, FolderPlus, MoveRight, Trash2, X } from 'lucide-react'
+import { Check, CheckCircle2, Database, FileEdit, FilePlus2, FolderPlus, MoveRight, Trash2, X } from 'lucide-react'
 import { api, type WorkspaceAction, type WorkspaceActionPlan } from '../lib/api'
 
 interface Props {
@@ -32,6 +32,8 @@ export function WorkspacePlanCard({ plan }: Props) {
   const [ragPaths, setRagPaths] = useState<string[]>([])
   const [ragDone, setRagDone] = useState<string[]>([])
   const pending = current.status === 'pending'
+  const applied = current.status === 'applied'
+  const statusLabel = applied ? 'Concluido' : current.status === 'cancelled' ? 'Cancelado' : current.status
   const eligibleRagPaths = current.actions
     .filter(action => action.operation === 'write_file' && action.path)
     .map(action => action.path as string)
@@ -85,7 +87,10 @@ export function WorkspacePlanCard({ plan }: Props) {
   }
 
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+    <div
+      className="mt-3 overflow-hidden rounded-2xl border"
+      style={{ borderColor: applied ? '#16a34a' : 'var(--border)', background: 'var(--bg-secondary)' }}
+    >
       <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -97,11 +102,11 @@ export function WorkspacePlanCard({ plan }: Props) {
           <span
             className="rounded-full px-2 py-1 text-[10px] font-bold uppercase"
             style={{
-              background: pending ? 'rgba(234,179,8,.16)' : 'var(--accent-light)',
-              color: pending ? '#a16207' : 'var(--accent)',
+              background: pending ? 'rgba(234,179,8,.16)' : applied ? 'rgba(22,163,74,.16)' : 'var(--bg-tertiary)',
+              color: pending ? '#a16207' : applied ? '#16a34a' : 'var(--text-secondary)',
             }}
           >
-            {current.status}
+            {statusLabel}
           </span>
         </div>
       </div>
@@ -154,6 +159,20 @@ export function WorkspacePlanCard({ plan }: Props) {
           >
             <Check size={14} /> {busy ? 'Executando...' : 'Confirmar e executar'}
           </button>
+        </div>
+      ) : null}
+
+      {applied ? (
+        <div className="border-t p-3" style={{ borderColor: 'rgba(22,163,74,.35)', background: 'rgba(22,163,74,.12)' }}>
+          <div className="flex items-start gap-2" style={{ color: '#16a34a' }}>
+            <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
+            <div>
+              <p className="text-sm font-black">Tudo concluido</p>
+              <p className="mt-0.5 text-xs font-medium">
+                Criei e organizei tudo que voce pediu. O Workspace ja esta atualizado.
+              </p>
+            </div>
+          </div>
         </div>
       ) : null}
 

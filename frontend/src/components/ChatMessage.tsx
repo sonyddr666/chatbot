@@ -155,16 +155,20 @@ export function ChatMessageBubble({ message, isLoading, onRegenerate }: Props) {
   const isReasoning = isLoading && message.content === '' && message.reasoning
   // Reasoning já finalizado
   const hasReasoning = !isLoading && !!message.reasoning
+  const displayContent = useMemo(
+    () => message.content.replace(/\s*<!-- workspace-plan:[a-f0-9]{32} -->\s*/gi, '').trim(),
+    [message.content],
+  )
 
   const memoContent = useMemo(
     () => (
       <div className="markdown">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock }}>
-          {message.content}
+          {displayContent}
         </ReactMarkdown>
       </div>
     ),
-    [message.content],
+    [displayContent],
   )
 
   return (
