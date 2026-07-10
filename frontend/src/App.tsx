@@ -474,7 +474,7 @@ export default function App() {
           )}
         </div>
 
-        <ChatInput onSend={handleSend} disabled={isLoading} onStop={stopGeneration} />
+        <ChatInput onSend={handleSend} busy={isLoading} onStop={stopGeneration} />
       </div>
     </div>
   )

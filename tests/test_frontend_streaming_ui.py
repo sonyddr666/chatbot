@@ -34,6 +34,15 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("fontes verificadas", block)
         self.assertIn('target="_blank"', block)
 
+    def test_input_remains_editable_while_model_is_busy(self):
+        app = (ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
+        chat_input = (ROOT / "frontend/src/components/ChatInput.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("busy={isLoading}", app)
+        self.assertNotIn("disabled={busy}", chat_input)
+        self.assertIn("Continue digitando", chat_input)
+        self.assertIn("disabled={busy || !input.trim()}", chat_input)
+
 
 if __name__ == "__main__":
     unittest.main()

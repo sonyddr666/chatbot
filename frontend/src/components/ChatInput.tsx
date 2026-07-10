@@ -3,26 +3,27 @@ import { Send, Sparkles, StopCircle } from 'lucide-react'
 
 interface Props {
   onSend: (message: string) => void
-  disabled?: boolean
+  busy?: boolean
   onStop?: () => void
 }
 
-export function ChatInput({ onSend, disabled, onStop }: Props) {
+export function ChatInput({ onSend, busy = false, onStop }: Props) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    if (!disabled && textareaRef.current) textareaRef.current.focus()
-  }, [disabled])
+    if (!busy && textareaRef.current) textareaRef.current.focus()
+  }, [busy])
 
   const handleSend = () => {
-    if (!input.trim() || disabled) return
+    if (!input.trim() || busy) return
     onSend(input.trim())
     setInput('')
   }
 
   const handleKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (busy) return
       e.preventDefault(); handleSend()
     }
   }
@@ -42,14 +43,15 @@ export function ChatInput({ onSend, disabled, onStop }: Props) {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para quebrar linha)"
+            placeholder={busy
+              ? 'Continue digitando... o envio libera quando a resposta terminar'
+              : 'Digite sua mensagem... (Enter para enviar, Shift+Enter para quebrar linha)'}
             rows={1}
-            disabled={disabled}
             className="flex-1 resize-none rounded-lg px-3 py-2.5 text-[15px] outline-none bg-transparent"
             style={{ color: 'var(--text-primary)', maxHeight: '200px' }}
           />
           <div className="flex items-center gap-1">
-            {disabled && onStop ? (
+            {busy && onStop ? (
               <button onClick={onStop}
                 className="p-2.5 rounded-lg transition-colors"
                 style={{ background: 'var(--danger)', color: '#fff' }}
@@ -58,11 +60,11 @@ export function ChatInput({ onSend, disabled, onStop }: Props) {
               </button>
             ) : (
               <button onClick={handleSend}
-                disabled={disabled || !input.trim()}
+                disabled={busy || !input.trim()}
                 className="p-2.5 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ background: input.trim() ? 'var(--accent)' : 'var(--border)', color: input.trim() ? '#fff' : 'var(--text-tertiary)' }}
                 title="Enviar">
-                {disabled ? (
+                {busy ? (
                   <Sparkles size={18} className="animate-pulse" />
                 ) : (
                   <Send size={18} />
