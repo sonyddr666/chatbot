@@ -935,6 +935,9 @@ por exemplo `OPENCODE_ZEN_API_KEY`, `OPENAI_API_KEY` ou `ANTHROPIC_API_KEY`.
 O volume nomeado `chatbot-data` preserva SQLite, usuarios, uploads, Chroma e caches
 de embeddings entre rebuilds. Mantenha uma unica replica da API.
 
+A imagem da API instala explicitamente o PyTorch CPU-only. Isso evita baixar CUDA,
+cuDNN e bibliotecas NVIDIA desnecessarias durante o build em servidores sem GPU NVIDIA.
+
 ## Banco de Dados
 
 Modelos principais:
