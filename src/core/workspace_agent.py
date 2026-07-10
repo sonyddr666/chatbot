@@ -19,7 +19,7 @@ from src.core.patcher import apply_workspace_patch, preview_workspace_patch
 from src.core.skill_permissions import can_execute_skill
 from src.core.userspace import safe_user_path
 from src.core.workspace import delete_path, mkdir, move_path, read_text_file, write_text_file
-from src.db.repository import SkillRepo, SkillRunRepo
+from src.db.repository import ConversationRepo, SkillRepo, SkillRunRepo
 
 
 MAX_PLAN_ACTIONS = 20
@@ -34,10 +34,11 @@ TEXT_EXTENSIONS = {
     ".css", ".scss", ".xml", ".sql", ".sh", ".ps1",
 }
 WORKSPACE_MUTATION_VERBS = (
-    "crie", "criar", "cria", "edite", "editar", "altere", "alterar",
+    "crie", "criar", "cria", "edite", "edita", "editar", "altere", "altera", "alterar",
     "escreva", "salve", "mova", "mover", "renomeie", "renomear",
     "apague", "apagar", "delete", "deletar", "remova", "remover",
-    "organize", "gerencie",
+    "organize", "gerencie", "preencha", "preencher", "coloque", "coloca",
+    "adicione", "adicionar", "atualize", "atualizar",
 )
 WORKSPACE_TARGETS = (
     "arquivo", "arquivos", "documento", "documentos", "nota", "notas",
@@ -46,6 +47,7 @@ WORKSPACE_TARGETS = (
 )
 SEARCH_SKILL_NAMES = {"perplexo_search", "simple_search", "search_and_answer", "web_search"}
 MAX_RECENT_SEARCH_CHARS = 12000
+MAX_HISTORY_EXPORT_BYTES = 950 * 1024
 
 
 def _fold(value: str) -> str:
@@ -53,14 +55,18 @@ def _fold(value: str) -> str:
     return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
 
 
-def is_workspace_management_request(message: str) -> bool:
+def is_workspace_management_request(message: str, user_id: int | None = None) -> bool:
     """Detect direct requests to mutate workspace files, not general explanations."""
     folded = _fold(message)
     if not folded.strip() or "como criar" in folded or "como editar" in folded:
         return False
     verb_pattern = rf"\b(?:{'|'.join(WORKSPACE_MUTATION_VERBS)})\b"
     target_pattern = rf"\b(?:{'|'.join(WORKSPACE_TARGETS)})\b"
-    return bool(re.search(verb_pattern, folded) and re.search(target_pattern, folded))
+    has_mutation = bool(re.search(verb_pattern, folded))
+    if has_mutation and re.search(target_pattern, folded):
+        return True
+    reference = re.search(r"\b(?:ele|ela|isso|esse|essa|este|esta|anterior|criado|criada)\b", folded)
+    return bool(has_mutation and reference and user_id and _latest_applied_workspace_file(user_id))
 
 
 def workspace_manager_enabled(user_id: int) -> bool:
@@ -101,6 +107,166 @@ def workspace_plan_status_context(user_id: int, limit: int = 5) -> str:
     for plan in plans:
         lines.append(f"- {plan.get('id')}: status={plan.get('status')}; resumo={plan.get('summary', '')}")
     return "\n".join(lines)
+
+
+def _latest_applied_workspace_file(user_id: int) -> str:
+    """Resolve references such as 'edite ele' from the latest real applied plan."""
+    folder = safe_user_path(user_id, "skills", "audit/workspace_plans")
+    if not folder.is_dir():
+        return ""
+    paths = sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for path in paths:
+        try:
+            plan = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if plan.get("status") != "applied":
+            continue
+        for action in reversed(plan.get("actions") or []):
+            if action.get("operation") != "write_file":
+                continue
+            relative_path = str(action.get("path") or "")
+            if relative_path and safe_user_path(user_id, "workspace", relative_path).is_file():
+                return relative_path
+    return ""
+
+
+def _conversation_export_requested(instruction: str) -> bool:
+    folded = _fold(instruction)
+    history_reference = re.search(
+        r"\b(?:chat|chats|conversa|conversas|historico|mensagem|mensagens)\b",
+        folded,
+    )
+    complete_reference = re.search(
+        r"\b(?:todos|todas|completo|completos|completa|completas|inteiro|inteira|dados)\b",
+        folded,
+    )
+    return bool(history_reference and complete_reference)
+
+
+def _explicit_workspace_file(instruction: str) -> str:
+    match = re.search(
+        r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:md|markdown|txt|json|csv|yaml|yml))",
+        instruction,
+        re.IGNORECASE,
+    )
+    return match.group(1).replace("\\", "/") if match else ""
+
+
+def _conversation_export_markdown(
+    user_id: int,
+    instruction: str,
+    session_id: str | None = None,
+) -> tuple[str, int, int]:
+    folded = _fold(instruction)
+    all_sessions = bool(re.search(
+        r"\b(?:todos os chats|todos chats|todas as conversas|todas conversas|historico completo)\b",
+        folded,
+    ))
+    selected_session = None if all_sessions else session_id
+    conversations = ConversationRepo.export_for_user(user_id, selected_session)
+    lines = [
+        "# Historico completo das conversas",
+        "",
+        f"Exportado em: {datetime.now(timezone.utc).isoformat()}",
+        f"Escopo: {'todas as conversas' if all_sessions else 'conversa atual'}",
+        "",
+    ]
+    message_count = 0
+    for conversation in conversations:
+        messages = list(conversation.get("messages") or [])
+        if messages and messages[-1].get("role") == "user":
+            if str(messages[-1].get("content") or "").strip() == instruction.strip():
+                messages.pop()
+        if not messages:
+            continue
+        lines.extend([
+            f"## {conversation.get('title') or 'Conversa sem titulo'}",
+            "",
+            f"- Sessao: `{conversation.get('session_id') or ''}`",
+            f"- Criada em: {conversation.get('created_at') or ''}",
+            f"- Atualizada em: {conversation.get('updated_at') or ''}",
+            "",
+        ])
+        for index, message in enumerate(messages, start=1):
+            message_count += 1
+            role = "Usuario" if message.get("role") == "user" else "Assistente"
+            lines.extend([
+                f"### {index}. {role}",
+                "",
+                f"Data: {message.get('created_at') or ''}",
+            ])
+            if message.get("provider_name") or message.get("model_name"):
+                lines.append(
+                    f"Modelo: {message.get('provider_name') or ''} / {message.get('model_name') or ''}"
+                )
+            lines.extend(["", str(message.get("content") or ""), ""])
+            reasoning = str(message.get("reasoning") or "").strip()
+            if reasoning:
+                lines.extend(["#### Raciocinio salvo", "", reasoning, ""])
+            try:
+                activities = json.loads(message.get("skill_activities_json") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                activities = []
+            if activities:
+                lines.extend([
+                    "#### Skills e ferramentas",
+                    "",
+                    "```json",
+                    json.dumps(activities, ensure_ascii=False, indent=2),
+                    "```",
+                    "",
+                ])
+    if all_sessions:
+        skill_runs = list(reversed(SkillRunRepo.list_for_user(user_id, limit=10000)))
+        if skill_runs:
+            lines.extend(["# Registro completo de Skills e ferramentas", ""])
+            for run in skill_runs:
+                lines.extend([
+                    f"## {run.get('skill_name') or 'skill'} - {run.get('status') or 'unknown'}",
+                    "",
+                    f"Inicio: {run.get('started_at') or ''}",
+                    f"Fim: {run.get('finished_at') or ''}",
+                    "",
+                    "### Entrada",
+                    "",
+                    "```json",
+                    str(run.get("input_json") or "{}"),
+                    "```",
+                    "",
+                ])
+                output = str(run.get("output_summary") or "").strip()
+                if output:
+                    lines.extend(["### Resultado salvo", "", output, ""])
+                error = str(run.get("error_message") or "").strip()
+                if error:
+                    lines.extend(["### Erro salvo", "", error, ""])
+    content = "\n".join(lines).rstrip() + "\n"
+    if len(content.encode("utf-8")) > MAX_HISTORY_EXPORT_BYTES:
+        raise ValueError("O historico completo excede o limite de um arquivo; exporte em partes")
+    return content, len(conversations), message_count
+
+
+def _conversation_export_plan(
+    user_id: int,
+    instruction: str,
+    session_id: str | None = None,
+) -> dict:
+    target = _explicit_workspace_file(instruction) or _latest_applied_workspace_file(user_id)
+    if not target:
+        target = "historico-conversas.md"
+    content, conversation_count, message_count = _conversation_export_markdown(
+        user_id,
+        instruction,
+        session_id,
+    )
+    return {
+        "summary": (
+            f"Atualizar {target} com {message_count} mensagens de "
+            f"{conversation_count} conversas salvas."
+        ),
+        "actions": [{"operation": "write_file", "path": target, "content": content}],
+    }
 
 
 def _validate_relative_path(user_id: int, raw_path: str) -> str:
@@ -361,24 +527,32 @@ def get_workspace_plan(user_id: int, plan_id: str) -> dict:
     return plan
 
 
-async def create_workspace_plan(user_id: int, instruction: str, provider_config: dict | None = None) -> dict:
+async def create_workspace_plan(
+    user_id: int,
+    instruction: str,
+    provider_config: dict | None = None,
+    session_id: str | None = None,
+) -> dict:
     if not workspace_manager_enabled(user_id):
         raise PermissionError("A skill workspace_manager esta desabilitada")
     inventory = _workspace_inventory(user_id)
     search_context = _recent_search_context(user_id, instruction)
-    try:
-        raw = await asyncio.wait_for(
-            generate(
-                _planner_messages(instruction, inventory, search_context),
-                provider_config=provider_config,
-            ),
-            timeout=PLANNER_TIMEOUT_SECONDS,
-        )
-        proposal = _extract_json(raw)
-        if not proposal.get("actions"):
+    if _conversation_export_requested(instruction):
+        proposal = _conversation_export_plan(user_id, instruction, session_id)
+    else:
+        try:
+            raw = await asyncio.wait_for(
+                generate(
+                    _planner_messages(instruction, inventory, search_context),
+                    provider_config=provider_config,
+                ),
+                timeout=PLANNER_TIMEOUT_SECONDS,
+            )
+            proposal = _extract_json(raw)
+            if not proposal.get("actions"):
+                proposal = _fallback_plan(instruction)
+        except Exception:
             proposal = _fallback_plan(instruction)
-    except Exception:
-        proposal = _fallback_plan(instruction)
 
     actions = _prepare_actions(user_id, proposal.get("actions"))
     plan = {

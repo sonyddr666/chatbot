@@ -969,11 +969,16 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
             ERRORS_TOTAL.labels(type="moderation").inc()
             return ChatResponse(response=blocked, session_id=body.session_id)
 
-    if is_workspace_management_request(body.message):
+    if is_workspace_management_request(body.message, user.id):
         provider_config = get_active_config_for_user(user.id)
         model_meta = metadata_from_config(provider_config)
         try:
-            plan = await create_workspace_plan(user.id, body.message, provider_config)
+            plan = await create_workspace_plan(
+                user.id,
+                body.message,
+                provider_config,
+                session_id=session_id,
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         response = workspace_plan_message(plan)
@@ -1075,7 +1080,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
     session_id = _scoped_session_id(user.id, body.session_id)
     memory = get_session(session_id)
-    workspace_request = is_workspace_management_request(body.message)
+    workspace_request = is_workspace_management_request(body.message, user.id)
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
@@ -1117,7 +1122,12 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         if workspace_request:
             yield {"event": "status", "data": "Planejando alteracoes no Workspace..."}
             try:
-                plan = await create_workspace_plan(user.id, body.message, provider_config)
+                plan = await create_workspace_plan(
+                    user.id,
+                    body.message,
+                    provider_config,
+                    session_id=session_id,
+                )
                 full_response = workspace_plan_message(plan)
                 yield {"event": "token", "data": full_response}
                 yield {"event": "workspace_plan", "data": json.dumps(plan, ensure_ascii=False)}

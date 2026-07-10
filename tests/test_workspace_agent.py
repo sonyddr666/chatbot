@@ -16,7 +16,7 @@ from src.core.workspace_agent import (
     workspace_plan_status_context,
 )
 from src.db.models import init_db
-from src.db.repository import DocumentRepo, SkillRepo, SkillRunRepo, UserRepo
+from src.db.repository import ConversationRepo, DocumentRepo, SkillRepo, SkillRunRepo, UserRepo
 
 
 class WorkspaceAgentTest(unittest.TestCase):
@@ -82,6 +82,66 @@ class WorkspaceAgentTest(unittest.TestCase):
         planner_messages = generator.await_args.args[0]
         self.assertIn("Pesquisa recente confirmada pelo backend", planner_messages[1].content)
         self.assertIn("https://example.test/fonte", planner_messages[1].content)
+
+    def test_edit_it_exports_all_owned_conversations_to_latest_applied_file(self):
+        proposal = json.dumps({
+            "summary": "Criar documento vazio",
+            "actions": [{"operation": "write_file", "path": "documento.txt", "content": ""}],
+        })
+        with patch("src.core.workspace_agent.generate", new=AsyncMock(return_value=proposal)):
+            created = asyncio.run(create_workspace_plan(self.user.id, "criar documento", {}))
+        apply_workspace_plan(self.user.id, created["id"])
+
+        first_session = f"u{self.user.id}:primeira"
+        second_session = f"u{self.user.id}:segunda"
+        ConversationRepo.add_message(first_session, "user", "Mensagem alpha", user_id=self.user.id)
+        ConversationRepo.add_message(
+            first_session,
+            "assistant",
+            "Resposta alpha",
+            user_id=self.user.id,
+            reasoning="Raciocinio alpha",
+            skill_activities=[{"name": "perplexo_search", "status": "completed"}],
+        )
+        ConversationRepo.add_message(second_session, "user", "Mensagem beta", user_id=self.user.id)
+        SkillRunRepo.create(
+            self.user.id,
+            "perplexo_search",
+            "completed",
+            {"query": "pesquisa alpha"},
+            output_summary="RESULTADO COMPLETO DA PESQUISA",
+        )
+        other = UserRepo.create_user(
+            f"workspace-secret-{uuid.uuid4().hex[:8]}@example.test",
+            f"workspace_secret_{uuid.uuid4().hex[:8]}",
+            "secret123",
+            "Other",
+        )
+        ConversationRepo.add_message("other-secret-session", "user", "SEGREDO ALHEIO", user_id=other.id)
+
+        instruction = "edita ele e coloca os dados de todos chats completos"
+        self.assertTrue(is_workspace_management_request(instruction, self.user.id))
+        generator = AsyncMock(return_value="nao deve ser usado")
+        with patch("src.core.workspace_agent.generate", new=generator):
+            plan = asyncio.run(
+                create_workspace_plan(
+                    self.user.id,
+                    instruction,
+                    {},
+                    session_id=first_session,
+                )
+            )
+
+        generator.assert_not_awaited()
+        action = plan["actions"][0]
+        self.assertEqual(action["path"], "documento.txt")
+        self.assertEqual(action["mode"], "edit")
+        self.assertIn("Mensagem alpha", action["content"])
+        self.assertIn("Mensagem beta", action["content"])
+        self.assertIn("Raciocinio alpha", action["content"])
+        self.assertIn("perplexo_search", action["content"])
+        self.assertIn("RESULTADO COMPLETO DA PESQUISA", action["content"])
+        self.assertNotIn("SEGREDO ALHEIO", action["content"])
 
     def test_workspace_manager_is_enabled_by_default_but_requires_confirmation(self):
         skills = SkillRepo.list_for_user(self.user.id)

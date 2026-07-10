@@ -397,6 +397,46 @@ class ConversationRepo:
             db.close()
 
     @staticmethod
+    def export_for_user(user_id: int, session_id: str | None = None) -> list[dict]:
+        """Return every persisted message owned by a user, without the UI history limits."""
+        db = get_session_db()
+        try:
+            query = db.query(Conversation).filter(Conversation.user_id == user_id)
+            if session_id:
+                query = query.filter(Conversation.session_id == session_id)
+            conversations = query.order_by(Conversation.created_at.asc(), Conversation.id.asc()).all()
+            exported: list[dict] = []
+            for conversation in conversations:
+                messages = (
+                    db.query(Message)
+                    .filter(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.asc(), Message.id.asc())
+                    .all()
+                )
+                exported.append({
+                    "session_id": conversation.session_id,
+                    "title": conversation.title,
+                    "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+                    "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else None,
+                    "messages": [
+                        {
+                            "id": message.id,
+                            "role": message.role,
+                            "content": message.content,
+                            "reasoning": message.reasoning or "",
+                            "skill_activities_json": message.skill_activities_json or "[]",
+                            "created_at": message.created_at.isoformat() if message.created_at else None,
+                            "provider_name": message.provider_name or "",
+                            "model_name": message.model_name or "",
+                        }
+                        for message in messages
+                    ],
+                })
+            return exported
+        finally:
+            db.close()
+
+    @staticmethod
     def rename(session_id: str, title: str, user_id: int | None = None) -> bool:
         db = get_session_db()
         try:

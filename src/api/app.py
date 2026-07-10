@@ -143,7 +143,7 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "text": "Mensagem vazia"})
                     continue
 
-                workspace_request = is_workspace_management_request(message)
+                workspace_request = is_workspace_management_request(message, user.id)
 
                 # Classifica rota
                 route = classify_route(message)
@@ -186,7 +186,12 @@ async def websocket_chat(websocket: WebSocket):
                 if workspace_request:
                     await websocket.send_json({"type": "status", "text": "Planejando alteracoes no Workspace..."})
                     try:
-                        plan = await create_workspace_plan(user.id, message, provider_config)
+                        plan = await create_workspace_plan(
+                            user.id,
+                            message,
+                            provider_config,
+                            session_id=session_id,
+                        )
                         full_response = workspace_plan_message(plan)
                         await websocket.send_json({"type": "token", "text": full_response})
                         await websocket.send_json({"type": "workspace_plan", "plan": plan})
