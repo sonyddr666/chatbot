@@ -60,7 +60,7 @@ def ensure_db():
     global _db_initialized
     if not _db_initialized:
         _init_db()
-        UserRepo.ensure_default_user()
+        UserRepo.ensure_initial_admin()
         SkillRepo.ensure_defaults()
         _db_initialized = True
 
@@ -353,6 +353,8 @@ async def async_set_language(session_id: str, lang: str, user_id: int | None = N
 @router.post("/auth/register", response_model=AuthResponse)
 async def register(body: RegisterRequest):
     ensure_db()
+    if not settings.allow_registration:
+        raise HTTPException(status_code=403, detail="Cadastro publico desativado")
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 6 caracteres")
     try:

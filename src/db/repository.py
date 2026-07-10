@@ -25,16 +25,37 @@ from src.db.models import (
 
 class UserRepo:
     @staticmethod
-    def ensure_default_user() -> User:
+    def ensure_initial_admin() -> Optional[User]:
+        """Create the configured bootstrap admin once, without resetting it later."""
+        from src.config import settings
+
+        email = settings.initial_admin_email.strip().lower()
+        username = settings.initial_admin_username.strip()
+        password = settings.initial_admin_password
+        configured = (email, username, password)
+        if not any(configured):
+            return None
+        if not all(configured):
+            raise RuntimeError(
+                "INITIAL_ADMIN_EMAIL, INITIAL_ADMIN_USERNAME e INITIAL_ADMIN_PASSWORD "
+                "devem ser definidos juntos"
+            )
+        if len(password) < 12:
+            raise RuntimeError("INITIAL_ADMIN_PASSWORD deve ter pelo menos 12 caracteres")
+
         db = get_session_db()
         try:
-            user = db.query(User).filter(User.username == "local-admin").first()
+            user = (
+                db.query(User)
+                .filter(or_(User.email == email, User.username == username))
+                .first()
+            )
             if not user:
                 user = User(
-                    email="local-admin@example.local",
-                    username="local-admin",
-                    display_name="Local Admin",
-                    password_hash=hash_password("local-admin"),
+                    email=email,
+                    username=username,
+                    display_name=username,
+                    password_hash=hash_password(password),
                     is_admin=True,
                 )
                 db.add(user)
@@ -42,6 +63,10 @@ class UserRepo:
                 db.add(UserProfile(user_id=user.id, language="pt", preferred_tone="direto"))
                 db.commit()
                 db.refresh(user)
+            elif user.email != email or user.username != username or not user.is_admin:
+                raise RuntimeError(
+                    "As credenciais do administrador inicial conflitam com um usuario existente"
+                )
             ensure_user_space(user.id)
             return user
         finally:

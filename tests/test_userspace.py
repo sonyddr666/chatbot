@@ -102,18 +102,33 @@ class UserSpaceServiceTest(unittest.TestCase):
         self.assertTrue((root / "skills" / "user").is_dir())
         self.assertTrue((root / "skills" / "audit").is_dir())
 
-    def test_default_user_initializes_user_space(self):
+    def test_initial_admin_initializes_user_space(self):
         from src.db.models import init_db
         from src.db.repository import UserRepo
 
         Path("C:/tmp").mkdir(parents=True, exist_ok=True)
         db_path = Path(f"C:/tmp/chatbot_userspace_{uuid.uuid4().hex}.db")
         previous_database_url = settings.database_url
+        previous_admin = (
+            settings.initial_admin_email,
+            settings.initial_admin_username,
+            settings.initial_admin_password,
+        )
         settings.database_url = f"sqlite:///{db_path.as_posix()}"
         self.addCleanup(lambda: setattr(settings, "database_url", previous_database_url))
+        settings.initial_admin_email = "admin@example.test"
+        settings.initial_admin_username = "admin"
+        settings.initial_admin_password = "secure-test-password"
+        self.addCleanup(
+            lambda: (
+                setattr(settings, "initial_admin_email", previous_admin[0]),
+                setattr(settings, "initial_admin_username", previous_admin[1]),
+                setattr(settings, "initial_admin_password", previous_admin[2]),
+            )
+        )
         init_db()
 
-        user = UserRepo.ensure_default_user()
+        user = UserRepo.ensure_initial_admin()
 
         root = Path(self.tmp.name).resolve() / str(user.id)
         self.assertTrue((root / "profile").is_dir())

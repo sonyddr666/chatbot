@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/chatbot.db"
     auth_secret_key: str = ""
     user_data_dir: str = "./data/users"
+    initial_admin_email: str = ""
+    initial_admin_username: str = ""
+    initial_admin_password: str = ""
+    allow_registration: bool = False
 
     # Perplexo HTTP tool server. The API key is global infrastructure config and
     # is never returned to clients or persisted in per-user skill settings.

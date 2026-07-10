@@ -907,6 +907,34 @@ cd frontend
 npm run dev
 ```
 
+### Deploy no Coolify
+
+Crie um recurso **Docker Compose** apontando para este repositorio e para a branch
+`coolify`. Atribua o dominio publico somente ao servico `frontend`, na porta `80`.
+O servico `api` fica acessivel apenas na rede interna do Compose.
+
+Configure como secrets no Coolify:
+
+```env
+AUTH_SECRET_KEY=gere-um-segredo-longo-e-aleatorio
+INITIAL_ADMIN_EMAIL=voce@exemplo.com
+INITIAL_ADMIN_USERNAME=seu-usuario
+INITIAL_ADMIN_PASSWORD=use-uma-senha-forte-com-12-ou-mais-caracteres
+```
+
+O administrador inicial e criado apenas se ainda nao existir. Alterar
+`INITIAL_ADMIN_PASSWORD` depois do primeiro deploy nao redefine a senha gravada.
+O cadastro publico fica desativado por padrao; habilite-o conscientemente com:
+
+```env
+ALLOW_REGISTRATION=true
+```
+
+As chaves de provider sao opcionais e tambem devem ser configuradas como secrets,
+por exemplo `OPENCODE_ZEN_API_KEY`, `OPENAI_API_KEY` ou `ANTHROPIC_API_KEY`.
+O volume nomeado `chatbot-data` preserva SQLite, usuarios, uploads, Chroma e caches
+de embeddings entre rebuilds. Mantenha uma unica replica da API.
+
 ## Banco de Dados
 
 Modelos principais:

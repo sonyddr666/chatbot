@@ -21,14 +21,27 @@ class RouteSecurityTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.previous_database_url = settings.database_url
         self.previous_user_data_dir = settings.user_data_dir
+        self.previous_initial_admin = (
+            settings.initial_admin_email,
+            settings.initial_admin_username,
+            settings.initial_admin_password,
+        )
         root = Path(self.tmp.name)
         settings.database_url = f"sqlite:///{(root / 'security.db').as_posix()}"
         settings.user_data_dir = str(root / "users")
+        settings.initial_admin_email = "admin@example.test"
+        settings.initial_admin_username = "admin"
+        settings.initial_admin_password = "secure-test-password"
         init_db()
 
     def tearDown(self):
         settings.database_url = self.previous_database_url
         settings.user_data_dir = self.previous_user_data_dir
+        (
+            settings.initial_admin_email,
+            settings.initial_admin_username,
+            settings.initial_admin_password,
+        ) = self.previous_initial_admin
         self.tmp.cleanup()
 
     def test_legacy_unauthenticated_websocket_file_is_removed(self):
@@ -76,7 +89,7 @@ class RouteSecurityTest(unittest.TestCase):
         set_key.assert_not_called()
 
     def test_admin_can_mutate_global_provider_api_key(self):
-        admin = UserRepo.ensure_default_user()
+        admin = UserRepo.ensure_initial_admin()
         token = create_access_token(admin.id, admin.username)
         client = TestClient(app)
 
