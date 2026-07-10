@@ -59,6 +59,9 @@ class WorkspaceServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             delete_path(1, "projetos")
 
+        self.assertTrue(delete_path(1, "projetos", recursive=True))
+        self.assertFalse((Path(self.tmp.name) / "1" / "workspace" / "projetos").exists())
+
     def test_delete_path_rejects_workspace_root(self):
         from src.core.userspace import safe_user_path
         from src.core.workspace import delete_path

@@ -60,6 +60,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+    from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message
     from src.core.preference_suggestions import create_suggestion_from_message
     from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
     from src.rag.personal import retrieve_user_context
@@ -139,12 +140,14 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "text": "Mensagem vazia"})
                     continue
 
+                workspace_request = is_workspace_management_request(message)
+
                 # Classifica rota
                 route = classify_route(message)
                 if route == "fast":
                     use_rag = False
                     use_thinking = False
-                if user_has_personal_rag(user.id, message, log_run=True):
+                if not workspace_request and user_has_personal_rag(user.id, message, log_run=True):
                     use_rag = True
 
                 # Moderação
@@ -166,7 +169,7 @@ async def websocket_chat(websocket: WebSocket):
                 # RAG em background
                 rag_context = None
                 rag_task = None
-                if use_rag and settings.enable_rag:
+                if not workspace_request and use_rag and settings.enable_rag:
                     async def fetch_rag():
                         nonlocal rag_context
                         loop = asyncio.get_event_loop()
@@ -178,6 +181,30 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
                 save_task = asyncio.create_task(_add_msg(session_id, "user", message, user_id=user.id))
+
+                if workspace_request:
+                    try:
+                        plan = await create_workspace_plan(user.id, message, provider_config)
+                        full_response = workspace_plan_message(plan)
+                        await websocket.send_json({"type": "token", "text": full_response})
+                        await websocket.send_json({"type": "workspace_plan", "plan": plan})
+                    except Exception as exc:
+                        full_response = f"Nao consegui preparar o plano do Workspace: {exc}"
+                        await websocket.send_json({"type": "token", "text": full_response})
+
+                    memory.add_user_message(message)
+                    memory.add_ai_message(full_response)
+                    MESSAGES_TOTAL.labels(role="assistant").inc()
+                    user_msg = await save_task
+                    _observe_preference_suggestion(user.id, user_msg.content)
+                    ai_msg = await _add_msg(session_id, "assistant", full_response, user_id=user.id, **model_meta)
+                    await websocket.send_json({
+                        "type": "done",
+                        "message_id": ai_msg.id,
+                        "has_reasoning": False,
+                        **model_meta,
+                    })
+                    continue
 
                 if rag_task:
                     await rag_task

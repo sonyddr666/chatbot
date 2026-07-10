@@ -31,7 +31,7 @@ class SkillsContextTest(unittest.TestCase):
 
         self.assertIn("Skills habilitadas para este usuario", context)
         self.assertIn("personal_rag", context)
-        self.assertIn("Usa a base de conhecimento pessoal", context)
+        self.assertIn("Consulta a base de conhecimento pessoal", context)
         self.assertNotIn("search_and_answer", context)
 
 

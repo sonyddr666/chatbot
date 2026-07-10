@@ -67,6 +67,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
             onChunk?.({ type: 'content', text: data.text })
             break
 
+          case 'workspace_plan':
+            onChunk?.({ type: 'workspace_plan', workspacePlan: data.plan })
+            break
+
           case 'done':
             onChunk?.({
               type: 'done',

@@ -159,11 +159,11 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(documents[0]["chunks"], 1)
         self.assertEqual(documents[0]["upload_path"], "")
 
-    def test_upload_route_saves_original_before_rag_ingestion(self):
+    def test_upload_route_saves_original_without_automatic_rag_ingestion(self):
         user, headers = self._create_auth_headers()
         client = TestClient(app)
 
-        with patch("src.api.routes.add_user_documents", return_value=["chunk-1"]):
+        with patch("src.api.routes.add_user_documents") as add_mock:
             response = client.post(
                 "/api/v1/upload",
                 headers=headers,
@@ -174,7 +174,9 @@ class IngestionServiceTest(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["filename"], "notes.md")
         self.assertEqual(data["size"], 7)
-        self.assertEqual(data["chunks"], 1)
+        self.assertEqual(data["status"], "uploaded")
+        self.assertEqual(data["chunks"], 0)
+        add_mock.assert_not_called()
         self.assertEqual(data["upload_path"].split("/")[0], "original")
         saved = list((Path(self.tmp.name) / str(user.id) / "uploads" / "original").glob("*/notes.md"))
         self.assertEqual(len(saved), 1)
@@ -199,7 +201,7 @@ class IngestionServiceTest(unittest.TestCase):
         self.assertEqual(listed["filename"], "audit.md")
         self.assertEqual(listed["upload_path"], uploaded["upload_path"])
         self.assertEqual(listed["checksum"], uploaded["checksum"])
-        self.assertEqual(listed["status"], "indexed")
+        self.assertEqual(listed["status"], "uploaded")
         self.assertEqual(listed["parser"], "text")
 
     def test_documents_upload_waits_for_explicit_rag_ingestion(self):
@@ -239,19 +241,22 @@ class IngestionServiceTest(unittest.TestCase):
         user, headers = self._create_auth_headers()
         client = TestClient(app)
 
-        with (
-            patch("src.api.routes.add_user_documents") as add_mock,
-            patch("src.api.routes.extract_text_for_ingestion", side_effect=ValueError("Falha ao extrair texto do PDF")),
-        ):
+        with patch("src.api.routes.add_user_documents") as add_mock:
             upload_response = client.post(
                 "/api/v1/upload",
                 headers=headers,
                 files={"file": ("broken.pdf", b"not a real pdf", "application/pdf")},
             )
+        with patch("src.api.routes.extract_text_for_ingestion", side_effect=ValueError("Falha ao extrair texto do PDF")):
+            ingest_response = client.post(
+                f"/api/v1/documents/{upload_response.json()['document_id']}/ingest",
+                headers=headers,
+            )
         documents = client.get("/api/v1/documents", headers=headers).json()
         saved = list((Path(self.tmp.name) / str(user.id) / "uploads" / "original").glob("*/broken.pdf"))
 
-        self.assertEqual(upload_response.status_code, 400)
+        self.assertEqual(upload_response.status_code, 200)
+        self.assertEqual(ingest_response.status_code, 400)
         add_mock.assert_not_called()
         self.assertEqual(len(saved), 1)
         self.assertEqual(len(documents), 1)
@@ -266,11 +271,15 @@ class IngestionServiceTest(unittest.TestCase):
         user, headers = self._create_auth_headers()
         client = TestClient(app)
 
+        upload_response = client.post(
+            "/api/v1/upload",
+            headers=headers,
+            files={"file": ("delete-me.md", b"# Delete me", "text/markdown")},
+        )
         with patch("src.api.routes.add_user_documents", return_value=["chunk-1", "chunk-2"]):
-            upload_response = client.post(
-                "/api/v1/upload",
+            client.post(
+                f"/api/v1/documents/{upload_response.json()['document_id']}/ingest",
                 headers=headers,
-                files={"file": ("delete-me.md", b"# Delete me", "text/markdown")},
             )
         document = client.get("/api/v1/documents", headers=headers).json()[0]
         saved = list((Path(self.tmp.name) / str(user.id) / "uploads" / "original").glob("*/delete-me.md"))
@@ -290,11 +299,15 @@ class IngestionServiceTest(unittest.TestCase):
         _, headers = self._create_auth_headers()
         client = TestClient(app)
 
+        upload_response = client.post(
+            "/api/v1/upload",
+            headers=headers,
+            files={"file": ("file.pdf", MINIMAL_TEXT_PDF, "application/pdf")},
+        )
         with patch("src.api.routes.add_user_documents", return_value=["pdf-chunk"]) as add_mock:
             response = client.post(
-                "/api/v1/upload",
+                f"/api/v1/documents/{upload_response.json()['document_id']}/ingest",
                 headers=headers,
-                files={"file": ("file.pdf", MINIMAL_TEXT_PDF, "application/pdf")},
             )
 
         self.assertEqual(response.status_code, 200)

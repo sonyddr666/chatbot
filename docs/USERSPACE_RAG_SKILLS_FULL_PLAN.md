@@ -30,8 +30,11 @@ O que ainda falta para ficar realmente redondo:
 - [x] Providers e preferencias pessoais, com chave mascarada na API/UI.
 - [x] SkillRegistry, permissao por capacidade, auditoria no banco/JSONL e runtime por usuario.
 - [x] Skills de busca, RAG pessoal, leitura explicita de workspace e preview de escrita sem aplicacao automatica.
-- [x] Bateria curta de UserSpace, Workspace, ingestao, RAG, Skills, auth e painel de documentos: 47 testes passaram em 4.371 segundos com corte de 45 segundos.
-- [x] Build de producao do frontend: TypeScript e Vite concluiram em 1.03 segundos.
+- [x] `workspace_manager` com linguagem natural, plano persistido, diff, confirmacao, auditoria e gerenciamento de arquivos/pastas pela IA.
+- [x] Arvore visual recursiva, importacao e drag-and-drop com confirmacao no Workspace.
+- [x] RAG opt-in: uploads e arquivos do Workspace so entram quando selecionados; sugestoes da IA tambem exigem confirmacao.
+- [x] Bateria curta de UserSpace, Workspace Agent, ingestao opt-in, RAG, Skills, auth e frontend: 63 testes passaram em 6.499 segundos com corte de 45 segundos.
+- [x] Build de producao do frontend: TypeScript e Vite concluiram em 669ms.
 - [ ] Smoke manual completo com backend e frontend antes de exposicao publica.
 
 ## Regra de ouro anti-travamento
@@ -412,7 +415,7 @@ POST /documents/{id}/ingest
   reprocessa arquivo salvo
 
 POST /upload
-  caminho imediato legado para anexos do chat: salva e ingere na mesma requisicao
+  alias de compatibilidade: salva o original e tambem aguarda selecao explicita
 ```
 
 Parsers:

@@ -65,6 +65,27 @@ DEFAULT_SKILLS: tuple[dict[str, Any], ...] = (
         "risk_level": 1,
     },
     {
+        "name": "workspace_manager",
+        "description": "Planeja e executa gerenciamento completo do workspace somente apos confirmacao do usuario.",
+        "kind": "workspace_agent",
+        "definition": {
+            "inputs": {"instruction": "string"},
+            "permissions": {
+                "network": False,
+                "workspace_read": True,
+                "workspace_write": True,
+                "shell": False,
+            },
+            "default_enabled": True,
+            "confirmation_required": True,
+            "actions": ["mkdir", "write_file", "move", "delete"],
+            "examples": ["crie uma pasta projeto e um README.md sobre mim"],
+        },
+        "requires_network": False,
+        "requires_shell": False,
+        "risk_level": 2,
+    },
+    {
         "name": "workspace_read",
         "description": "Le um arquivo somente do workspace do usuario quando o comando explicito for usado.",
         "kind": "workspace_read",
@@ -114,4 +135,3 @@ def get_skill_definition(name: str) -> dict[str, Any] | None:
                 "definition": dict(skill["definition"]),
             }
     return None
-

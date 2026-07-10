@@ -25,6 +25,10 @@ O projeto hoje e uma base funcional de chatbot multiusuario. As funcionalidades 
 - Registro de falha quando upload/parsing da erro.
 - Workspace fisico por usuario.
 - Operacoes seguras de arquivo/pasta no workspace.
+- Gerenciador visual com arvore recursiva, drag-and-drop, importacao e confirmacoes.
+- IA capaz de planejar criacao, edicao, movimentacao, renomeacao e exclusao de arquivos/pastas.
+- Plano da IA persistido e executado somente depois da confirmacao do usuario.
+- RAG opt-in para uploads e arquivos do Workspace; sugestoes nunca indexam automaticamente.
 - Patch aprovado com preview, diff, checksum, snapshot e auditoria.
 - Preferencias por usuario.
 - Sugestoes de preferencias aceitas/rejeitadas manualmente.
@@ -134,7 +138,7 @@ src/
 O projeto separa tres conceitos que antes costumam se misturar:
 
 - Workspace: arquivos reais que o usuario cria, edita, move e apaga.
-- Uploads: arquivos originais enviados pelo usuario para virar conhecimento.
+- Uploads: arquivos originais preservados; somente os selecionados pelo usuario viram conhecimento no RAG.
 - RAG: texto extraido, chunkado e indexado em collection vetorial.
 
 Estrutura fisica criada por usuario:
@@ -355,7 +359,7 @@ Implementado:
 
 - Upload original salvo antes de indexar.
 - DocumentsPanel usa envio em duas etapas: salvar original e depois "Ingerir no RAG".
-- `/api/v1/upload` continua como caminho imediato para anexos do chat.
+- `/api/v1/upload` e `/api/v1/documents/upload` apenas salvam o original; a ingestao exige selecao posterior.
 - Caminho fisico fica dentro de `uploads/original/{upload_id}`.
 - Depois da ingestao pelo DocumentsPanel, o texto derivado fica em `rag/extracted/` do mesmo usuario.
 - Checksum salvo para rastreabilidade.
@@ -389,6 +393,11 @@ Implementado:
 - Isolamento fisico por usuario.
 - Leitura/escrita inicial voltada para texto.
 - Limite de arquivo editavel.
+- Arvore visual recursiva com pastas aninhadas.
+- Drag-and-drop de itens internos com confirmacao antes de mover.
+- Importacao de arquivos de texto externos com confirmacao.
+- Exclusao recursiva de pasta nao vazia somente apos confirmacao.
+- Selecao explicita de arquivo do Workspace para o RAG.
 
 Rotas:
 
@@ -399,6 +408,30 @@ PUT    /api/v1/workspace/file
 POST   /api/v1/workspace/mkdir
 DELETE /api/v1/workspace/path?path=
 POST   /api/v1/workspace/move
+POST   /api/v1/workspace/rag/ingest
+```
+
+### Gerenciamento do Workspace pela IA
+
+Pedidos naturais como `crie uma pasta e um README.md sobre mim` sao interceptados pelo `workspace_manager`. A IA gera um plano estruturado, mas nao recebe escrita direta e silenciosa.
+
+Fluxo:
+
+1. Usuario descreve a operacao no chat.
+2. IA devolve um plano com criacao, edicao, movimentacao ou exclusao.
+3. Frontend mostra cada acao e o diff dos arquivos.
+4. Usuario escolhe `Confirmar e executar` ou cancela.
+5. Backend valida novamente caminhos e checksums, executa e registra auditoria.
+6. Arquivos criados/editados continuam fora do RAG.
+7. O cartao pode sugerir RAG, mas apenas os arquivos marcados pelo usuario sao ingeridos.
+
+Rotas:
+
+```txt
+POST   /api/v1/workspace/ai/plan
+GET    /api/v1/workspace/ai/plans/{plan_id}
+POST   /api/v1/workspace/ai/plans/{plan_id}/apply
+DELETE /api/v1/workspace/ai/plans/{plan_id}
 ```
 
 ### Patch Aprovado no Workspace

@@ -201,7 +201,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
           modelId: m.model_id,
           modelName: m.model_name,
         }))
-        set({ messages: msgs })
+        const restored = await Promise.all(msgs.map(async message => {
+          if (message.role !== 'assistant') return message
+          const match = message.content.match(/<!-- workspace-plan:([a-f0-9]{32}) -->/i)
+          if (!match) return message
+          try {
+            const workspacePlan = await api.workspaceAiGetPlan(match[1])
+            return { ...message, workspacePlan }
+          } catch {
+            return message
+          }
+        }))
+        set({ messages: restored })
       }
     } catch {
       // ok
@@ -272,6 +283,14 @@ async function httpStream(
       const last = msgs[msgs.length - 1]
       if (last?.role === 'assistant') {
         msgs[msgs.length - 1] = { ...last, content: last.content + (chunk.text || '') }
+        useChatStore.setState({ messages: msgs })
+      }
+    } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
+      const s = useChatStore.getState()
+      const msgs = [...s.messages]
+      const last = msgs[msgs.length - 1]
+      if (last?.role === 'assistant') {
+        msgs[msgs.length - 1] = { ...last, workspacePlan: chunk.workspacePlan }
         useChatStore.setState({ messages: msgs })
       }
     } else if (chunk.type === 'done') {

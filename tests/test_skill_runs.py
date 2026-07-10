@@ -45,7 +45,7 @@ class SkillRunsTest(unittest.TestCase):
         runs = SkillRunRepo.list_for_user(self.user.id)
         self.assertIn("Fonte A", context)
         self.assertEqual(len(runs), 1)
-        self.assertEqual(runs[0]["skill_name"], "web_search")
+        self.assertEqual(runs[0]["skill_name"], "simple_search")
         self.assertEqual(runs[0]["status"], "completed")
         self.assertIn("pesquise python", runs[0]["input_json"])
         self.assertIn("Fonte A", runs[0]["output_summary"])

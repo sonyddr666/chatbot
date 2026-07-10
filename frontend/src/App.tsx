@@ -57,6 +57,18 @@ export default function App() {
       return
     }
 
+    if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
+      useChatStore.setState(state => {
+        const nextMessages = [...state.messages]
+        const last = nextMessages[nextMessages.length - 1]
+        if (last?.role === 'assistant') {
+          nextMessages[nextMessages.length - 1] = { ...last, workspacePlan: chunk.workspacePlan }
+        }
+        return { messages: nextMessages }
+      })
+      return
+    }
+
     if (chunk.type === 'done') {
       useChatStore.setState(state => {
         const nextMessages = [...state.messages]

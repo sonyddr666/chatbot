@@ -343,9 +343,9 @@ function UploadZone({ onUpload }: { onUpload: () => void }) {
     if (!file) return
     setUploading(true)
     try {
-      await api.uploadDocument(file)
+      await api.uploadOriginalDocument(file)
       onUpload()
-      toast.success(`"${file.name}" enviado com sucesso`)
+      toast.success(`"${file.name}" salvo. Confirme a ingestao em Documentos RAG.`)
     } catch (err: any) {
       toast.error(err.message || 'Erro ao enviar')
     } finally {

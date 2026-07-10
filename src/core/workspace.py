@@ -103,12 +103,15 @@ def mkdir(user_id: int, path: str) -> WorkspaceFileInfo:
     return _info(user_id, folder)
 
 
-def delete_path(user_id: int, path: str) -> bool:
+def delete_path(user_id: int, path: str, recursive: bool = False) -> bool:
     _require_relative_path(path, "Nao e permitido deletar a raiz do workspace")
     target = _workspace_path(user_id, path)
     if not target.exists():
         return False
     if target.is_dir():
+        if recursive:
+            shutil.rmtree(target)
+            return True
         try:
             target.rmdir()
         except OSError as exc:

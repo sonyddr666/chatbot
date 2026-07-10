@@ -19,6 +19,7 @@ class ChatResponse(BaseModel):
     provider_name: Optional[str] = None
     model_id: Optional[str] = None
     model_name: Optional[str] = None
+    workspace_plan: Optional[dict] = None
 
 
 class ChatStreamRequest(BaseModel):
@@ -138,6 +139,10 @@ class WorkspacePatchApplyRequest(BaseModel):
     path: str
     content: str
     expected_checksum: str
+
+
+class WorkspaceAgentPlanRequest(BaseModel):
+    instruction: str
 
 
 class WorkspaceNodeResponse(BaseModel):

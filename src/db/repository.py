@@ -777,6 +777,10 @@ class SkillRepo:
             for skill in skills:
                 user_skill = enabled.get(skill.id)
                 try:
+                    definition = json.loads(skill.definition_json or "{}")
+                except json.JSONDecodeError:
+                    definition = {}
+                try:
                     config = json.loads(user_skill.config_json or "{}") if user_skill else {}
                 except json.JSONDecodeError:
                     config = {}
@@ -785,11 +789,11 @@ class SkillRepo:
                     "name": skill.name,
                     "description": skill.description,
                     "kind": skill.kind,
-                    "definition": json.loads(skill.definition_json or "{}"),
+                    "definition": definition,
                     "requires_network": skill.requires_network,
                     "requires_shell": skill.requires_shell,
                     "risk_level": skill.risk_level,
-                    "enabled": user_skill.is_enabled if user_skill else False,
+                    "enabled": user_skill.is_enabled if user_skill else bool(definition.get("default_enabled", False)),
                     "config": config,
                 }
                 )
@@ -821,7 +825,11 @@ class SkillRepo:
     @staticmethod
     def enabled_context_for_user(user_id: int) -> str:
         """Build a safe prompt context from skills enabled for one user."""
-        enabled_skills = [skill for skill in SkillRepo.list_for_user(user_id) if skill.get("enabled")]
+        enabled_skills = [
+            skill
+            for skill in SkillRepo.list_for_user(user_id)
+            if skill.get("enabled") and skill.get("kind") != "workspace_agent"
+        ]
         if not enabled_skills:
             return ""
 

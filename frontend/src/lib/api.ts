@@ -30,6 +30,7 @@ export interface ChatMessage {
   providerName?: string | null
   modelId?: string | null
   modelName?: string | null
+  workspacePlan?: WorkspaceActionPlan
 }
 export interface Conversation {
   id: number; session_id: string; title: string; language: string
@@ -173,9 +174,36 @@ export interface WorkspacePatchApplyResult {
   snapshot_path: string
 }
 
+export type WorkspaceActionOperation = 'mkdir' | 'write_file' | 'move' | 'delete'
+
+export interface WorkspaceAction {
+  operation: WorkspaceActionOperation
+  path?: string
+  source?: string
+  target?: string
+  mode?: 'create' | 'edit'
+  recursive?: boolean
+  diff?: string
+  content?: string
+  exists?: boolean
+}
+
+export interface WorkspaceActionPlan {
+  id: string
+  instruction: string
+  summary: string
+  status: 'pending' | 'applied' | 'cancelled' | 'failed' | 'expired'
+  actions: WorkspaceAction[]
+  created_at: string
+  expires_at: string
+  applied_at?: string
+  cancelled_at?: string
+  error?: string
+}
+
 /** Chunk do streaming SSE */
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'done' | 'start' | 'status'
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan'
   text?: string
   messageId?: number
   hasReasoning?: boolean
@@ -185,6 +213,7 @@ export interface StreamChunk {
   providerName?: string
   modelId?: string
   modelName?: string
+  workspacePlan?: WorkspaceActionPlan
   metrics?: {
     ttft_s?: number
     total_s?: number
@@ -277,7 +306,7 @@ export const api = {
 
   // Chat
   chat: (message: string, sessionId = 'default', useRag = false) =>
-    req<{ response: string; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string }>('/chat', {
+    req<{ response: string; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string; workspace_plan?: WorkspaceActionPlan }>('/chat', {
       method: 'POST', body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
     }),
 
@@ -331,6 +360,15 @@ export const api = {
 
           if (currentEvent === 'token') {
             yield { type: 'content', text: raw }
+            continue
+          }
+
+          if (currentEvent === 'workspace_plan') {
+            try {
+              yield { type: 'workspace_plan', workspacePlan: JSON.parse(raw) }
+            } catch {
+              throw new Error('Plano de Workspace invalido')
+            }
             continue
           }
 
@@ -442,8 +480,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
-  workspaceDeletePath: (path: string) =>
-    req<{ deleted: boolean; path: string }>(`/workspace/path?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  workspaceDeletePath: (path: string, recursive = false) =>
+    req<{ deleted: boolean; path: string }>(`/workspace/path?path=${encodeURIComponent(path)}&recursive=${recursive}`, { method: 'DELETE' }),
   workspaceMovePath: (source: string, target: string) =>
     req<WorkspaceInfo>('/workspace/move', {
       method: 'POST',
@@ -458,6 +496,22 @@ export const api = {
     req<WorkspacePatchApplyResult>('/workspace/patch/apply', {
       method: 'POST',
       body: JSON.stringify({ path, content, expected_checksum: expectedChecksum }),
+    }),
+  workspaceAiPlan: (instruction: string) =>
+    req<WorkspaceActionPlan>('/workspace/ai/plan', {
+      method: 'POST',
+      body: JSON.stringify({ instruction }),
+    }),
+  workspaceAiGetPlan: (planId: string) =>
+    req<WorkspaceActionPlan>(`/workspace/ai/plans/${planId}`),
+  workspaceAiApplyPlan: (planId: string) =>
+    req<WorkspaceActionPlan>(`/workspace/ai/plans/${planId}/apply`, { method: 'POST' }),
+  workspaceAiCancelPlan: (planId: string) =>
+    req<WorkspaceActionPlan>(`/workspace/ai/plans/${planId}`, { method: 'DELETE' }),
+  workspaceRagIngest: (path: string) =>
+    req<{ document_id: number; path: string; status: string; chunks: number }>('/workspace/rag/ingest', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
     }),
 
   // Stats

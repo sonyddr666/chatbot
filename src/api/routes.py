@@ -28,6 +28,7 @@ from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, A
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
+from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
     activate_user_provider,
@@ -922,6 +923,30 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
             ERRORS_TOTAL.labels(type="moderation").inc()
             return ChatResponse(response=blocked, session_id=body.session_id)
 
+    if is_workspace_management_request(body.message):
+        provider_config = get_active_config_for_user(user.id)
+        model_meta = metadata_from_config(provider_config)
+        try:
+            plan = await create_workspace_plan(user.id, body.message, provider_config)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        response = workspace_plan_message(plan)
+        memory = get_session(session_id)
+        memory.add_user_message(body.message)
+        memory.add_ai_message(response)
+        MESSAGES_TOTAL.labels(role="user").inc()
+        MESSAGES_TOTAL.labels(role="assistant").inc()
+        user_msg = await async_add_message(session_id, "user", body.message, user_id=user.id)
+        observe_preference_suggestion(user.id, user_msg.content)
+        ai_msg = await async_add_message(session_id, "assistant", response, user_id=user.id, **model_meta)
+        return ChatResponse(
+            response=response,
+            session_id=body.session_id,
+            message_id=ai_msg.id,
+            workspace_plan=plan,
+            **model_meta,
+        )
+
     lang = "pt"
     if settings.enable_multilang:
         lang = detect_language(body.message)
@@ -982,11 +1007,12 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
     session_id = _scoped_session_id(user.id, body.session_id)
     memory = get_session(session_id)
+    workspace_request = is_workspace_management_request(body.message)
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
-    use_rag = body.use_rag or user_has_personal_rag(user.id, body.message, log_run=True)
-    if use_rag and settings.enable_rag:
+    use_rag = False if workspace_request else body.use_rag or user_has_personal_rag(user.id, body.message, log_run=True)
+    if not workspace_request and use_rag and settings.enable_rag:
         # Dispara RAG em task separada, não bloqueia o primeiro token
         async def fetch_rag():
             nonlocal rag_context
@@ -1014,6 +1040,29 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         save_task = asyncio.create_task(
             async_add_message(session_id, "user", body.message, user_id=user.id)
         )
+
+        if workspace_request:
+            try:
+                plan = await create_workspace_plan(user.id, body.message, provider_config)
+                full_response = workspace_plan_message(plan)
+                yield {"event": "token", "data": full_response}
+                yield {"event": "workspace_plan", "data": json.dumps(plan, ensure_ascii=False)}
+            except Exception as exc:
+                full_response = f"Nao consegui preparar o plano do Workspace: {exc}"
+                yield {"event": "token", "data": full_response}
+
+            memory.add_user_message(body.message)
+            memory.add_ai_message(full_response)
+            MESSAGES_TOTAL.labels(role="assistant").inc()
+            user_msg = await save_task
+            observe_preference_suggestion(user.id, user_msg.content)
+            ai_msg = await async_add_message(session_id, "assistant", full_response, user_id=user.id, **model_meta)
+            yield {"event": "done", "data": json.dumps({
+                "message_id": ai_msg.id,
+                "has_reasoning": False,
+                **model_meta,
+            })}
+            return
 
         # Se tiver RAG, espera o contexto ficar pronto
         if rag_task:
@@ -1276,7 +1325,13 @@ async def upload_original_document(file: UploadFile = File(...), user=Depends(ge
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...), user=Depends(get_current_user)):
+async def upload_file_compat(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Compatibility alias that also preserves the upload-before-RAG boundary."""
+    return await upload_original_document(file, user)
+
+
+async def _ingest_upload_immediately(file: UploadFile, user):
+    """Internal migration helper; no public route calls automatic ingestion."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
     ext = os.path.splitext(file.filename)[1].lower()

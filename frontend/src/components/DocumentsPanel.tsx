@@ -38,6 +38,14 @@ export function DocumentsPanel({ open, onClose }: Props) {
     if (open) loadDocuments()
   }, [loadDocuments, open])
 
+  useEffect(() => {
+    const refresh = () => {
+      if (open) loadDocuments()
+    }
+    window.addEventListener('documents-changed', refresh)
+    return () => window.removeEventListener('documents-changed', refresh)
+  }, [loadDocuments, open])
+
   const uploadFile = useCallback(async (file?: File) => {
     if (!file) return
     setUploading(true)

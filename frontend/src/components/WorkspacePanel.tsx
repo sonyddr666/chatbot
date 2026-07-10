@@ -1,6 +1,21 @@
-import { useEffect, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react'
 import toast from 'react-hot-toast'
-import { ArrowLeft, FileText, Folder, FolderPlus, Pencil, Save, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Database,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  GripVertical,
+  MoveRight,
+  Pencil,
+  Save,
+  Trash2,
+  UploadCloud,
+  X,
+} from 'lucide-react'
 import { api, type WorkspaceNode, type WorkspacePatchPreview } from '../lib/api'
 import { DiffViewer } from './DiffViewer'
 
@@ -9,9 +24,28 @@ interface Props {
   onClose: () => void
 }
 
+interface WorkspaceTreeNode extends WorkspaceNode {
+  children: WorkspaceTreeNode[]
+}
+
+type PendingTransfer =
+  | { kind: 'move'; source: string; target: string }
+  | { kind: 'import'; file: File; target: string }
+
+interface PendingDelete {
+  path: string
+  kind: 'file' | 'folder'
+}
+
+const MAX_TREE_DEPTH = 12
+const MAX_IMPORT_BYTES = 1024 * 1024
+
 export function WorkspacePanel({ open, onClose }: Props) {
-  const [path, setPath] = useState('')
-  const [nodes, setNodes] = useState<WorkspaceNode[]>([])
+  const [tree, setTree] = useState<WorkspaceTreeNode[]>([])
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [currentFolder, setCurrentFolder] = useState('')
+  const [selectedPath, setSelectedPath] = useState('')
+  const [selectedKind, setSelectedKind] = useState<'file' | 'folder' | ''>('')
   const [selectedFile, setSelectedFile] = useState('')
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
@@ -20,83 +54,115 @@ export function WorkspacePanel({ open, onClose }: Props) {
   const [patching, setPatching] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [moveTarget, setMoveTarget] = useState('')
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null)
+  const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
+  const [ragConfirm, setRagConfirm] = useState(false)
+  const [ragLoading, setRagLoading] = useState(false)
 
-  const loadTree = async (nextPath = path) => {
+  const loadBranch = useCallback(async (path: string, depth = 0): Promise<WorkspaceTreeNode[]> => {
+    const branch = await api.workspaceTree(path)
+    if (depth >= MAX_TREE_DEPTH) return branch.nodes.map(node => ({ ...node, children: [] }))
+    return Promise.all(branch.nodes.map(async node => ({
+      ...node,
+      children: node.kind === 'folder' ? await loadBranch(node.path, depth + 1) : [],
+    })))
+  }, [])
+
+  const refreshTree = useCallback(async () => {
     setLoading(true)
     try {
-      const tree = await api.workspaceTree(nextPath)
-      setPath(tree.path)
-      setNodes(tree.nodes)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao carregar workspace')
+      setTree(await loadBranch(''))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao carregar workspace')
     } finally {
       setLoading(false)
     }
-  }
+  }, [loadBranch])
 
   useEffect(() => {
-    if (open) loadTree('')
-  }, [open])
+    if (open) void refreshTree()
+  }, [open, refreshTree])
 
-  const openNode = async (node: WorkspaceNode) => {
-    if (node.kind === 'folder') {
-      setSelectedFile('')
-      setContent('')
-      setMoveTarget('')
-      setPatchPreview(null)
-      await loadTree(node.path)
-      return
+  useEffect(() => {
+    const refresh = () => {
+      if (open) void refreshTree()
     }
+    window.addEventListener('workspace-changed', refresh)
+    return () => window.removeEventListener('workspace-changed', refresh)
+  }, [open, refreshTree])
 
+  const pathExists = useCallback((target: string, nodes = tree): boolean => {
+    for (const node of nodes) {
+      if (node.path === target || pathExists(target, node.children)) return true
+    }
+    return false
+  }, [tree])
+
+  const selectFolder = (node: WorkspaceTreeNode) => {
+    setSelectedPath(node.path)
+    setSelectedKind('folder')
+    setSelectedFile('')
+    setContent('')
+    setMoveTarget(node.path)
+    setCurrentFolder(node.path)
+    setPatchPreview(null)
+    setRagConfirm(false)
+    setExpanded(previous => {
+      const next = new Set(previous)
+      if (next.has(node.path)) next.delete(node.path)
+      else next.add(node.path)
+      return next
+    })
+  }
+
+  const openFile = async (node: WorkspaceTreeNode) => {
     try {
       const file = await api.workspaceReadFile(node.path)
+      setSelectedPath(file.path)
+      setSelectedKind('file')
       setSelectedFile(file.path)
       setContent(file.content)
       setMoveTarget(file.path)
       setPatchPreview(null)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao abrir arquivo')
+      setRagConfirm(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao abrir arquivo')
     }
   }
 
-  const goUp = async () => {
-    if (!path) return
-    const parent = path.split('/').slice(0, -1).join('/')
-    setSelectedFile('')
-    setContent('')
-    setMoveTarget('')
-    setPatchPreview(null)
-    await loadTree(parent)
-  }
-
   const createFolder = async () => {
-    const target = normalizeTarget(newPath, path)
+    const target = normalizeTarget(newPath, currentFolder)
     if (!target) return toast.error('Informe o nome da pasta')
+    if (pathExists(target)) return toast.error('Esse caminho ja existe')
     try {
       await api.workspaceMkdir(target)
       setNewPath('')
-      toast.success('Pasta criada')
-      await loadTree(path)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao criar pasta')
+      setExpanded(previous => new Set(previous).add(currentFolder))
+      toast.success('Pasta criada fora do RAG')
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao criar pasta')
     }
   }
 
   const createFile = async () => {
-    const target = normalizeTarget(newPath, path)
+    const target = normalizeTarget(newPath, currentFolder)
     if (!target) return toast.error('Informe o nome do arquivo')
+    if (pathExists(target)) return toast.error('Esse caminho ja existe')
     try {
       await api.workspaceWriteFile(target, '')
       setNewPath('')
-      toast.success('Arquivo criado')
-      await loadTree(path)
-      const file = await api.workspaceReadFile(target)
-      setSelectedFile(file.path)
-      setContent(file.content)
-      setMoveTarget(file.path)
+      setSelectedPath(target)
+      setSelectedKind('file')
+      setSelectedFile(target)
+      setContent('')
+      setMoveTarget(target)
       setPatchPreview(null)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao criar arquivo')
+      toast.success('Arquivo criado no Workspace, fora do RAG')
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao criar arquivo')
     }
   }
 
@@ -105,11 +171,11 @@ export function WorkspacePanel({ open, onClose }: Props) {
     setSaving(true)
     try {
       await api.workspaceWriteFile(selectedFile, content)
-      toast.success('Arquivo salvo')
+      toast.success('Arquivo salvo no Workspace')
       setPatchPreview(null)
-      await loadTree(path)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao salvar')
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao salvar')
     } finally {
       setSaving(false)
     }
@@ -119,11 +185,10 @@ export function WorkspacePanel({ open, onClose }: Props) {
     if (!selectedFile) return
     setPatching(true)
     try {
-      const preview = await api.workspacePatchPreview(selectedFile, content)
-      setPatchPreview(preview)
+      setPatchPreview(await api.workspacePatchPreview(selectedFile, content))
       toast.success('Preview patch gerado')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao gerar preview patch')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao gerar preview patch')
     } finally {
       setPatching(false)
     }
@@ -136,42 +201,155 @@ export function WorkspacePanel({ open, onClose }: Props) {
       await api.workspacePatchApply(selectedFile, content, patchPreview.expected_checksum)
       toast.success('Patch aprovado aplicado')
       setPatchPreview(null)
-      await loadTree(path)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao aplicar patch aprovado')
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao aplicar patch aprovado')
     } finally {
       setPatching(false)
     }
   }
 
-  const moveSelected = async () => {
-    if (!selectedFile || !moveTarget || moveTarget === selectedFile) return
+  const prepareMove = (source: string, folder: string) => {
+    const name = source.split('/').pop() || ''
+    const target = folder ? `${folder}/${name}` : name
+    if (!name || source === target) return
+    if (pathExists(target)) return toast.error(`O destino ${target} ja existe`)
+    setPendingTransfer({ kind: 'move', source, target })
+  }
+
+  const prepareImport = (file: File, folder: string) => {
+    const target = folder ? `${folder}/${file.name}` : file.name
+    if (pathExists(target)) return toast.error(`O destino ${target} ja existe`)
+    setPendingTransfer({ kind: 'import', file, target })
+  }
+
+  const handleDrop = (event: DragEvent, folder: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setDragOverPath(null)
+    const externalFile = event.dataTransfer.files?.[0]
+    if (externalFile) {
+      prepareImport(externalFile, folder)
+      return
+    }
+    const source = event.dataTransfer.getData('application/x-workspace-path')
+    if (source) prepareMove(source, folder)
+  }
+
+  const confirmTransfer = async () => {
+    if (!pendingTransfer) return
+    setSaving(true)
     try {
-      const info = await api.workspaceMovePath(selectedFile, moveTarget)
-      toast.success('Arquivo movido')
-      setSelectedFile(info.path)
-      setMoveTarget(info.path)
-      setPatchPreview(null)
-      await loadTree(path)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao mover arquivo')
+      if (pendingTransfer.kind === 'move') {
+        const info = await api.workspaceMovePath(pendingTransfer.source, pendingTransfer.target)
+        if (selectedPath === pendingTransfer.source) {
+          setSelectedPath(info.path)
+          setMoveTarget(info.path)
+          if (selectedKind === 'file') setSelectedFile(info.path)
+          if (selectedKind === 'folder') setCurrentFolder(info.path)
+        }
+        toast.success('Item movido apos confirmacao')
+      } else {
+        if (pendingTransfer.file.size > MAX_IMPORT_BYTES) throw new Error('Arquivo maior que 1 MB')
+        const importedContent = await pendingTransfer.file.text()
+        if (importedContent.includes('\0')) throw new Error('Somente arquivos de texto podem ser importados')
+        await api.workspaceWriteFile(pendingTransfer.target, importedContent)
+        toast.success('Arquivo importado para o Workspace, fora do RAG')
+      }
+      setPendingTransfer(null)
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha na operacao')
+    } finally {
+      setSaving(false)
     }
   }
 
-  const deleteSelected = async () => {
-    if (!selectedFile) return
+  const moveSelected = () => {
+    if (!selectedPath || !moveTarget || moveTarget === selectedPath) return
+    if (pathExists(moveTarget)) return toast.error('O destino ja existe')
+    setPendingTransfer({ kind: 'move', source: selectedPath, target: moveTarget })
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    setSaving(true)
     try {
-      await api.workspaceDeletePath(selectedFile)
-      toast.success('Arquivo removido')
-      setSelectedFile('')
-      setContent('')
-      setMoveTarget('')
-      setPatchPreview(null)
-      await loadTree(path)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao remover')
+      await api.workspaceDeletePath(pendingDelete.path, pendingDelete.kind === 'folder')
+      toast.success('Item apagado apos confirmacao')
+      if (selectedPath === pendingDelete.path) {
+        setSelectedPath('')
+        setSelectedKind('')
+        setSelectedFile('')
+        setContent('')
+        setMoveTarget('')
+      }
+      setPendingDelete(null)
+      await refreshTree()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao apagar')
+    } finally {
+      setSaving(false)
     }
   }
+
+  const addSelectedFileToRag = async () => {
+    if (!selectedFile) return
+    setRagLoading(true)
+    try {
+      const result = await api.workspaceRagIngest(selectedFile)
+      toast.success(`${result.chunks} chunks adicionados ao RAG pessoal`)
+      setRagConfirm(false)
+      window.dispatchEvent(new CustomEvent('documents-changed'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao adicionar ao RAG')
+    } finally {
+      setRagLoading(false)
+    }
+  }
+
+  const renderTree = (nodes: WorkspaceTreeNode[], depth = 0): ReactNode => nodes.map(node => {
+    const isFolder = node.kind === 'folder'
+    const isExpanded = expanded.has(node.path)
+    const selected = selectedPath === node.path
+    const dropTarget = isFolder && dragOverPath === node.path
+    return (
+      <div key={node.path}>
+        <button
+          type="button"
+          draggable
+          onDragStart={event => {
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('application/x-workspace-path', node.path)
+          }}
+          onDragOver={event => {
+            if (!isFolder) return
+            event.preventDefault()
+            event.stopPropagation()
+            setDragOverPath(node.path)
+          }}
+          onDragLeave={() => setDragOverPath(null)}
+          onDrop={event => isFolder && handleDrop(event, node.path)}
+          onClick={() => isFolder ? selectFolder(node) : void openFile(node)}
+          className="flex w-full items-center gap-1.5 rounded-lg border px-2 py-2 text-left text-sm transition"
+          style={{
+            marginLeft: depth * 12,
+            width: `calc(100% - ${depth * 12}px)`,
+            background: dropTarget ? 'var(--accent-light)' : selected ? 'var(--accent-light)' : 'transparent',
+            borderColor: dropTarget || selected ? 'var(--accent)' : 'transparent',
+            color: 'var(--text-primary)',
+          }}
+        >
+          <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
+          {isFolder ? (isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : <span className="w-[13px]" />}
+          {isFolder ? (isExpanded ? <FolderOpen size={16} /> : <Folder size={16} />) : <FileText size={16} />}
+          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          {!isFolder ? <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{node.size}b</span> : null}
+        </button>
+        {isFolder && isExpanded ? renderTree(node.children, depth + 1) : null}
+      </div>
+    )
+  })
 
   if (!open) return null
 
@@ -179,39 +357,50 @@ export function WorkspacePanel({ open, onClose }: Props) {
     <>
       <div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-3xl flex-col border-l p-4 shadow-xl"
+        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-5xl flex-col border-l p-4 shadow-xl"
         style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
       >
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: 'var(--accent)' }}>
-              Workspace
+            <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: 'var(--accent)' }}>Workspace</p>
+            <h2 className="text-xl font-black" style={{ color: 'var(--text-primary)' }}>Gerenciador completo de arquivos</h2>
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              Workspace e RAG sao separados. Nada entra no RAG sem sua confirmacao.
             </p>
-            <h2 className="text-xl font-black" style={{ color: 'var(--text-primary)' }}>
-              Arquivos do usuario
-            </h2>
           </div>
-          <button onClick={onClose} className="rounded-lg p-2 hover:bg-black/5 dark:hover:bg-white/10">
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-black/5 dark:hover:bg-white/10"><X size={18} /></button>
         </div>
 
-        <div className="mt-4 grid min-h-0 flex-1 gap-4 md:grid-cols-[260px_1fr]">
-          <section className="min-h-0 rounded-2xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={goUp}
-                disabled={!path}
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold disabled:opacity-40"
-                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                <ArrowLeft size={14} />
-                Voltar
-              </button>
-              <span className="truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                /{path || 'workspace'}
-              </span>
+        <div className="mt-4 grid min-h-0 flex-1 gap-4 md:grid-cols-[340px_1fr]">
+          <section className="flex min-h-0 flex-col rounded-2xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+            <div
+              onDragOver={event => {
+                event.preventDefault()
+                setDragOverPath('')
+              }}
+              onDragLeave={() => setDragOverPath(null)}
+              onDrop={event => handleDrop(event, '')}
+              className="rounded-xl border border-dashed p-3"
+              style={{ borderColor: dragOverPath === '' ? 'var(--accent)' : 'var(--border)', background: dragOverPath === '' ? 'var(--accent-light)' : 'var(--bg-primary)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>/workspace/{currentFolder}</p>
+                  <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>Solte aqui para mover/importar na raiz</p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                  <UploadCloud size={13} /> Importar
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={event => {
+                      const file = event.target.files?.[0]
+                      if (file) prepareImport(file, currentFolder)
+                      event.target.value = ''
+                    }}
+                  />
+                </label>
+              </div>
             </div>
 
             <div className="mt-3 flex gap-2">
@@ -224,121 +413,119 @@ export function WorkspacePanel({ open, onClose }: Props) {
               />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <button onClick={createFile} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent)', color: '#fff' }}>
-                Criar arquivo
-              </button>
+              <button onClick={createFile} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent)', color: '#fff' }}>Criar arquivo</button>
               <button onClick={createFolder} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
-                <span className="inline-flex items-center gap-1"><FolderPlus size={13} /> Pasta</span>
+                <span className="inline-flex items-center gap-1"><FolderPlus size={13} /> Criar pasta</span>
               </button>
             </div>
 
-            <div className="mt-4 max-h-[calc(100vh-230px)] space-y-2 overflow-y-auto pr-1">
-              {loading ? (
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Carregando...</p>
-              ) : nodes.length === 0 ? (
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Workspace vazio.</p>
-              ) : nodes.map(node => (
-                <button
-                  key={node.path}
-                  type="button"
-                  onClick={() => openNode(node)}
-                  className="flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition hover:scale-[1.01]"
-                  style={{
-                    background: selectedFile === node.path ? 'var(--accent-light)' : 'var(--bg-primary)',
-                    borderColor: selectedFile === node.path ? 'var(--accent)' : 'var(--border)',
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  {node.kind === 'folder' ? <Folder size={16} /> : <FileText size={16} />}
-                  <span className="min-w-0 flex-1 truncate">{node.name}</span>
-                  {node.kind === 'file' && (
-                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{node.size}b</span>
-                  )}
-                </button>
-              ))}
+            <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-xl border p-1" style={{ borderColor: 'var(--border)', background: 'var(--bg-primary)' }}>
+              {loading ? <p className="p-3 text-sm" style={{ color: 'var(--text-secondary)' }}>Carregando arvore...</p> : tree.length ? renderTree(tree) : <p className="p-3 text-sm" style={{ color: 'var(--text-secondary)' }}>Workspace vazio.</p>}
             </div>
           </section>
 
           <section className="flex min-h-0 flex-col rounded-2xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
-            {selectedFile ? (
+            {selectedPath ? (
               <>
-                <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold" style={{ color: 'var(--text-tertiary)' }}>Arquivo aberto</p>
-                    <h3 className="truncate font-bold" style={{ color: 'var(--text-primary)' }}>{selectedFile}</h3>
+                    <p className="text-xs font-semibold" style={{ color: 'var(--text-tertiary)' }}>{selectedKind === 'folder' ? 'Pasta selecionada' : 'Arquivo aberto'}</p>
+                    <h3 className="truncate font-bold" style={{ color: 'var(--text-primary)' }}>{selectedPath}</h3>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={previewPatch} disabled={patching} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
-                      <Pencil size={14} />
-                      {patching ? 'Gerando...' : 'Preview patch'}
-                    </button>
-                    <button onClick={saveFile} disabled={saving} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--accent)', color: '#fff' }}>
-                      <Save size={14} />
-                      {saving ? 'Salvando...' : 'Salvar'}
-                    </button>
-                    <button onClick={deleteSelected} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: '#fee2e2', color: '#dc2626' }}>
-                      <Trash2 size={14} />
-                      Deletar
+                  <div className="flex flex-wrap gap-2">
+                    {selectedFile ? (
+                      <>
+                        <button onClick={previewPatch} disabled={patching} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                          <Pencil size={14} /> {patching ? 'Gerando...' : 'Preview patch'}
+                        </button>
+                        <button onClick={saveFile} disabled={saving} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--accent)', color: '#fff' }}>
+                          <Save size={14} /> {saving ? 'Salvando...' : 'Salvar'}
+                        </button>
+                        <button onClick={() => setRagConfirm(true)} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          <Database size={14} /> Selecionar para RAG
+                        </button>
+                      </>
+                    ) : null}
+                    <button onClick={() => setPendingDelete({ path: selectedPath, kind: selectedKind as 'file' | 'folder' })} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: '#fee2e2', color: '#dc2626' }}>
+                      <Trash2 size={14} /> Apagar
                     </button>
                   </div>
                 </div>
 
                 <div className="mt-3 flex gap-2">
-                  <input
-                    value={moveTarget}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setMoveTarget(event.target.value)}
-                    className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none"
-                    style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                  />
+                  <input value={moveTarget} onChange={(event: ChangeEvent<HTMLInputElement>) => setMoveTarget(event.target.value)} className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
                   <button onClick={moveSelected} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
-                    <Pencil size={14} />
-                    Mover
+                    <MoveRight size={14} /> Mover/renomear
                   </button>
                 </div>
 
-                <textarea
-                  value={content}
-                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
-                    setContent(event.target.value)
-                    setPatchPreview(null)
-                  }}
-                  className="mt-3 min-h-0 flex-1 resize-none rounded-2xl border p-4 font-mono text-sm outline-none"
-                  style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                  spellCheck={false}
-                />
-                {patchPreview && (
+                {selectedFile ? (
+                  <textarea
+                    value={content}
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                      setContent(event.target.value)
+                      setPatchPreview(null)
+                      setRagConfirm(false)
+                    }}
+                    className="mt-3 min-h-0 flex-1 resize-none rounded-2xl border p-4 font-mono text-sm outline-none"
+                    style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                    spellCheck={false}
+                  />
+                ) : (
+                  <div className="mt-3 grid flex-1 place-items-center rounded-2xl border border-dashed" style={{ borderColor: 'var(--border)' }}>
+                    <div className="text-center"><FolderOpen className="mx-auto mb-2 opacity-50" size={42} /><p className="text-sm">Arraste arquivos para esta pasta ou crie itens nela.</p></div>
+                  </div>
+                )}
+
+                {patchPreview ? (
                   <>
                     <p className="sr-only">Aplicar patch aprovado</p>
-                    <DiffViewer
-                      preview={patchPreview}
-                      applying={patching}
-                      onApply={applyApprovedPatch}
-                      onCancel={() => setPatchPreview(null)}
-                    />
+                    <DiffViewer preview={patchPreview} applying={patching} onApply={applyApprovedPatch} onCancel={() => setPatchPreview(null)} />
                   </>
-                )}
+                ) : null}
               </>
             ) : (
               <div className="grid flex-1 place-items-center text-center">
-                <div>
-                  <FileText className="mx-auto mb-3 opacity-50" size={42} />
-                  <h3 className="font-bold" style={{ color: 'var(--text-primary)' }}>Nenhum arquivo aberto</h3>
-                  <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Selecione um arquivo ou crie um novo no painel ao lado.
-                  </p>
-                </div>
+                <div><FileText className="mx-auto mb-3 opacity-50" size={42} /><h3 className="font-bold">Selecione um arquivo ou pasta</h3><p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>A arvore mostra visualmente toda a estrutura interna.</p></div>
               </div>
             )}
           </section>
         </div>
+
+        {pendingTransfer ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border p-3" style={{ borderColor: 'var(--accent)', background: 'var(--accent-light)' }}>
+            <MoveRight size={18} style={{ color: 'var(--accent)' }} />
+            <p className="min-w-0 flex-1 text-sm"><strong>Confirmar {pendingTransfer.kind === 'move' ? 'movimentacao' : 'importacao'}:</strong> <span className="font-mono text-xs">{pendingTransfer.target}</span></p>
+            <button onClick={() => setPendingTransfer(null)} className="rounded-xl px-3 py-2 text-xs font-bold">Cancelar</button>
+            <button onClick={confirmTransfer} disabled={saving} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent)', color: '#fff' }}>Confirmar</button>
+          </div>
+        ) : null}
+
+        {pendingDelete ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border p-3" style={{ borderColor: 'var(--danger)', background: 'rgba(239,68,68,.1)' }}>
+            <Trash2 size={18} style={{ color: 'var(--danger)' }} />
+            <p className="min-w-0 flex-1 text-sm"><strong>Apagar {pendingDelete.kind}?</strong> {pendingDelete.kind === 'folder' ? 'Todo o conteudo interno tambem sera removido.' : ''} <span className="font-mono text-xs">{pendingDelete.path}</span></p>
+            <button onClick={() => setPendingDelete(null)} className="rounded-xl px-3 py-2 text-xs font-bold">Cancelar</button>
+            <button onClick={confirmDelete} disabled={saving} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--danger)', color: '#fff' }}>Confirmar exclusao</button>
+          </div>
+        ) : null}
+
+        {ragConfirm && selectedFile ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border p-3" style={{ borderColor: 'var(--accent)', background: 'var(--accent-light)' }}>
+            <Database size={18} style={{ color: 'var(--accent)' }} />
+            <p className="min-w-0 flex-1 text-sm"><strong>Adicionar somente este arquivo ao RAG?</strong> <span className="font-mono text-xs">{selectedFile}</span></p>
+            <button onClick={() => setRagConfirm(false)} className="rounded-xl px-3 py-2 text-xs font-bold">Cancelar</button>
+            <button onClick={addSelectedFileToRag} disabled={ragLoading} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent)', color: '#fff' }}>{ragLoading ? 'Adicionando...' : 'Confirmar RAG'}</button>
+          </div>
+        ) : null}
       </aside>
     </>
   )
 }
 
-function normalizeTarget(value: string, currentPath: string): string {
+function normalizeTarget(value: string, currentFolder: string): string {
   const trimmed = value.trim().replace(/^\/+/, '')
   if (!trimmed) return ''
-  if (!currentPath || trimmed.includes('/')) return trimmed
-  return `${currentPath}/${trimmed}`
+  if (!currentFolder || trimmed.includes('/')) return trimmed
+  return `${currentFolder}/${trimmed}`
 }

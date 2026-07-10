@@ -7,6 +7,7 @@ import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw } from 'lucide-react'
 import type { ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { ThinkingBlock } from './ThinkingBlock'
+import { WorkspacePlanCard } from './WorkspacePlanCard'
 
 interface Props {
   message: ChatMessageType
@@ -203,6 +204,7 @@ export function ChatMessageBubble({ message, isLoading, onRegenerate }: Props) {
 
               {/* Conteúdo da resposta */}
               {memoContent}
+              {message.workspacePlan && <WorkspacePlanCard plan={message.workspacePlan} />}
 
               {/* Loading indicator quando não tem content nem reasoning */}
               {isLoading && !message.content && !message.reasoning && <TypingIndicator />}

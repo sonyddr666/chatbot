@@ -11,6 +11,7 @@ from src.api.schemas import (
     WorkspacePatchApplyResponse,
     WorkspacePatchPreviewRequest,
     WorkspacePatchPreviewResponse,
+    WorkspaceAgentPlanRequest,
     WorkspaceMoveRequest,
     WorkspacePathRequest,
     WorkspaceTreeResponse,
@@ -26,6 +27,14 @@ from src.core.workspace import (
     write_text_file,
 )
 from src.core.patcher import apply_workspace_patch, preview_workspace_patch
+from src.core.user_provider_manager import get_active_config_for_user
+from src.core.workspace_agent import (
+    apply_workspace_plan,
+    cancel_workspace_plan,
+    create_workspace_plan,
+    get_workspace_plan,
+)
+from src.core.workspace_rag import ingest_selected_workspace_file
 
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -39,6 +48,8 @@ async def get_current_user(authorization: str | None = Header(default=None)):
 
 
 def _workspace_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
     if isinstance(exc, FileNotFoundError):
         return HTTPException(status_code=404, detail="Caminho nao encontrado")
     if isinstance(exc, FileExistsError):
@@ -46,6 +57,50 @@ def _workspace_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail="Erro no workspace")
+
+
+@router.post("/ai/plan")
+async def workspace_ai_plan(body: WorkspaceAgentPlanRequest, user=Depends(get_current_user)):
+    if not body.instruction.strip():
+        raise HTTPException(status_code=400, detail="Instrucao nao pode ser vazia")
+    try:
+        provider_config = get_active_config_for_user(user.id)
+        return await create_workspace_plan(user.id, body.instruction.strip(), provider_config)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.get("/ai/plans/{plan_id}")
+async def workspace_ai_get_plan(plan_id: str, user=Depends(get_current_user)):
+    try:
+        return get_workspace_plan(user.id, plan_id)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.post("/ai/plans/{plan_id}/apply")
+async def workspace_ai_apply_plan(plan_id: str, user=Depends(get_current_user)):
+    try:
+        return apply_workspace_plan(user.id, plan_id)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.delete("/ai/plans/{plan_id}")
+async def workspace_ai_cancel_plan(plan_id: str, user=Depends(get_current_user)):
+    try:
+        return cancel_workspace_plan(user.id, plan_id)
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.post("/rag/ingest")
+async def workspace_rag_ingest(body: WorkspacePathRequest, user=Depends(get_current_user)):
+    """Add only the explicitly selected workspace file to personal RAG."""
+    try:
+        return ingest_selected_workspace_file(user.id, body.path)
+    except Exception as exc:
+        raise _workspace_error(exc)
 
 
 @router.get("/tree", response_model=WorkspaceTreeResponse)
@@ -82,9 +137,9 @@ async def workspace_mkdir(body: WorkspacePathRequest, user=Depends(get_current_u
 
 
 @router.delete("/path")
-async def workspace_delete_path(path: str, user=Depends(get_current_user)):
+async def workspace_delete_path(path: str, recursive: bool = False, user=Depends(get_current_user)):
     try:
-        deleted = delete_path(user.id, path)
+        deleted = delete_path(user.id, path, recursive=recursive)
         return {"deleted": deleted, "path": path}
     except Exception as exc:
         raise _workspace_error(exc)
