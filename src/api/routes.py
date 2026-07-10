@@ -46,6 +46,7 @@ from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
 from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_extracted_text, save_upload_original, write_rag_manifest
 from src.core.userspace import safe_user_path, write_profile_text
+from src.tools.perplexo_search import perplexo_health
 
 router = APIRouter()
 _SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
@@ -422,6 +423,39 @@ async def list_skills(user=Depends(get_current_user)):
 async def list_skill_runs(limit: int = 50, user=Depends(get_current_user)):
     ensure_db()
     return {"runs": SkillRunRepo.list_for_user(user.id, limit=limit)}
+
+
+@router.get("/skills/perplexo/status")
+async def perplexo_skill_status(user=Depends(get_current_user)):
+    return {
+        "skill": "perplexo_search",
+        "configured": bool(settings.mcp_api_key.strip()),
+        "base_url": settings.perplexo_base_url.rstrip("/"),
+        "timeout_seconds": settings.perplexo_timeout_seconds,
+    }
+
+
+@router.post("/skills/perplexo/test")
+async def test_perplexo_skill(user=Depends(get_current_user)):
+    try:
+        result = await perplexo_health()
+        SkillRunRepo.create(
+            user.id,
+            "perplexo_search",
+            "completed",
+            {"action": "health_check"},
+            output_summary="Conexao com o Perplexo confirmada.",
+        )
+        return result
+    except Exception as exc:
+        SkillRunRepo.create(
+            user.id,
+            "perplexo_search",
+            "failed",
+            {"action": "health_check"},
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.put("/skills/{skill_name}")

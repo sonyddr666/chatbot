@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     auth_secret_key: str = ""
     user_data_dir: str = "./data/users"
 
+    # Perplexo HTTP tool server. The API key is global infrastructure config and
+    # is never returned to clients or persisted in per-user skill settings.
+    perplexo_base_url: str = "https://api.ghost1.cloud"
+    mcp_api_key: str = ""
+    perplexo_timeout_seconds: float = 25.0
+
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"
     redis_port: int = 6379

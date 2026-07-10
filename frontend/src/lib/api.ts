@@ -100,6 +100,15 @@ export interface SkillRunInfo {
   finished_at: string | null
 }
 
+export interface PerplexoStatus {
+  skill: string
+  configured: boolean
+  base_url: string
+  timeout_seconds: number
+  online?: boolean
+  status_code?: number
+}
+
 export interface UserPreferenceInfo {
   value: unknown
   source: string
@@ -266,6 +275,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled, config }),
     }),
+  getPerplexoStatus: () => req<PerplexoStatus>('/skills/perplexo/status'),
+  testPerplexo: () => req<PerplexoStatus>('/skills/perplexo/test', { method: 'POST' }),
   listPreferences: () =>
     req<{ preferences: Record<string, UserPreferenceInfo> }>('/preferences'),
   setPreference: (key: string, value: unknown, source = 'manual', confidence = 1) =>

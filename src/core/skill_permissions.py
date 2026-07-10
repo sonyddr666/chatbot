@@ -10,7 +10,11 @@ def skill_permissions(skill: dict) -> dict:
     if isinstance(permissions, dict) and permissions:
         return permissions
     return {
-        "network": bool(skill.get("requires_network")) or skill.get("name") in {"simple_search", "search_and_answer"},
+        "network": bool(skill.get("requires_network")) or skill.get("name") in {
+            "perplexo_search",
+            "simple_search",
+            "search_and_answer",
+        },
         "workspace_read": False,
         "workspace_write": False,
         "shell": bool(skill.get("requires_shell")),

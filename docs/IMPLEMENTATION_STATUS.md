@@ -70,6 +70,7 @@ upload original
 
 As skills sao registradas globalmente, mas habilitadas por usuario e auditadas no banco e em `skills/audit/skill_runs.jsonl`.
 
+- `perplexo_search`: usa a API HTTP Perplexo para pesquisa web, profunda e academica com fontes. E habilitada por usuario, envia `user_id` isolado, nunca expoe `MCP_API_KEY` e pode usar a busca simples como fallback.
 - `simple_search`: pesquisa web simples com fontes.
 - `search_and_answer`: pesquisa e prepara contexto para a resposta.
 - `personal_rag`: forca consulta ao RAG pessoal.
@@ -78,6 +79,8 @@ As skills sao registradas globalmente, mas habilitadas por usuario e auditadas n
 - `workspace_manager`: detecta pedidos naturais no chat, usa a IA para planejar `mkdir`, `write_file`, `move` e `delete`, persiste o plano no UserSpace e so executa apos confirmacao visual.
 
 Shell permanece bloqueado. A compatibilidade com o formato legado de skills de busca foi mantida sem conceder acesso a workspace ou shell.
+
+O painel de Skills permite salvar por usuario o modelo, foco, periodo e uso de fallback da `perplexo_search`. O teste de conexao consulta somente `/health`; a execucao consulta somente `/search`. Endpoints de tokens e credenciais do servidor externo nao sao expostos ao modelo.
 
 ## APIs principais
 
@@ -109,6 +112,8 @@ POST /api/v1/workspace/rag/ingest
 GET /api/v1/skills
 PUT /api/v1/skills/{skill_name}
 GET /api/v1/skills/runs
+GET /api/v1/skills/perplexo/status
+POST /api/v1/skills/perplexo/test
 ```
 
 ## Regras anti-travamento
@@ -131,6 +136,18 @@ Resultado consolidado: `63` testes passaram em `6.499s`.
 
 Aviso nao bloqueante observado: `StarletteDeprecationWarning` para o adaptador atual de `TestClient` e `httpx`.
 
+### Validacao da Skill Perplexo
+
+Comando curto executado com limite automatico:
+
+```powershell
+python -m unittest tests.test_perplexo_search tests.test_skill_runtime tests.test_skill_permissions tests.test_skills_context
+```
+
+Resultado: `11` testes passaram em `0.381s`. Foram validados autenticacao por `X-API-Key`, isolamento por `user_id`, formatacao de fontes, selecao automatica de pesquisa profunda, fallback e permissoes.
+
+O teste real de `GET https://api.ghost1.cloud/health` retornou HTTP `200` com estado `healthy`. Uma chamada real de `POST /search` tambem foi concluida e retornou resposta com fonte. A chave permaneceu somente no `.env` ignorado pelo Git.
+
 ## Build do frontend
 
 Comando executado com corte automatico de 45 segundos:
@@ -139,9 +156,9 @@ Comando executado com corte automatico de 45 segundos:
 npm run build
 ```
 
-Resultado: TypeScript e Vite concluiram o build de producao em `669ms`.
+Resultado mais recente: TypeScript e Vite concluiram o build de producao em `434ms`.
 
-Aviso nao bloqueante observado: o bundle JavaScript principal ficou em `1,151.05 kB` (`372.49 kB` gzip), acima do limite de aviso de `500 kB`. Isso nao impede a execucao; code splitting pode reduzir o tamanho em uma etapa futura.
+Aviso nao bloqueante observado: o bundle JavaScript principal ficou em `1,157.86 kB` (`374.09 kB` gzip), acima do limite de aviso de `500 kB`. Isso nao impede a execucao; code splitting pode reduzir o tamanho em uma etapa futura.
 
 ## Fora desta validacao
 

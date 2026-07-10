@@ -7,6 +7,32 @@ from typing import Any
 
 DEFAULT_SKILLS: tuple[dict[str, Any], ...] = (
     {
+        "name": "perplexo_search",
+        "description": "Pesquisa atual, profunda ou academica com respostas completas e fontes pelo Perplexo.",
+        "kind": "external_research",
+        "definition": {
+            "inputs": {"query": "string"},
+            "permissions": {
+                "network": True,
+                "workspace_read": False,
+                "workspace_write": False,
+                "shell": False,
+            },
+            "default_enabled": False,
+            "executor": "perplexo_search",
+            "endpoint": "/search",
+            "modes": ["web", "deep-research", "academic"],
+            "fallback": "web_search",
+            "examples": [
+                "pesquise as noticias mais recentes sobre inteligencia artificial",
+                "faca uma pesquisa profunda sobre agentes autonomos",
+            ],
+        },
+        "requires_network": True,
+        "requires_shell": False,
+        "risk_level": 1,
+    },
+    {
         "name": "simple_search",
         "description": "Pesquisa web simples e entrega resultados com fontes.",
         "kind": "external_search",

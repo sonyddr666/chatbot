@@ -559,6 +559,7 @@ GET  /api/v1/profiles
 
 Skills padrao:
 
+- `perplexo_search`
 - `simple_search`
 - `search_and_answer`
 - `personal_rag`
@@ -573,6 +574,10 @@ Implementado:
 - Skill so executa se estiver habilitada.
 - Skills com `requires_shell=True` ficam bloqueadas.
 - Busca web so roda quando skill de busca esta habilitada e a mensagem indica intencao de pesquisa.
+- `perplexo_search` usa `POST /search` com `X-API-Key`, separa o historico externo por `user_id` e inclui fontes na resposta.
+- Pedidos de pesquisa profunda ou academica ajustam automaticamente modelo, foco e periodo.
+- Se o Perplexo estiver indisponivel, a skill pode usar a pesquisa simples como fallback sem travar o chat.
+- O painel permite configurar modelo, foco, periodo, fallback e testar a conexao sem mostrar a chave.
 - `personal_rag` registra execucao quando forca uso do RAG pessoal.
 - `workspace_read` so le arquivo com comando explicito `@workspace:read caminho/do/arquivo.md`.
 - `workspace_write_preview` so gera diff com `@workspace:preview caminho/do/arquivo.md`, uma linha `---` e o novo conteudo; nunca aplica a alteracao.
@@ -583,6 +588,8 @@ Rotas:
 GET /api/v1/skills
 PUT /api/v1/skills/{skill_name}
 GET /api/v1/skills/runs
+GET /api/v1/skills/perplexo/status
+POST /api/v1/skills/perplexo/test
 ```
 
 ### Pool Codex/ChatGPT
@@ -759,6 +766,10 @@ OLLAMA_MODEL=llama2
 OPENCODE_ZEN_API_KEY=
 OPENCODE_GO_API_KEY=
 
+PERPLEXO_BASE_URL=https://api.ghost1.cloud
+MCP_API_KEY=
+PERPLEXO_TIMEOUT_SECONDS=25
+
 EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 VECTOR_DB_TYPE=chroma
@@ -779,6 +790,9 @@ python -m src.main serve
 
 # Rodar CLI/chat simples
 python -m src.main chat
+
+# Validacao rapida da Skill Perplexo
+python -m unittest tests.test_perplexo_search tests.test_skill_runtime
 
 # Rodar frontend
 cd frontend

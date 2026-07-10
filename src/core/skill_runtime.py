@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import re
+import unicodedata
 
 from src.db.repository import SkillRepo, SkillRunRepo
 from src.core.patcher import preview_workspace_patch
 from src.core.skill_permissions import can_execute_skill, executable_skill_names
 from src.core.workspace import read_text_file
+from src.tools.perplexo_search import perplexo_search
 from src.tools.web_search import web_search
 
 
-SEARCH_SKILLS = {"simple_search", "search_and_answer"}
+SEARCH_SKILLS = {"perplexo_search", "simple_search", "search_and_answer"}
 SEARCH_TRIGGERS = (
     "pesquise",
+    "pesquisa",
     "pesquisar",
     "busque",
     "buscar",
@@ -51,12 +54,19 @@ def _enabled_skill(skills: Iterable[dict], name: str, permission: str | None = N
     return None
 
 
+def _normalized_message(message: str) -> str:
+    normalized = unicodedata.normalize("NFKD", message.lower())
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
 def _search_skill_for_message(message: str, skills: Iterable[dict]) -> dict | None:
     """Prefer the richer workflow without ever executing duplicate searches."""
-    msg = message.lower()
+    msg = _normalized_message(message)
     if not any(trigger in msg for trigger in SEARCH_TRIGGERS):
         return None
     return (
+        _enabled_skill(skills, "perplexo_search", "network")
+        or
         _enabled_skill(skills, "search_and_answer", "network")
         or _enabled_skill(skills, "simple_search", "network")
     )
@@ -90,25 +100,85 @@ def _workspace_error_context(skill_name: str, error: Exception) -> str:
     )
 
 
+def _choice(config: dict, key: str, allowed: set[str], default: str) -> str:
+    value = str(config.get(key, default)).strip().lower()
+    return value if value in allowed else default
+
+
+def _perplexo_options(message: str, config: dict) -> dict[str, str]:
+    options = {
+        "model": _choice(config, "model", {"best", "deep-research"}, "best"),
+        "focus": _choice(config, "focus", {"web", "academic"}, "web"),
+        "time_range": _choice(
+            config,
+            "time_range",
+            {"day", "week", "month", "year", "all"},
+            "week",
+        ),
+        "citation_mode": _choice(
+            config,
+            "citation_mode",
+            {"markdown", "plain"},
+            "markdown",
+        ),
+    }
+    normalized = _normalized_message(message)
+    if any(term in normalized for term in ("pesquisa profunda", "pesquisa aprofundada", "deep research")):
+        options.update(model="deep-research", focus="academic", time_range="year")
+    elif any(term in normalized for term in ("academica", "cientifica", "artigo cientifico")):
+        options.update(focus="academic", time_range="year")
+    return options
+
+
+def _fallback_enabled(config: dict) -> bool:
+    value = config.get("fallback_enabled", True)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
 async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
     skill_name = str(skill["name"])
     audit_skill_name = skill_name if skill.get("definition") else "web_search"
     config = skill.get("config") or {}
+    definition = skill.get("definition") or {}
+    executor = str(definition.get("executor") or "web_search")
     try:
         max_results = int(config.get("max_results", 3))
     except (TypeError, ValueError):
         max_results = 3
     max_results = min(max(max_results, 1), 5)
+    input_data = {"query": message, "executor": executor}
 
     try:
-        result = await web_search(message, max_results=max_results)
+        if executor == "perplexo_search" or skill_name == "perplexo_search":
+            options = _perplexo_options(message, config)
+            input_data.update(options)
+            try:
+                result = await perplexo_search(message, user_id, **options)
+            except Exception as primary_error:
+                if not _fallback_enabled(config):
+                    raise
+                result = await web_search(message, max_results=max_results)
+                if not result or result.startswith("Erro na busca"):
+                    raise RuntimeError(
+                        f"Perplexo falhou ({primary_error}) e o fallback tambem falhou"
+                    )
+                input_data["fallback"] = "web_search"
+                result = (
+                    "[Fallback de pesquisa simples usado porque o Perplexo estava indisponivel.]\n\n"
+                    + result
+                )
+        else:
+            input_data["max_results"] = max_results
+            result = await web_search(message, max_results=max_results)
         if not result or result.startswith("Erro na busca"):
             raise RuntimeError(result or "Busca nao retornou resultados")
         SkillRunRepo.create(
             user_id,
             audit_skill_name,
             "completed",
-            {"query": message, "max_results": max_results, "executor": "web_search"},
+            input_data,
             output_summary=result,
         )
         return build_runtime_context(skill_name, result)
@@ -117,7 +187,7 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
             user_id,
             audit_skill_name,
             "failed",
-            {"query": message, "max_results": max_results, "executor": "web_search"},
+            input_data,
             error_message=str(exc),
         )
         return ""
