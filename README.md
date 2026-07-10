@@ -938,6 +938,10 @@ de embeddings entre rebuilds. Mantenha uma unica replica da API.
 A imagem da API instala explicitamente o PyTorch CPU-only. Isso evita baixar CUDA,
 cuDNN e bibliotecas NVIDIA desnecessarias durante o build em servidores sem GPU NVIDIA.
 
+Para Cloudflare Tunnel executado no host, o frontend tambem e publicado somente no
+loopback em `127.0.0.1:${FRONTEND_HOST_PORT:-3100}`. Configure a origem do tunnel como
+`http://127.0.0.1:3100`. Essa porta nao fica exposta na interface publica do servidor.
+
 ## Banco de Dados
 
 Modelos principais:
