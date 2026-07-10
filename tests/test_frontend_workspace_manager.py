@@ -28,11 +28,16 @@ class FrontendWorkspaceManagerTest(unittest.TestCase):
 
         chat_message = Path("frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
         self.assertIn("workspace-plan:[a-f0-9]{32}", chat_message)
+        self.assertIn("hover:brightness-150", panel)
+        self.assertIn("Extraindo texto, criando chunks", panel)
+        self.assertIn("Processando ${index + 1}", plan_card)
 
     def test_sidebar_upload_no_longer_uses_immediate_rag_endpoint(self):
         sidebar = Path("frontend/src/components/Sidebar.tsx").read_text(encoding="utf-8")
         self.assertIn("api.uploadOriginalDocument", sidebar)
         self.assertNotIn("api.uploadDocument(file)", sidebar)
+        self.assertIn("documents-changed", sidebar)
+        self.assertIn("refreshDocuments", sidebar)
 
 
 if __name__ == "__main__":

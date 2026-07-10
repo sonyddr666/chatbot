@@ -11,6 +11,7 @@ import {
   GripVertical,
   MoveRight,
   Pencil,
+  RefreshCw,
   Save,
   Trash2,
   UploadCloud,
@@ -441,7 +442,11 @@ export function WorkspacePanel({ open, onClose }: Props) {
                         <button onClick={saveFile} disabled={saving} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--accent)', color: '#fff' }}>
                           <Save size={14} /> {saving ? 'Salvando...' : 'Salvar'}
                         </button>
-                        <button onClick={() => setRagConfirm(true)} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                        <button
+                          onClick={() => setRagConfirm(true)}
+                          className="inline-flex cursor-pointer items-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold transition-all hover:-translate-y-0.5 hover:brightness-150 hover:shadow-md active:translate-y-0"
+                          style={{ background: 'var(--accent-light)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                        >
                           <Database size={14} /> Selecionar para RAG
                         </button>
                       </>
@@ -512,10 +517,14 @@ export function WorkspacePanel({ open, onClose }: Props) {
 
         {ragConfirm && selectedFile ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border p-3" style={{ borderColor: 'var(--accent)', background: 'var(--accent-light)' }}>
-            <Database size={18} style={{ color: 'var(--accent)' }} />
-            <p className="min-w-0 flex-1 text-sm"><strong>Adicionar somente este arquivo ao RAG?</strong> <span className="font-mono text-xs">{selectedFile}</span></p>
-            <button onClick={() => setRagConfirm(false)} className="rounded-xl px-3 py-2 text-xs font-bold">Cancelar</button>
-            <button onClick={addSelectedFileToRag} disabled={ragLoading} className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent)', color: '#fff' }}>{ragLoading ? 'Adicionando...' : 'Confirmar RAG'}</button>
+            {ragLoading ? <RefreshCw className="animate-spin" size={18} style={{ color: 'var(--accent)' }} /> : <Database size={18} style={{ color: 'var(--accent)' }} />}
+            <p className="min-w-0 flex-1 text-sm">
+              <strong>{ragLoading ? 'Adicionando ao RAG...' : 'Adicionar somente este arquivo ao RAG?'}</strong>{' '}
+              <span className="font-mono text-xs">{selectedFile}</span>
+              {ragLoading ? <span className="mt-1 block text-xs">Extraindo texto, criando chunks e atualizando a lista de documentos.</span> : null}
+            </p>
+            <button onClick={() => setRagConfirm(false)} disabled={ragLoading} className="rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-40">Cancelar</button>
+            <button onClick={addSelectedFileToRag} disabled={ragLoading} className="rounded-xl px-3 py-2 text-xs font-bold disabled:cursor-wait disabled:opacity-70" style={{ background: 'var(--accent)', color: '#fff' }}>{ragLoading ? 'Processando...' : 'Confirmar RAG'}</button>
           </div>
         ) : null}
       </aside>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { Check, CheckCircle2, Database, FileEdit, FilePlus2, FolderPlus, MoveRight, Trash2, X } from 'lucide-react'
+import { Check, CheckCircle2, Database, FileEdit, FilePlus2, FolderPlus, MoveRight, RefreshCw, Trash2, X } from 'lucide-react'
 import { api, type WorkspaceAction, type WorkspaceActionPlan } from '../lib/api'
 
 interface Props {
@@ -31,6 +31,7 @@ export function WorkspacePlanCard({ plan }: Props) {
   const [busy, setBusy] = useState(false)
   const [ragPaths, setRagPaths] = useState<string[]>([])
   const [ragDone, setRagDone] = useState<string[]>([])
+  const [ragProgress, setRagProgress] = useState('')
   const pending = current.status === 'pending'
   const applied = current.status === 'applied'
   const statusLabel = applied ? 'Concluido' : current.status === 'cancelled' ? 'Cancelado' : current.status
@@ -68,9 +69,11 @@ export function WorkspacePlanCard({ plan }: Props) {
   const addSelectedToRag = async () => {
     if (ragPaths.length === 0) return
     setBusy(true)
+    setRagProgress('Preparando arquivos selecionados...')
     const completed: string[] = []
     try {
-      for (const path of ragPaths) {
+      for (const [index, path] of ragPaths.entries()) {
+        setRagProgress(`Processando ${index + 1} de ${ragPaths.length}: ${path}`)
         await api.workspaceRagIngest(path)
         completed.push(path)
       }
@@ -83,6 +86,7 @@ export function WorkspacePlanCard({ plan }: Props) {
       toast.error(error instanceof Error ? error.message : 'Falha ao adicionar ao RAG')
     } finally {
       setBusy(false)
+      setRagProgress('')
     }
   }
 
@@ -184,7 +188,7 @@ export function WorkspacePlanCard({ plan }: Props) {
           </div>
           <div className="mt-2 space-y-1">
             {eligibleRagPaths.map(path => (
-              <label key={path} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs" style={{ background: 'var(--bg-primary)' }}>
+              <label key={path} className="flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-xs transition-all hover:border-green-600 hover:brightness-125" style={{ background: 'var(--bg-primary)' }}>
                 <input
                   type="checkbox"
                   checked={ragPaths.includes(path) || ragDone.includes(path)}
@@ -196,13 +200,22 @@ export function WorkspacePlanCard({ plan }: Props) {
               </label>
             ))}
           </div>
+          {busy && ragProgress ? (
+            <div className="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+              <RefreshCw className="animate-spin" size={14} /> {ragProgress}
+            </div>
+          ) : null}
+          {!busy && ragPaths.length === 0 && eligibleRagPaths.some(path => !ragDone.includes(path)) ? (
+            <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>Marque um arquivo acima para ativar o botao.</p>
+          ) : null}
           <button
             onClick={addSelectedToRag}
             disabled={busy || ragPaths.length === 0}
-            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-40"
-            style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}
+            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-all enabled:cursor-pointer enabled:hover:brightness-150 enabled:hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ background: 'var(--accent-light)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
           >
-            <Database size={14} /> Adicionar selecionados ao RAG
+            {busy ? <RefreshCw className="animate-spin" size={14} /> : <Database size={14} />}
+            {busy ? 'Adicionando ao RAG...' : 'Adicionar selecionados ao RAG'}
           </button>
         </div>
       ) : null}

@@ -25,6 +25,16 @@ export function Sidebar() {
     loadStats()
   }, [loadConversations, loadDocuments, loadStats])
 
+  useEffect(() => {
+    const refreshDocuments = () => void loadDocuments()
+    window.addEventListener('documents-changed', refreshDocuments)
+    return () => window.removeEventListener('documents-changed', refreshDocuments)
+  }, [loadDocuments])
+
+  useEffect(() => {
+    if (tab === 'docs') void loadDocuments()
+  }, [loadDocuments, tab])
+
   const filteredConvs = conversations.filter(c =>
     c.title.toLowerCase().includes(search.toLowerCase()),
   )
