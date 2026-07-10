@@ -3,8 +3,10 @@ Suporta OpenAI, Anthropic, Ollama, Codex ChatGPT e qualquer API compatível com 
 Gera streaming com separação de reasoning_content e content.
 """
 
+import asyncio
 import json
 from typing import AsyncGenerator, Tuple, Optional
+import httpx
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
@@ -19,6 +21,130 @@ from src.core.codex_client import chat_completion_stream
 
 def _is_codex_provider(provider_id: str) -> bool:
     return provider_id == "codex-chatgpt"
+
+
+def _is_opencode_provider(config: dict) -> bool:
+    provider_id = str(config.get("provider_id", "")).lower()
+    base_url = str(config.get("base_url", "")).lower()
+    return provider_id.startswith("opencode-") or "opencode.ai/" in base_url
+
+
+def _coerce_stream_text(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_coerce_stream_text(item) for item in value)
+    if isinstance(value, dict):
+        for key in ("text", "content", "reasoning_content", "reasoning", "thinking"):
+            if key in value:
+                return _coerce_stream_text(value[key])
+    return ""
+
+
+def _openai_delta_parts(delta: dict) -> list[tuple[str, str]]:
+    """Normalize common reasoning fields used by OpenAI-compatible gateways."""
+    parts: list[tuple[str, str]] = []
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        reasoning = _coerce_stream_text(delta.get(key))
+        if reasoning:
+            parts.append(("reasoning", reasoning))
+            break
+    content = _coerce_stream_text(delta.get("content"))
+    if content:
+        parts.append(("content", content))
+    return parts
+
+
+def _smooth_stream_parts(text: str, chunk_size: int = 48) -> list[str]:
+    """Avoid dropping a complete buffered answer into the UI in one frame."""
+    if len(text) <= chunk_size * 2:
+        return [text]
+    return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
+
+
+def _messages_for_openai(messages: list[BaseMessage]) -> list[dict]:
+    result = []
+    for message in messages:
+        if isinstance(message, SystemMessage):
+            role = "system"
+        elif isinstance(message, HumanMessage):
+            role = "user"
+        else:
+            role = "assistant"
+        result.append({"role": role, "content": message.content})
+    return result
+
+
+async def generate_opencode_stream(
+    messages: list[BaseMessage],
+    provider_config: dict,
+) -> AsyncGenerator[Tuple[str, str], None]:
+    """Read OpenCode SSE directly so non-standard reasoning fields are preserved."""
+    base_url = str(provider_config.get("base_url", "")).rstrip("/")
+    model = str(provider_config.get("model_id", "")).strip()
+    api_key = str(provider_config.get("api_key", "")).strip()
+    if not base_url or not model or not api_key:
+        raise RuntimeError("Provider OpenCode incompleto: URL, modelo ou chave ausente")
+
+    endpoint = base_url if base_url.endswith("/chat/completions") else base_url + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": _messages_for_openai(messages),
+        "stream": True,
+        "temperature": 0.7,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+    }
+    received_text = False
+    pending_type = ""
+    pending_text = ""
+    timeout = httpx.Timeout(120.0, connect=10.0)
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with client.stream("POST", endpoint, headers=headers, json=payload) as response:
+            if response.status_code >= 400:
+                detail = (await response.aread()).decode("utf-8", errors="replace")[:500]
+                raise RuntimeError(f"OpenCode retornou HTTP {response.status_code}: {detail}")
+
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("error"):
+                    raise RuntimeError(f"OpenCode retornou erro: {event['error']}")
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or choice.get("message") or {}
+                    for typ, text in _openai_delta_parts(delta):
+                        received_text = True
+                        if pending_type and pending_type != typ and pending_text:
+                            for piece in _smooth_stream_parts(pending_text):
+                                yield (pending_type, piece)
+                            pending_text = ""
+                        pending_type = typ
+                        pending_text += text
+                        if len(pending_text) >= 24 or "\n" in text:
+                            pieces = _smooth_stream_parts(pending_text)
+                            for index, piece in enumerate(pieces):
+                                yield (pending_type, piece)
+                                if len(pieces) > 1 and index < len(pieces) - 1:
+                                    await asyncio.sleep(0.004)
+                            pending_text = ""
+
+    if pending_type and pending_text:
+        for piece in _smooth_stream_parts(pending_text):
+            yield (pending_type, piece)
+
+    if not received_text:
+        raise RuntimeError("OpenCode encerrou o stream sem conteudo")
 
 
 def _convert_messages_to_codex(messages: list[BaseMessage]) -> list[dict]:
@@ -189,6 +315,11 @@ async def generate_stream(
             yield chunk
         return
 
+    if _is_opencode_provider(pm_cfg):
+        async for chunk in generate_opencode_stream(messages, pm_cfg):
+            yield chunk
+        return
+
     # ─── Outros provedores (OpenAI, Anthropic, etc.) ───
     llm = get_llm(provider_config=pm_cfg)
     if llm is None:
@@ -197,13 +328,25 @@ async def generate_stream(
 
     async for chunk in llm.astream(messages):
         if isinstance(chunk, AIMessageChunk):
-            reasoning = chunk.additional_kwargs.get("reasoning_content")
+            reasoning = ""
+            for key in ("reasoning_content", "reasoning", "thinking"):
+                reasoning = _coerce_stream_text(chunk.additional_kwargs.get(key))
+                if reasoning:
+                    break
             if reasoning:
-                yield ("reasoning", reasoning)
+                for part in _smooth_stream_parts(reasoning):
+                    yield ("reasoning", part)
                 continue
 
         if chunk.content:
-            yield ("content", chunk.content)
+            content = _coerce_stream_text(chunk.content)
+            if not content:
+                continue
+            parts = _smooth_stream_parts(content)
+            for index, part in enumerate(parts):
+                yield ("content", part)
+                if len(parts) > 1 and index < len(parts) - 1:
+                    await asyncio.sleep(0.004)
 
 
 async def generate(messages: list[BaseMessage], provider_config: dict | None = None) -> str:

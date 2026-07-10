@@ -17,6 +17,57 @@ class FakeStreamingLLM:
 
 
 class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
+    def test_opencode_delta_preserves_reasoning_and_content(self):
+        from src.core.llm import _openai_delta_parts
+
+        parts = _openai_delta_parts({
+            "reasoning_content": "analisando",
+            "content": "resposta",
+        })
+
+        self.assertEqual(parts, [
+            ("reasoning", "analisando"),
+            ("content", "resposta"),
+        ])
+
+    def test_large_buffered_content_is_split_without_data_loss(self):
+        from src.core.llm import _smooth_stream_parts
+
+        content = "abc " * 100
+        parts = _smooth_stream_parts(content, chunk_size=32)
+
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(parts), content)
+
+    async def test_opencode_provider_uses_direct_reasoning_stream(self):
+        from src.core.llm import generate_stream
+
+        async def fake_opencode_stream(messages, provider_config):
+            yield ("reasoning", "analisando")
+            yield ("content", provider_config["model_id"])
+
+        provider_config = {
+            "provider_id": "opencode-zen-free",
+            "base_url": "https://opencode.ai/zen/v1",
+            "api_key": "test-key",
+            "api_format": "chat_completions",
+            "model_id": "deepseek-v4-flash-free",
+        }
+
+        with patch("src.core.llm.generate_opencode_stream", new=fake_opencode_stream):
+            chunks = [
+                chunk
+                async for chunk in generate_stream(
+                    [HumanMessage(content="oi")],
+                    provider_config=provider_config,
+                )
+            ]
+
+        self.assertEqual(chunks, [
+            ("reasoning", "analisando"),
+            ("content", "deepseek-v4-flash-free"),
+        ])
+
     async def test_generate_stream_uses_explicit_provider_config(self):
         from src.core.llm import generate_stream
 

@@ -328,10 +328,10 @@ export const api = {
    *   event: token\n data: <text>\n\n
    *   event: done\n data: {"message_id":..., "has_reasoning":...}\n\n
    */
-  async *stream(message: string, sessionId = 'default', useRag = false): AsyncGenerator<StreamChunk> {
+  async *stream(message: string, sessionId = 'default', useRag = false, useThinking = true): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat/stream`, {
       method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
+      body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag, use_thinking: useThinking }),
     })
     if (!res.ok) throw new Error('Falha no streaming')
 

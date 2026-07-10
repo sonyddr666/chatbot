@@ -18,6 +18,7 @@ interface ChatState {
   error: string | null
   lastMetrics: ChatMetrics | null
   route: 'fast' | 'full' | null
+  streamStatus: string | null
 
   // Session
   sessionId: string
@@ -88,6 +89,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
   lastMetrics: null,
   route: null,
+  streamStatus: null,
   sessionId: 'default',
   conversations: [],
   showSidebar: false,
@@ -119,6 +121,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       error: null,
       lastMetrics: null,
       route: null,
+      streamStatus: 'Preparando resposta...',
     }))
 
     try {
@@ -140,9 +143,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : m,
         ),
         error: msg,
+        streamStatus: null,
       }))
     } finally {
-      set({ isLoading: false })
+      set({ isLoading: false, streamStatus: null })
     }
   },
 
@@ -156,19 +160,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const withoutLast = messages.slice(0, -1)
     const newAssistant = createAssistantMsg()
-    set({ messages: [...withoutLast, newAssistant], isLoading: true, lastMetrics: null })
+    set({
+      messages: [...withoutLast, newAssistant],
+      isLoading: true,
+      lastMetrics: null,
+      streamStatus: 'Preparando resposta...',
+    })
 
     try {
       await httpStream(lastUser.content, sessionId)
     } catch {
-      set({ isLoading: false, error: 'Falha ao regenerar' })
+      set({ isLoading: false, error: 'Falha ao regenerar', streamStatus: null })
     } finally {
-      set({ isLoading: false })
+      set({ isLoading: false, streamStatus: null })
     }
   },
 
   stopGeneration: () => {
-    set({ isLoading: false })
+    set({ isLoading: false, streamStatus: null })
     // Se o usuário interrompeu, marca a última mensagem como interrompida
     const { messages } = get()
     const last = messages[messages.length - 1]
@@ -181,10 +190,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  clearMessages: () => set({ messages: [], error: null }),
+  clearMessages: () => set({ messages: [], error: null, streamStatus: null }),
 
   setSession: async (id: string) => {
-    set({ sessionId: id, messages: [], isLoading: true })
+    set({ sessionId: id, messages: [], isLoading: true, streamStatus: null })
     try {
       const conv = await api.getConversation(id)
       if (conv?.messages) {
@@ -266,16 +275,16 @@ async function httpStream(
   content: string,
   sessionId: string,
   useRag = false,
-  _useThinking = true,
+  useThinking = true,
 ) {
-  for await (const chunk of api.stream(content, sessionId, useRag)) {
+  for await (const chunk of api.stream(content, sessionId, useRag, useThinking)) {
     if (chunk.type === 'reasoning') {
       const s = useChatStore.getState()
       const msgs = [...s.messages]
       const last = msgs[msgs.length - 1]
       if (last?.role === 'assistant') {
         msgs[msgs.length - 1] = { ...last, reasoning: (last.reasoning || '') + (chunk.text || '') }
-        useChatStore.setState({ messages: msgs })
+        useChatStore.setState({ messages: msgs, streamStatus: null })
       }
     } else if (chunk.type === 'content') {
       const s = useChatStore.getState()
@@ -283,7 +292,7 @@ async function httpStream(
       const last = msgs[msgs.length - 1]
       if (last?.role === 'assistant') {
         msgs[msgs.length - 1] = { ...last, content: last.content + (chunk.text || '') }
-        useChatStore.setState({ messages: msgs })
+        useChatStore.setState({ messages: msgs, streamStatus: null })
       }
     } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
       const s = useChatStore.getState()
@@ -308,6 +317,7 @@ async function httpStream(
         }
         useChatStore.setState({ messages: msgs })
       }
+      useChatStore.setState({ streamStatus: null })
       useChatStore.getState().loadConversations()
       if (chunk.hasReasoning !== undefined) {
         useChatStore.setState({ route: chunk.hasReasoning ? 'full' : 'fast' })
@@ -318,9 +328,12 @@ async function httpStream(
       break
     } else if (chunk.type === 'start') {
       const route = (chunk as any).route
-      if (route) useChatStore.setState({ route })
+      useChatStore.setState({
+        ...(route ? { route } : {}),
+        streamStatus: 'Conectando ao modelo...',
+      })
     } else if (chunk.type === 'status') {
-      // status updates could be shown in UI
+      useChatStore.setState({ streamStatus: chunk.text || 'Processando...' })
     }
   }
 }

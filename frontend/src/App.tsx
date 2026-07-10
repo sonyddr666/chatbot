@@ -18,7 +18,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 
 export default function App() {
   const {
-    messages, isLoading, error, route,
+    messages, isLoading, error, route, streamStatus,
     sendMessage, regenerate, stopGeneration, loadConfig, loadProfiles,
     toggleSidebar, setError, sessionId,
     useThinking, useRag,
@@ -39,7 +39,10 @@ export default function App() {
 
   const handleStreamChunk = useCallback((chunk: StreamChunk) => {
     if (chunk.type === 'start') {
-      if (chunk.route) useChatStore.setState({ route: chunk.route })
+      useChatStore.setState({
+        ...(chunk.route ? { route: chunk.route } : {}),
+        streamStatus: 'Conectando ao modelo...',
+      })
       return
     }
 
@@ -52,7 +55,7 @@ export default function App() {
             ? { ...last, reasoning: `${last.reasoning || ''}${chunk.text || ''}` }
             : { ...last, content: `${last.content || ''}${chunk.text || ''}` }
         }
-        return { messages: nextMessages }
+        return { messages: nextMessages, streamStatus: null }
       })
       return
     }
@@ -86,6 +89,7 @@ export default function App() {
         return {
           messages: nextMessages,
           isLoading: false,
+          streamStatus: null,
           route: chunk.hasReasoning === undefined ? state.route : chunk.hasReasoning ? 'full' : 'fast',
           lastMetrics: chunk.metrics || state.lastMetrics,
         }
@@ -102,8 +106,9 @@ export default function App() {
   } = useWebSocket({
     enabled: !!user,
     onChunk: handleStreamChunk,
+    onStatus: status => useChatStore.setState({ streamStatus: status }),
     onError: errorMessage => {
-      useChatStore.setState({ error: errorMessage, isLoading: false })
+      useChatStore.setState({ error: errorMessage, isLoading: false, streamStatus: null })
     },
   })
 
@@ -196,6 +201,7 @@ export default function App() {
       sessionId: 'default',
       isLoading: false,
       error: null,
+      streamStatus: null,
     })
   }, [disconnectWs])
 
@@ -206,7 +212,7 @@ export default function App() {
 
   const handleSend = useCallback((content: string) => {
     if (wsConnected) {
-      useChatStore.setState({ isLoading: true, error: null })
+      useChatStore.setState({ isLoading: true, error: null, streamStatus: 'Preparando resposta...' })
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'user',
@@ -420,7 +426,8 @@ export default function App() {
                     <ChatMessageBubble
                       key={msg.id}
                       message={msg}
-                      isLoading={isLoading && msg.role === 'assistant' && (msg.content === '' || !!msg.reasoning)}
+                      isLoading={isLoading && msg.role === 'assistant' && msg.id === messages[messages.length - 1]?.id}
+                      status={isLoading && msg.id === messages[messages.length - 1]?.id ? streamStatus : null}
                       onRegenerate={
                         msg.role === 'assistant' && isLastAssistant && msg.id === messages[messages.length - 1]?.id
                           ? regenerate

@@ -26,6 +26,7 @@ class ChatStreamRequest(BaseModel):
     message: str
     session_id: Optional[str] = "default"
     use_rag: bool = False
+    use_thinking: bool = True
 
 
 class IngestRequest(BaseModel):

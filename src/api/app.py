@@ -149,7 +149,6 @@ async def websocket_chat(websocket: WebSocket):
                 route = classify_route(message)
                 if route == "fast":
                     use_rag = False
-                    use_thinking = False
                 if not workspace_request and user_has_personal_rag(user.id, message, log_run=True):
                     use_rag = True
 
@@ -180,12 +179,12 @@ async def websocket_chat(websocket: WebSocket):
                     rag_task = asyncio.create_task(fetch_rag())
                     await websocket.send_json({"type": "status", "text": "Consultando base de conhecimento..."})
 
-                if use_thinking:
-                    await websocket.send_json({"type": "status", "text": "Pensando..."})
+                await websocket.send_json({"type": "status", "text": "Preparando resposta..."})
 
                 save_task = asyncio.create_task(_add_msg(session_id, "user", message, user_id=user.id))
 
                 if workspace_request:
+                    await websocket.send_json({"type": "status", "text": "Planejando alteracoes no Workspace..."})
                     try:
                         plan = await create_workspace_plan(user.id, message, provider_config)
                         full_response = workspace_plan_message(plan)
@@ -211,9 +210,14 @@ async def websocket_chat(websocket: WebSocket):
 
                 if rag_task:
                     await rag_task
+                await websocket.send_json({"type": "status", "text": "Verificando skills e contexto..."})
                 runtime_context = await run_enabled_skill_context(user.id, message)
                 prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
                 memory.update_system_prompt(prompt_context)
+                await websocket.send_json({
+                    "type": "status",
+                    "text": "Modelo pensando..." if use_thinking else "Gerando resposta...",
+                })
 
                 # Streaming LLM
                 engine = ChatEngine(memory, provider_config=provider_config)
@@ -224,8 +228,9 @@ async def websocket_chat(websocket: WebSocket):
                 try:
                     async for typ, text in engine.chat_stream(message):
                         if typ == "reasoning":
-                            has_reasoning = True
-                            await websocket.send_json({"type": "reasoning", "text": text})
+                            if use_thinking:
+                                has_reasoning = True
+                                await websocket.send_json({"type": "reasoning", "text": text})
                         else:
                             full_response += text
                             await websocket.send_json({"type": "token", "text": text})

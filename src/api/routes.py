@@ -26,6 +26,7 @@ from src.core.multilang import detect_language, build_system_prompt_multilang
 from src.core.feedback import FeedbackManager
 from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, ACTIVE_SESSIONS, get_metrics
 from src.core.cache import cache_llm_response, get_cached_llm_response
+from src.core.classifier import classify_route
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, user_has_personal_rag
 from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
@@ -1008,6 +1009,8 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     provider_config = get_active_config_for_user(user.id)
     model_meta = metadata_from_config(provider_config)
     engine = ChatEngine(memory, provider_config=provider_config)
+    route = classify_route(body.message)
+    use_thinking = body.use_thinking
     MESSAGES_TOTAL.labels(role="user").inc()
 
     try:
@@ -1071,7 +1074,11 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         has_reasoning = False
 
         # Sinaliza início imediato da conexão
-        yield {"event": "start", "data": json.dumps({"session_id": body.session_id, **model_meta})}
+        yield {"event": "start", "data": json.dumps({
+            "session_id": body.session_id,
+            "route": route,
+            **model_meta,
+        })}
 
         # Salva mensagem do usuário em background (não bloqueia o stream)
         save_task = asyncio.create_task(
@@ -1079,6 +1086,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         )
 
         if workspace_request:
+            yield {"event": "status", "data": "Planejando alteracoes no Workspace..."}
             try:
                 plan = await create_workspace_plan(user.id, body.message, provider_config)
                 full_response = workspace_plan_message(plan)
@@ -1103,17 +1111,24 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
         # Se tiver RAG, espera o contexto ficar pronto
         if rag_task:
+            yield {"event": "status", "data": "Consultando base de conhecimento..."}
             await rag_task
+        yield {"event": "status", "data": "Verificando skills e contexto..."}
         runtime_context = await run_enabled_skill_context(user.id, body.message)
         prompt_context = _user_prompt_context(user.id, rag_context, runtime_context)
         memory.update_system_prompt(prompt_context)
+        yield {
+            "event": "status",
+            "data": "Modelo pensando..." if use_thinking else "Gerando resposta...",
+        }
 
         # Inicia o streaming do LLM
         try:
             async for typ, text in engine.chat_stream(body.message):
                 if typ == "reasoning":
-                    has_reasoning = True
-                    yield {"event": "reasoning", "data": text}
+                    if use_thinking:
+                        has_reasoning = True
+                        yield {"event": "reasoning", "data": text}
                 else:
                     full_response += text
                     yield {"event": "token", "data": text}

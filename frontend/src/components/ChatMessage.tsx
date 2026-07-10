@@ -12,6 +12,7 @@ import { WorkspacePlanCard } from './WorkspacePlanCard'
 interface Props {
   message: ChatMessageType
   isLoading?: boolean
+  status?: string | null
   onRegenerate?: () => void
 }
 
@@ -96,12 +97,15 @@ function CodeBlock({ className, children }: ComponentProps<'code'>) {
 }
 
 // ─── Typing indicator ───
-function TypingIndicator() {
+function TypingIndicator({ status }: { status?: string | null }) {
   return (
-    <div className="flex gap-1.5 py-2">
-      <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+    <div className="flex items-center gap-3 py-2" style={{ color: 'var(--text-secondary)' }}>
+      <span className="flex gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-2 h-2 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+      </span>
+      <span className="text-xs font-medium">{status || 'Aguardando o primeiro token...'}</span>
     </div>
   )
 }
@@ -133,7 +137,7 @@ function ActionButton({
 }
 
 // ─── Componente principal ───
-export function ChatMessageBubble({ message, isLoading, onRegenerate }: Props) {
+export function ChatMessageBubble({ message, isLoading, status, onRegenerate }: Props) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<number | null>(message.feedbackScore ?? null)
@@ -152,9 +156,9 @@ export function ChatMessageBubble({ message, isLoading, onRegenerate }: Props) {
   }
 
   // Reasoning ativo (está chegando agora)
-  const isReasoning = isLoading && message.content === '' && message.reasoning
+  const isReasoning = !!(isLoading && message.content === '' && message.reasoning)
   // Reasoning já finalizado
-  const hasReasoning = !isLoading && !!message.reasoning
+  const hasReasoning = !!message.reasoning
   const displayContent = useMemo(
     () => message.content.replace(/\s*<!-- workspace-plan:[a-f0-9]{32} -->\s*/gi, '').trim(),
     [message.content],
@@ -211,7 +215,7 @@ export function ChatMessageBubble({ message, isLoading, onRegenerate }: Props) {
               {message.workspacePlan && <WorkspacePlanCard plan={message.workspacePlan} />}
 
               {/* Loading indicator quando não tem content nem reasoning */}
-              {isLoading && !message.content && !message.reasoning && <TypingIndicator />}
+              {isLoading && !message.content && !message.reasoning && <TypingIndicator status={status} />}
             </>
           )}
           <div

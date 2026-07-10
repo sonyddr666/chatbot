@@ -82,6 +82,19 @@ Shell permanece bloqueado. A compatibilidade com o formato legado de skills de b
 
 O painel de Skills permite salvar por usuario o modelo, foco, periodo e uso de fallback da `perplexo_search`. O teste de conexao consulta somente `/health`; a execucao consulta somente `/search`. Endpoints de tokens e credenciais do servidor externo nao sao expostos ao modelo.
 
+## Streaming e Thinking
+
+- OpenCode/DeepSeek usa o SSE nativo de `/chat/completions`, sem passar pelo adaptador que descartava `reasoning_content`.
+- O backend reconhece `reasoning_content`, `reasoning` e `thinking` separadamente do conteudo final.
+- WebSocket e HTTP/SSE enviam estados de contexto, skills e geracao antes do primeiro token.
+- A interface mostra esses estados no balao da resposta em andamento.
+- O bloco Thinking continua visivel quando a resposta final comeca a chegar.
+- Somente a ultima mensagem fica marcada como streaming.
+- Blocos grandes retornados por providers sem granularidade sao repartidos para exibicao progressiva.
+- A preferencia `use_thinking` agora tambem e enviada pelo fallback HTTP/SSE.
+
+No teste real com `deepseek-v4-flash-free`, o gateway enviou `reasoning_content` em SSE e o novo adaptador entregou o primeiro Thinking ao aplicativo antes do primeiro token da resposta final.
+
 ## APIs principais
 
 ```txt
