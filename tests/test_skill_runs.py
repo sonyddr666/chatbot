@@ -50,6 +50,21 @@ class SkillRunsTest(unittest.TestCase):
         self.assertIn("pesquise python", runs[0]["input_json"])
         self.assertIn("Fonte A", runs[0]["output_summary"])
 
+    def test_skill_run_preserves_complete_output(self):
+        from src.db.repository import SkillRunRepo
+
+        complete_output = "resultado-completo-" * 400
+        SkillRunRepo.create(
+            self.user.id,
+            "perplexo_search",
+            "completed",
+            {"query": "pesquisa longa"},
+            output_summary=complete_output,
+        )
+
+        run = SkillRunRepo.list_for_user(self.user.id, limit=1)[0]
+        self.assertEqual(run["output_summary"], complete_output)
+
     def test_personal_rag_forced_in_chat_is_logged_for_user(self):
         from src.db.repository import SkillRunRepo
 
@@ -62,6 +77,10 @@ class SkillRunsTest(unittest.TestCase):
 
             async def chat(self, message):
                 return "resposta"
+
+            async def chat_stream(self, message):
+                yield ("reasoning", "pensando")
+                yield ("content", "resposta")
 
         with (
             patch("src.api.routes.retrieve_user_context", return_value="contexto pessoal"),

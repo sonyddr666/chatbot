@@ -84,6 +84,8 @@ O painel de Skills permite salvar por usuario o modelo, foco, periodo e uso de f
 
 - Pesquisas concluidas geram um evento autenticado `skill_activity`. A resposta mostra um bloco verde expansivel `Ferramentas e Skills` com nome, estado e links reais das fontes.
 - O modelo recebe instrucao explicita de que resultados presentes no contexto ja foram executados, evitando pedir uma segunda autorizacao depois da pesquisa.
+- `messages.reasoning` e `messages.skill_activities_json` preservam Thinking e atividades apos atualizar ou reabrir a conversa.
+- `skill_runs.output_summary` guarda a saida completa da pesquisa e o painel permite expandir o resultado, sem o corte antigo de 2.000 caracteres.
 
 ## Streaming e Thinking
 

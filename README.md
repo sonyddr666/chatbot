@@ -265,6 +265,7 @@ Implementado:
 - O bloco Thinking aparece durante o raciocinio e permanece acessivel enquanto a resposta final e transmitida.
 - O bloco expansivel `Ferramentas e Skills` confirma cada pesquisa concluida, informa a Skill usada e mostra links das fontes.
 - O campo de mensagem permanece editavel durante Thinking e streaming; apenas o envio espera a resposta atual terminar.
+- Thinking, Skills usadas e resultados completos de pesquisa sao persistidos; atualizar a pagina nao remove esses dados das novas mensagens.
 - Respostas que chegam em um bloco grande sao divididas visualmente para evitar que o texto apareca inteiro de uma vez.
 - Regeneracao de resposta.
 - WebSocket autenticado.

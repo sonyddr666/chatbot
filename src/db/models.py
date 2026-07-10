@@ -115,6 +115,8 @@ class Message(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
+    reasoning = Column(Text, nullable=False, default="")
+    skill_activities_json = Column(Text, nullable=False, default="[]")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     feedback_score = Column(Integer, nullable=True)
     tokens_used = Column(Integer, default=0)
@@ -218,6 +220,8 @@ def init_db():
                 "model_id": "ALTER TABLE messages ADD COLUMN model_id VARCHAR(150)",
                 "model_name": "ALTER TABLE messages ADD COLUMN model_name VARCHAR(255)",
                 "user_id": "ALTER TABLE messages ADD COLUMN user_id INTEGER",
+                "reasoning": "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''",
+                "skill_activities_json": "ALTER TABLE messages ADD COLUMN skill_activities_json TEXT NOT NULL DEFAULT '[]'",
             }.items():
                 if name not in message_cols:
                     conn.execute(text(ddl))

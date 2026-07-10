@@ -205,6 +205,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messageId: m.id,
           feedbackScore: m.feedback_score,
           reasoning: m.reasoning || '',
+          skillActivities: Array.isArray(m.skill_activities) ? m.skill_activities : [],
           providerId: m.provider_id,
           providerName: m.provider_name,
           modelId: m.model_id,

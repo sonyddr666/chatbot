@@ -225,6 +225,7 @@ async def websocket_chat(websocket: WebSocket):
                 # Streaming LLM
                 engine = ChatEngine(memory, provider_config=provider_config)
                 full_response = ""
+                full_reasoning = ""
                 has_reasoning = False
                 t_start = time.time()
 
@@ -233,6 +234,7 @@ async def websocket_chat(websocket: WebSocket):
                         if typ == "reasoning":
                             if use_thinking:
                                 has_reasoning = True
+                                full_reasoning += text
                                 await websocket.send_json({"type": "reasoning", "text": text})
                         else:
                             full_response += text
@@ -245,7 +247,15 @@ async def websocket_chat(websocket: WebSocket):
                 MESSAGES_TOTAL.labels(role="assistant").inc()
                 user_msg = await save_task
                 _observe_preference_suggestion(user.id, user_msg.content)
-                ai_msg = await _add_msg(session_id, "assistant", full_response, user_id=user.id, **model_meta)
+                ai_msg = await _add_msg(
+                    session_id,
+                    "assistant",
+                    full_response,
+                    user_id=user.id,
+                    reasoning=full_reasoning,
+                    skill_activities=[skill_activity] if skill_activity else [],
+                    **model_meta,
+                )
 
                 total_time = time.time() - t_start
                 LATENCY_HISTOGRAM.labels(route=route).observe(total_time)

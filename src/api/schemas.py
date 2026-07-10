@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = "default"
     use_rag: bool = False
+    use_thinking: bool = True
 
 
 class ChatResponse(BaseModel):
@@ -20,6 +21,8 @@ class ChatResponse(BaseModel):
     model_id: Optional[str] = None
     model_name: Optional[str] = None
     workspace_plan: Optional[dict] = None
+    reasoning: Optional[str] = None
+    skill_activities: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatStreamRequest(BaseModel):

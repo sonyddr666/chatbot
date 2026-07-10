@@ -87,6 +87,14 @@ def _public_session_id(user_id: int, session_id: str) -> str:
     return session_id[len(prefix):] if session_id.startswith(prefix) else session_id
 
 
+def _stored_skill_activities(raw: str | None) -> list[dict]:
+    try:
+        value = json.loads(raw or "[]")
+        return value if isinstance(value, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
 def _user_prompt_context(
     user_id: int,
     rag_context: str | None = None,
@@ -995,6 +1003,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     if use_rag and settings.enable_rag:
         context = retrieve_user_context(user.id, body.message)
     runtime_context = await run_enabled_skill_context(user.id, body.message)
+    skill_activity = runtime_skill_activity(runtime_context)
 
     memory = get_session(session_id)
     prompt_context = _user_prompt_context(user.id, context, runtime_context)
@@ -1014,13 +1023,32 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     MESSAGES_TOTAL.labels(role="user").inc()
 
     try:
-        response = await engine.chat(body.message)
+        response_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        async for typ, text in engine.chat_stream(body.message):
+            if typ == "reasoning":
+                if body.use_thinking:
+                    reasoning_parts.append(text)
+            else:
+                response_parts.append(text)
+        response = "".join(response_parts)
+        reasoning = "".join(reasoning_parts)
         MESSAGES_TOTAL.labels(role="assistant").inc()
         user_msg = await async_add_message(session_id, "user", body.message, user_id=user.id)
         observe_preference_suggestion(user.id, user_msg.content)
-        ai_msg = await async_add_message(session_id, "assistant", response, user_id=user.id, **model_meta)
+        ai_msg = await async_add_message(
+            session_id,
+            "assistant",
+            response,
+            user_id=user.id,
+            reasoning=reasoning,
+            skill_activities=[skill_activity] if skill_activity else [],
+            **model_meta,
+        )
         return ChatResponse(
             response=response,
+            reasoning=reasoning,
+            skill_activities=[skill_activity] if skill_activity else [],
             session_id=body.session_id,
             message_id=ai_msg.id,
             **model_meta,
@@ -1070,6 +1098,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     async def event_generator():
         nonlocal rag_context
         full_response = ""
+        full_reasoning = ""
         MESSAGES_TOTAL.labels(role="user").inc()
         has_reasoning = False
 
@@ -1134,6 +1163,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
                 if typ == "reasoning":
                     if use_thinking:
                         has_reasoning = True
+                        full_reasoning += text
                         yield {"event": "reasoning", "data": text}
                 else:
                     full_response += text
@@ -1144,7 +1174,15 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             # Aguarda salvamento da mensagem do usuário (já deve ter terminado)
             user_msg = await save_task
             observe_preference_suggestion(user.id, user_msg.content)
-            ai_msg = await async_add_message(session_id, "assistant", full_response, user_id=user.id, **model_meta)
+            ai_msg = await async_add_message(
+                session_id,
+                "assistant",
+                full_response,
+                user_id=user.id,
+                reasoning=full_reasoning,
+                skill_activities=[skill_activity] if skill_activity else [],
+                **model_meta,
+            )
             yield {"event": "done", "data": json.dumps({
                 "message_id": ai_msg.id,
                 "has_reasoning": has_reasoning,
@@ -1174,9 +1212,30 @@ async def regenerate(session_id: str = "default", user=Depends(get_current_user)
     provider_config = get_active_config_for_user(user.id)
     model_meta = metadata_from_config(provider_config)
     engine = ChatEngine(memory, provider_config=provider_config)
-    response = await engine.chat(user_msg)
-    ai_msg = ConversationRepo.add_message(scoped_session_id, "assistant", response, user_id=user.id, **model_meta)
-    return ChatResponse(response=response, session_id=raw_session_id, message_id=ai_msg.id, **model_meta)
+    response_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    async for typ, text in engine.chat_stream(user_msg):
+        if typ == "reasoning":
+            reasoning_parts.append(text)
+        else:
+            response_parts.append(text)
+    response = "".join(response_parts)
+    reasoning = "".join(reasoning_parts)
+    ai_msg = ConversationRepo.add_message(
+        scoped_session_id,
+        "assistant",
+        response,
+        user_id=user.id,
+        reasoning=reasoning,
+        **model_meta,
+    )
+    return ChatResponse(
+        response=response,
+        reasoning=reasoning,
+        session_id=raw_session_id,
+        message_id=ai_msg.id,
+        **model_meta,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1222,6 +1281,8 @@ async def get_conversation(session_id: str, user=Depends(get_current_user)):
                 "id": m.id,
                 "role": m.role,
                 "content": m.content,
+                "reasoning": m.reasoning or "",
+                "skill_activities": _stored_skill_activities(m.skill_activities_json),
                 "feedback_score": m.feedback_score,
                 "tokens_used": m.tokens_used,
                 "created_at": m.created_at.isoformat(),
@@ -1636,7 +1697,17 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
             "title": conv.title or f"Conversa {conv.id}",
             "created_at": conv.created_at.isoformat(),
             "messages": [
-                {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat(), "provider_id": m.provider_id, "provider_name": m.provider_name, "model_id": m.model_id, "model_name": m.model_name}
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "reasoning": m.reasoning or "",
+                    "skill_activities": _stored_skill_activities(m.skill_activities_json),
+                    "created_at": m.created_at.isoformat(),
+                    "provider_id": m.provider_id,
+                    "provider_name": m.provider_name,
+                    "model_id": m.model_id,
+                    "model_name": m.model_name,
+                }
                 for m in msgs
             ],
         }
@@ -1651,6 +1722,15 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
             else:
                 model_label = m.model_name or m.model_id or ""
                 prefix = f"🤖 Bot ({model_label}):" if model_label else "🤖 Bot:"
+            if m.reasoning:
+                lines.append(f"[Raciocinio]\n{m.reasoning}\n")
+            activities = _stored_skill_activities(m.skill_activities_json)
+            if activities:
+                lines.append(
+                    "[Ferramentas e Skills]\n"
+                    + json.dumps(activities, ensure_ascii=False, indent=2)
+                    + "\n"
+                )
             lines.append(f"{prefix}\n{m.content}\n")
         text = "\n".join(lines)
         return PlainTextResponse(text,

@@ -288,9 +288,14 @@ export function SkillsPanel({ open, onClose }: Props) {
                       </span>
                     </div>
                     {run.output_summary && (
-                      <p className="mt-2 line-clamp-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        {run.output_summary}
-                      </p>
+                      <details className="mt-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        <summary className="cursor-pointer font-semibold" style={{ color: 'var(--accent)' }}>
+                          Ver resultado completo
+                        </summary>
+                        <div className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg p-2" style={{ background: 'var(--bg-tertiary)' }}>
+                          {run.output_summary}
+                        </div>
+                      </details>
                     )}
                     {run.error_message && (
                       <p className="mt-2 text-xs" style={{ color: '#dc2626' }}>{run.error_message}</p>

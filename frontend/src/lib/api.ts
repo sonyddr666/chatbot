@@ -330,7 +330,7 @@ export const api = {
 
   // Chat
   chat: (message: string, sessionId = 'default', useRag = false) =>
-    req<{ response: string; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string; workspace_plan?: WorkspaceActionPlan }>('/chat', {
+    req<{ response: string; reasoning?: string; skill_activities?: SkillActivity[]; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string; workspace_plan?: WorkspaceActionPlan }>('/chat', {
       method: 'POST', body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
     }),
 

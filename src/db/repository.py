@@ -439,6 +439,8 @@ class ConversationRepo:
         model_id: str | None = None,
         model_name: str | None = None,
         user_id: int | None = None,
+        reasoning: str = "",
+        skill_activities: list[dict] | None = None,
     ) -> Message:
         db = get_session_db()
         try:
@@ -456,6 +458,8 @@ class ConversationRepo:
                 user_id=user_id,
                 role=role,
                 content=content,
+                reasoning=reasoning or "",
+                skill_activities_json=json.dumps(skill_activities or [], ensure_ascii=False),
                 tokens_used=tokens,
                 provider_id=provider_id,
                 provider_name=provider_name,
@@ -887,7 +891,7 @@ class SkillRunRepo:
                 skill_name=skill_name,
                 status=status,
                 input_json=json.dumps(input_data, ensure_ascii=False),
-                output_summary=output_summary[:2000],
+                output_summary=output_summary,
                 error_message=error_message[:2000],
                 started_at=now,
                 finished_at=now,

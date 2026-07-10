@@ -43,6 +43,12 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("Continue digitando", chat_input)
         self.assertIn("disabled={busy || !input.trim()}", chat_input)
 
+    def test_saved_trace_is_restored_when_conversation_reopens(self):
+        store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
+
+        self.assertIn("reasoning: m.reasoning || ''", store)
+        self.assertIn("skillActivities: Array.isArray(m.skill_activities)", store)
+
 
 if __name__ == "__main__":
     unittest.main()
