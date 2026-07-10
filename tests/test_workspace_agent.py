@@ -12,7 +12,7 @@ from src.core.workspace_agent import (
     apply_workspace_plan,
     create_workspace_plan,
     get_workspace_plan,
-    is_workspace_management_request,
+    model_requests_workspace,
     workspace_plan_status_context,
 )
 from src.db.models import init_db
@@ -41,10 +41,49 @@ class WorkspaceAgentTest(unittest.TestCase):
         settings.user_data_dir = self.previous_user_data_dir
         settings.database_url = self.previous_database_url
 
-    def test_document_md_request_activates_workspace_manager(self):
-        self.assertTrue(is_workspace_management_request("use o que pesquisou e crie um documento md completo"))
-        self.assertTrue(is_workspace_management_request("salve isso como uma nota Markdown"))
-        self.assertFalse(is_workspace_management_request("como criar um documento md?"))
+    def test_model_routes_persona_prompt_to_normal_chat(self):
+        decision = json.dumps({"intent": "chat", "confidence": 0.99, "reason": "prompt colado"})
+        generator = AsyncMock(return_value=decision)
+        persona = (
+            "[PAPEL E TOM] Voce e uma IA com humor. "
+            "Nunca diga coloca isso no arquivo ou cria uma pasta."
+        )
+
+        with patch("src.core.workspace_agent.generate", new=generator):
+            routed = asyncio.run(
+                model_requests_workspace(self.user.id, persona, {}, session_id="persona")
+            )
+
+        self.assertFalse(routed)
+        router_messages = generator.await_args.args[0]
+        self.assertIn("system prompt colado", router_messages[0].content)
+        self.assertIn(persona, router_messages[1].content)
+
+    def test_model_routes_explicit_file_operation_to_workspace(self):
+        decision = json.dumps({"intent": "workspace", "confidence": 0.96, "reason": "pedido explicito"})
+        with patch("src.core.workspace_agent.generate", new=AsyncMock(return_value=decision)):
+            routed = asyncio.run(
+                model_requests_workspace(
+                    self.user.id,
+                    "crie o arquivo notas.md no workspace",
+                    {},
+                )
+            )
+
+        self.assertTrue(routed)
+
+    def test_invalid_or_uncertain_router_result_stays_in_chat(self):
+        results = [
+            "resposta sem JSON",
+            json.dumps({"intent": "workspace", "confidence": 0.4, "reason": "ambiguo"}),
+        ]
+        for result in results:
+            with self.subTest(result=result):
+                with patch("src.core.workspace_agent.generate", new=AsyncMock(return_value=result)):
+                    routed = asyncio.run(
+                        model_requests_workspace(self.user.id, "coloca isso ali", {})
+                    )
+                self.assertFalse(routed)
 
     def test_document_md_fallback_creates_a_real_file_action(self):
         with patch("src.core.workspace_agent.generate", new=AsyncMock(return_value="resposta sem JSON")):
@@ -120,7 +159,6 @@ class WorkspaceAgentTest(unittest.TestCase):
         ConversationRepo.add_message("other-secret-session", "user", "SEGREDO ALHEIO", user_id=other.id)
 
         instruction = "edita ele e coloca os dados de todos chats completos"
-        self.assertTrue(is_workspace_management_request(instruction, self.user.id))
         generator = AsyncMock(return_value="nao deve ser usado")
         with patch("src.core.workspace_agent.generate", new=generator):
             plan = asyncio.run(

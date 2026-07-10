@@ -60,7 +60,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.core.classifier import classify_route
     from src.core.moderation import moderate_text
     from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
-    from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
+    from src.core.workspace_agent import create_workspace_plan, model_requests_workspace, workspace_plan_message, workspace_plan_status_context
     from src.core.preference_suggestions import create_suggestion_from_message
     from src.core.user_provider_manager import get_active_config_for_user, metadata_from_config
     from src.rag.personal import retrieve_user_context
@@ -143,14 +143,10 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "text": "Mensagem vazia"})
                     continue
 
-                workspace_request = is_workspace_management_request(message, user.id)
-
                 # Classifica rota
                 route = classify_route(message)
                 if route == "fast":
                     use_rag = False
-                if not workspace_request and user_has_personal_rag(user.id, message, log_run=True):
-                    use_rag = True
 
                 # Moderação
                 if settings.enable_moderation:
@@ -162,6 +158,14 @@ async def websocket_chat(websocket: WebSocket):
 
                 provider_config = get_active_config_for_user(user.id)
                 model_meta = metadata_from_config(provider_config)
+                workspace_request = await model_requests_workspace(
+                    user.id,
+                    message,
+                    provider_config,
+                    session_id=session_id,
+                )
+                if not workspace_request and user_has_personal_rag(user.id, message, log_run=True):
+                    use_rag = True
 
                 # Start
                 await websocket.send_json({"type": "start", "route": route, "session_id": session_id, **model_meta})

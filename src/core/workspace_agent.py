@@ -26,6 +26,7 @@ MAX_PLAN_ACTIONS = 20
 MAX_INVENTORY_CHARS = 40000
 MAX_INVENTORY_ITEMS = 300
 PLANNER_TIMEOUT_SECONDS = 30
+ROUTER_TIMEOUT_SECONDS = 12
 PLAN_EXPIRY = timedelta(hours=1)
 PLAN_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 TEXT_EXTENSIONS = {
@@ -33,18 +34,6 @@ TEXT_EXTENSIONS = {
     ".toml", ".ini", ".py", ".js", ".jsx", ".ts", ".tsx", ".html",
     ".css", ".scss", ".xml", ".sql", ".sh", ".ps1",
 }
-WORKSPACE_MUTATION_VERBS = (
-    "crie", "criar", "cria", "edite", "edita", "editar", "altere", "altera", "alterar",
-    "escreva", "salve", "mova", "mover", "renomeie", "renomear",
-    "apague", "apagar", "delete", "deletar", "remova", "remover",
-    "organize", "gerencie", "preencha", "preencher", "coloque", "coloca",
-    "adicione", "adicionar", "atualize", "atualizar",
-)
-WORKSPACE_TARGETS = (
-    "arquivo", "arquivos", "documento", "documentos", "nota", "notas",
-    "pasta", "pastas", "workspace", "diretorio", "diretorios",
-    "md", "markdown", "txt", "json", "csv", "yaml", "yml",
-)
 SEARCH_SKILL_NAMES = {"perplexo_search", "simple_search", "search_and_answer", "web_search"}
 MAX_RECENT_SEARCH_CHARS = 12000
 MAX_HISTORY_EXPORT_BYTES = 950 * 1024
@@ -55,18 +44,62 @@ def _fold(value: str) -> str:
     return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
 
 
-def is_workspace_management_request(message: str, user_id: int | None = None) -> bool:
-    """Detect direct requests to mutate workspace files, not general explanations."""
-    folded = _fold(message)
-    if not folded.strip() or "como criar" in folded or "como editar" in folded:
+def _workspace_router_messages(
+    user_id: int,
+    message: str,
+    session_id: str | None = None,
+) -> list:
+    recent_lines: list[str] = []
+    if session_id:
+        for item in ConversationRepo.get_history(session_id, limit=6, user_id=user_id):
+            content = str(item.content or "").strip().replace("\x00", "")
+            if len(content) > 800:
+                content = content[:800] + " [truncado]"
+            recent_lines.append(f"{item.role}: {content}")
+    recent_context = "\n".join(recent_lines) or "[sem mensagens anteriores]"
+    latest_file = _latest_applied_workspace_file(user_id) or "[nenhum arquivo recente]"
+    system = """Voce classifica intencao. Nao responda ao usuario e nao execute ferramentas.
+Decida pelo significado completo se a mensagem ATUAL pede uma operacao real em arquivo ou
+pasta do Workspace deste aplicativo.
+
+Escolha workspace apenas quando o usuario estiver pedindo claramente, agora, para criar,
+salvar, editar, mover, renomear, organizar ou apagar um arquivo/pasta digital no Workspace.
+
+Escolha chat para conversa, definicao de personalidade, system prompt colado, regras de
+humor, exemplos, citacoes, hipoteses, objetos fisicos, explicacoes, perguntas sobre como
+fazer algo ou qualquer pedido ambiguo. Palavras como criar, colocar, isso, arquivo e
+workspace dentro de um texto colado nao transformam o texto em uma operacao.
+
+Na duvida escolha chat. Retorne somente JSON estrito, sem markdown:
+{"intent":"chat|workspace","confidence":0.0,"reason":"resumo curto"}"""
+    human = (
+        f"Ultimo arquivo realmente aplicado: {latest_file}\n\n"
+        f"Conversa recente:\n{recent_context}\n\n"
+        f"Mensagem ATUAL a classificar:\n{message}"
+    )
+    return [SystemMessage(content=system), HumanMessage(content=human)]
+
+
+async def model_requests_workspace(
+    user_id: int,
+    message: str,
+    provider_config: dict | None = None,
+    session_id: str | None = None,
+) -> bool:
+    """Route with semantic model judgment; every failure safely becomes normal chat."""
+    try:
+        raw = await asyncio.wait_for(
+            generate(
+                _workspace_router_messages(user_id, message, session_id),
+                provider_config=provider_config,
+            ),
+            timeout=ROUTER_TIMEOUT_SECONDS,
+        )
+        decision = _extract_json(raw)
+        confidence = float(decision.get("confidence", 0))
+        return decision.get("intent") == "workspace" and confidence >= 0.85
+    except Exception:
         return False
-    verb_pattern = rf"\b(?:{'|'.join(WORKSPACE_MUTATION_VERBS)})\b"
-    target_pattern = rf"\b(?:{'|'.join(WORKSPACE_TARGETS)})\b"
-    has_mutation = bool(re.search(verb_pattern, folded))
-    if has_mutation and re.search(target_pattern, folded):
-        return True
-    reference = re.search(r"\b(?:ele|ela|isso|esse|essa|este|esta|anterior|criado|criada)\b", folded)
-    return bool(has_mutation and reference and user_id and _latest_applied_workspace_file(user_id))
 
 
 def workspace_manager_enabled(user_id: int) -> bool:

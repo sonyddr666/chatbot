@@ -29,7 +29,7 @@ from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.classifier import classify_route
 from src.core.llm import get_llm
 from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
-from src.core.workspace_agent import create_workspace_plan, is_workspace_management_request, workspace_plan_message, workspace_plan_status_context
+from src.core.workspace_agent import create_workspace_plan, model_requests_workspace, workspace_plan_message, workspace_plan_status_context
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
     activate_user_provider,
@@ -969,8 +969,14 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
             ERRORS_TOTAL.labels(type="moderation").inc()
             return ChatResponse(response=blocked, session_id=body.session_id)
 
-    if is_workspace_management_request(body.message, user.id):
-        provider_config = get_active_config_for_user(user.id)
+    provider_config = get_active_config_for_user(user.id)
+    workspace_request = await model_requests_workspace(
+        user.id,
+        body.message,
+        provider_config,
+        session_id=session_id,
+    )
+    if workspace_request:
         model_meta = metadata_from_config(provider_config)
         try:
             plan = await create_workspace_plan(
@@ -1080,7 +1086,13 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
 
     session_id = _scoped_session_id(user.id, body.session_id)
     memory = get_session(session_id)
-    workspace_request = is_workspace_management_request(body.message, user.id)
+    provider_config = get_active_config_for_user(user.id)
+    workspace_request = await model_requests_workspace(
+        user.id,
+        body.message,
+        provider_config,
+        session_id=session_id,
+    )
 
     # RAG em background — começa a stream primeiro, carrega contexto depois
     rag_context = None
@@ -1096,7 +1108,6 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     else:
         rag_task = None
 
-    provider_config = get_active_config_for_user(user.id)
     model_meta = metadata_from_config(provider_config)
     engine = ChatEngine(memory, provider_config=provider_config)
 
