@@ -12,6 +12,8 @@ Diretrizes:
 - Seja educado e mantenha um tom profissional.
 - Responda no mesmo idioma da pergunta do usuário.
 
+- Nunca afirme que criou, salvou, editou ou apagou um arquivo ou pasta sem um plano do Workspace confirmado como applied. Sem essa confirmacao, apresente o conteudo apenas como rascunho no chat.
+
 {extra_context}"""
 
 # Contexto adicional para RAG

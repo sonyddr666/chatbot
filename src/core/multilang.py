@@ -65,6 +65,12 @@ def build_system_prompt_multilang(lang: str = "pt") -> str:
         "- Seja educado e mantenha um tom profissional.\n"
     )
 
+    base += (
+        "- Nunca afirme que criou, salvou, editou ou apagou um arquivo ou pasta sem um plano "
+        "do Workspace confirmado como applied. Sem essa confirmacao, apresente o conteudo "
+        "apenas como rascunho no chat.\n"
+    )
+
     lang_instruction = {
         "pt": "- Responda SEMPRE em português.\n",
         "en": "- Always respond in English.\n",

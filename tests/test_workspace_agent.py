@@ -8,9 +8,15 @@ from unittest.mock import AsyncMock, patch
 
 from src.config import settings
 from src.core.workspace import read_text_file
-from src.core.workspace_agent import apply_workspace_plan, create_workspace_plan, get_workspace_plan, workspace_plan_status_context
+from src.core.workspace_agent import (
+    apply_workspace_plan,
+    create_workspace_plan,
+    get_workspace_plan,
+    is_workspace_management_request,
+    workspace_plan_status_context,
+)
 from src.db.models import init_db
-from src.db.repository import DocumentRepo, SkillRepo, UserRepo
+from src.db.repository import DocumentRepo, SkillRepo, SkillRunRepo, UserRepo
 
 
 class WorkspaceAgentTest(unittest.TestCase):
@@ -34,6 +40,48 @@ class WorkspaceAgentTest(unittest.TestCase):
     def tearDown(self):
         settings.user_data_dir = self.previous_user_data_dir
         settings.database_url = self.previous_database_url
+
+    def test_document_md_request_activates_workspace_manager(self):
+        self.assertTrue(is_workspace_management_request("use o que pesquisou e crie um documento md completo"))
+        self.assertTrue(is_workspace_management_request("salve isso como uma nota Markdown"))
+        self.assertFalse(is_workspace_management_request("como criar um documento md?"))
+
+    def test_document_md_fallback_creates_a_real_file_action(self):
+        with patch("src.core.workspace_agent.generate", new=AsyncMock(return_value="resposta sem JSON")):
+            plan = asyncio.run(
+                create_workspace_plan(self.user.id, "crie um documento md completo", {})
+            )
+
+        self.assertEqual(plan["status"], "pending")
+        self.assertEqual(plan["actions"][0]["operation"], "write_file")
+        self.assertEqual(plan["actions"][0]["path"], "documento.md")
+
+    def test_referenced_search_is_sent_to_workspace_planner(self):
+        SkillRunRepo.create(
+            self.user.id,
+            "perplexo_search",
+            "completed",
+            {"query": "deus existe"},
+            output_summary="Pesquisa confirmada com https://example.test/fonte",
+        )
+        proposal = json.dumps({
+            "summary": "Criar documento pesquisado",
+            "actions": [{"operation": "write_file", "path": "deus.md", "content": "resultado"}],
+        })
+        generator = AsyncMock(return_value=proposal)
+
+        with patch("src.core.workspace_agent.generate", new=generator):
+            asyncio.run(
+                create_workspace_plan(
+                    self.user.id,
+                    "use o que pesquisou e crie um documento md completo",
+                    {},
+                )
+            )
+
+        planner_messages = generator.await_args.args[0]
+        self.assertIn("Pesquisa recente confirmada pelo backend", planner_messages[1].content)
+        self.assertIn("https://example.test/fonte", planner_messages[1].content)
 
     def test_workspace_manager_is_enabled_by_default_but_requires_confirmation(self):
         skills = SkillRepo.list_for_user(self.user.id)

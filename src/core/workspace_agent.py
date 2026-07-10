@@ -33,6 +33,19 @@ TEXT_EXTENSIONS = {
     ".toml", ".ini", ".py", ".js", ".jsx", ".ts", ".tsx", ".html",
     ".css", ".scss", ".xml", ".sql", ".sh", ".ps1",
 }
+WORKSPACE_MUTATION_VERBS = (
+    "crie", "criar", "cria", "edite", "editar", "altere", "alterar",
+    "escreva", "salve", "mova", "mover", "renomeie", "renomear",
+    "apague", "apagar", "delete", "deletar", "remova", "remover",
+    "organize", "gerencie",
+)
+WORKSPACE_TARGETS = (
+    "arquivo", "arquivos", "documento", "documentos", "nota", "notas",
+    "pasta", "pastas", "workspace", "diretorio", "diretorios",
+    "md", "markdown", "txt", "json", "csv", "yaml", "yml",
+)
+SEARCH_SKILL_NAMES = {"perplexo_search", "simple_search", "search_and_answer", "web_search"}
+MAX_RECENT_SEARCH_CHARS = 12000
 
 
 def _fold(value: str) -> str:
@@ -45,14 +58,9 @@ def is_workspace_management_request(message: str) -> bool:
     folded = _fold(message)
     if not folded.strip() or "como criar" in folded or "como editar" in folded:
         return False
-    verbs = (
-        "crie", "criar", "cria", "edite", "editar", "altere", "alterar",
-        "escreva", "salve", "mova", "mover", "renomeie", "renomear",
-        "apague", "apagar", "delete", "deletar", "remova", "remover",
-        "organize", "gerencie",
-    )
-    targets = ("arquivo", "pasta", "workspace", "diretorio", ".md", ".txt", ".json")
-    return any(verb in folded for verb in verbs) and any(target in folded for target in targets)
+    verb_pattern = rf"\b(?:{'|'.join(WORKSPACE_MUTATION_VERBS)})\b"
+    target_pattern = rf"\b(?:{'|'.join(WORKSPACE_TARGETS)})\b"
+    return bool(re.search(verb_pattern, folded) and re.search(target_pattern, folded))
 
 
 def workspace_manager_enabled(user_id: int) -> bool:
@@ -139,7 +147,34 @@ def _workspace_inventory(user_id: int) -> str:
     return "".join(lines) or "[workspace vazio]"
 
 
-def _planner_messages(instruction: str, inventory: str) -> list:
+def _recent_search_context(user_id: int, instruction: str) -> str:
+    """Reuse the latest real search only when the user explicitly refers to it."""
+    folded = _fold(instruction)
+    references_search = re.search(
+        r"\b(?:pesquisa|pesquisou|pesquisado|resultado|resultados|fonte|fontes|busca|buscou)\b",
+        folded,
+    )
+    if not references_search:
+        return ""
+
+    for run in SkillRunRepo.list_for_user(user_id, limit=20):
+        if run.get("skill_name") not in SEARCH_SKILL_NAMES or run.get("status") != "completed":
+            continue
+        output = str(run.get("output_summary") or "").strip()
+        if not output:
+            continue
+        query = ""
+        try:
+            query = str(json.loads(run.get("input_json") or "{}").get("query") or "").strip()
+        except (TypeError, json.JSONDecodeError):
+            pass
+        if len(output) > MAX_RECENT_SEARCH_CHARS:
+            output = output[:MAX_RECENT_SEARCH_CHARS] + "\n[resultado truncado]"
+        return f"Consulta: {query}\nResultado real da pesquisa:\n{output}"
+    return ""
+
+
+def _planner_messages(instruction: str, inventory: str, search_context: str = "") -> list:
     system = """Voce e o planejador seguro do Workspace pessoal do usuario.
 Converta o pedido em JSON estrito, sem markdown e sem explicacoes fora do JSON.
 Formato: {"summary":"resumo curto","actions":[...]}
@@ -151,8 +186,10 @@ Operacoes permitidas:
 Use write_file tanto para criar quanto para editar; ao editar, devolva o conteudo final completo.
 Pode combinar varias operacoes e criar nomes sensatos quando o usuario nao informar um nome.
 Nunca use caminhos absolutos, '..', shell, rede ou caminhos ocultos. No maximo 20 acoes.
-Nao diga que nao possui acesso: voce esta apenas criando um plano que sera confirmado pelo usuario."""
-    human = f"Pedido do usuario:\n{instruction}\n\nWorkspace atual:\n{inventory}"
+Nao diga que nao possui acesso: voce esta apenas criando um plano que sera confirmado pelo usuario.
+Se houver uma pesquisa recente abaixo, use seus dados e fontes no conteudo solicitado."""
+    research = f"\n\nPesquisa recente confirmada pelo backend:\n{search_context}" if search_context else ""
+    human = f"Pedido do usuario:\n{instruction}{research}\n\nWorkspace atual:\n{inventory}"
     return [SystemMessage(content=system), HumanMessage(content=human)]
 
 
@@ -177,10 +214,16 @@ def _fallback_plan(instruction: str) -> dict:
     username_match = re.search(r"usuario(?:\s+se\s+chama|\s+e|\s*:)?\s+([A-Za-z0-9_.-]+)", folded)
     username = username_match.group(1) if username_match else "usuario"
 
-    if any(word in folded for word in ("crie", "criar", "cria")) and "arquivo" in folded:
+    creation_requested = bool(re.search(r"\b(?:crie|criar|cria|escreva|salve)\b", folded))
+    file_requested = bool(re.search(r"\b(?:arquivo|documento|nota|md|markdown|txt|json|csv|yaml|yml)\b", folded))
+    if creation_requested and file_requested:
         path_match = re.search(r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:md|txt|json|csv|yaml|yml))", instruction, re.IGNORECASE)
-        extension_match = re.search(r"arquivo\s+(md|txt|json|csv|yaml|yml)\b", folded)
+        extension_match = re.search(
+            r"\b(?:(?:arquivo|documento|nota)\s+)?(?:(?:em|no formato)\s+)?(md|markdown|txt|json|csv|yaml|yml)\b",
+            folded,
+        )
         extension = extension_match.group(1) if extension_match else "md"
+        extension = "md" if extension == "markdown" else extension
         if path_match:
             file_path = path_match.group(1)
             folder = PurePosixPath(file_path).parent.as_posix()
@@ -189,7 +232,7 @@ def _fallback_plan(instruction: str) -> dict:
             file_path = f"{folder}/README.{extension}"
         else:
             folder = "novo-projeto" if "pasta" in folded else ""
-            file_path = f"{folder + '/' if folder else ''}README.{extension}"
+            file_path = f"{folder + '/' if folder else ''}documento.{extension}"
 
         if extension == "json":
             content = json.dumps({"usuario": username}, ensure_ascii=False, indent=2) + "\n"
@@ -322,9 +365,13 @@ async def create_workspace_plan(user_id: int, instruction: str, provider_config:
     if not workspace_manager_enabled(user_id):
         raise PermissionError("A skill workspace_manager esta desabilitada")
     inventory = _workspace_inventory(user_id)
+    search_context = _recent_search_context(user_id, instruction)
     try:
         raw = await asyncio.wait_for(
-            generate(_planner_messages(instruction, inventory), provider_config=provider_config),
+            generate(
+                _planner_messages(instruction, inventory, search_context),
+                provider_config=provider_config,
+            ),
             timeout=PLANNER_TIMEOUT_SECONDS,
         )
         proposal = _extract_json(raw)
