@@ -63,7 +63,7 @@ export function LiveVoiceButton({ controller }: { controller: LiveVoiceControlle
 
 export function LiveVoiceDock({ controller }: { controller: LiveVoiceController }) {
   const [showSettings, setShowSettings] = useState(false)
-  if (!controller.enabled && !controller.error) return null
+  if (!controller.enabled) return null
 
   const currentText = controller.interimTranscript || controller.transcript
   const stateColor = STATE_COLORS[controller.state]
