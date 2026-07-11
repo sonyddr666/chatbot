@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { api } from '../lib/api'
+import { api, parseApiTimestamp } from '../lib/api'
 
 export function Sidebar() {
   const {
@@ -210,7 +210,7 @@ export function Sidebar() {
                         <p className="truncate font-medium">{c.title}</p>
                       )}
                       <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                        {c.message_count} msgs · {new Date(c.updated_at).toLocaleDateString()}
+                        {c.message_count} msgs · {parseApiTimestamp(c.updated_at).toLocaleDateString()}
                       </p>
                     </div>
                     <div className="hidden group-hover:flex items-center gap-1">

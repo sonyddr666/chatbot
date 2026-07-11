@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { ArrowDown, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, Wifi, WifiOff } from 'lucide-react'
+import { ArrowDown, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, Users, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
@@ -13,6 +13,7 @@ import { SkillsPanel } from './components/SkillsPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
 import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
+import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { useChatStore } from './hooks/useChatStore'
 import { api, getAuthToken, setAuthToken, type ChatMessage, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -32,6 +33,7 @@ export default function App() {
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [documentsOpen, setDocumentsOpen] = useState(false)
+  const [adminUsersOpen, setAdminUsersOpen] = useState(false)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -311,6 +313,7 @@ export default function App() {
       <SkillsPanel open={skillsOpen} onClose={() => setSkillsOpen(false)} />
       <WorkspacePanel open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <DocumentsPanel open={documentsOpen} onClose={() => setDocumentsOpen(false)} />
+      {user.is_admin && <AdminUsersPanel open={adminUsersOpen} onClose={() => setAdminUsersOpen(false)} />}
       {showOnboarding && <OnboardingModal user={user} onDone={handleOnboardingDone} />}
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -361,6 +364,15 @@ export default function App() {
             </span>
             <ModelSelector />
             <LiveVoiceButton controller={liveVoice} />
+            {user.is_admin && (
+              <button
+                onClick={() => setAdminUsersOpen(true)}
+                className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                title="Usuarios e aprovacoes"
+              >
+                <Users size={18} style={{ color: 'var(--text-secondary)' }} />
+              </button>
+            )}
             <button
               onClick={() => setWorkspaceOpen(true)}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import toast from 'react-hot-toast'
 import { api, setAuthToken, type UserInfo } from '../lib/api'
 
@@ -9,6 +9,8 @@ interface Props {
 export function AuthPanel({ onAuthenticated }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [loading, setLoading] = useState(false)
+  const [registrationEnabled, setRegistrationEnabled] = useState(false)
+  const [registrationNotice, setRegistrationNotice] = useState('')
   const [form, setForm] = useState({
     email: '',
     username: '',
@@ -17,21 +19,33 @@ export function AuthPanel({ onAuthenticated }: Props) {
     password: '',
   })
 
+  useEffect(() => {
+    void api.registrationStatus()
+      .then(status => setRegistrationEnabled(status.enabled))
+      .catch(() => setRegistrationEnabled(false))
+  }, [])
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setLoading(true)
     try {
-      const response = mode === 'login'
-        ? await api.login({ login: form.login || form.email || form.username, password: form.password })
-        : await api.register({
-            email: form.email,
-            username: form.username,
-            display_name: form.display_name,
-            password: form.password,
-          })
-      setAuthToken(response.access_token)
-      onAuthenticated(response.user)
-      toast.success(mode === 'login' ? 'Login feito' : 'Conta criada')
+      if (mode === 'login') {
+        const response = await api.login({ login: form.login || form.email || form.username, password: form.password })
+        setAuthToken(response.access_token)
+        onAuthenticated(response.user)
+        toast.success('Login feito')
+      } else {
+        const response = await api.register({
+          email: form.email,
+          username: form.username,
+          display_name: form.display_name,
+          password: form.password,
+        })
+        setRegistrationNotice(response.message)
+        setMode('login')
+        setForm(current => ({ ...current, login: current.email || current.username, password: '' }))
+        toast.success('Solicitacao enviada para aprovacao')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha na autenticacao')
     } finally {
@@ -58,6 +72,12 @@ export function AuthPanel({ onAuthenticated }: Props) {
           Cada usuario tem conversas, RAG, onboarding e skills separados.
         </p>
 
+        {registrationNotice && (
+          <div className="mt-4 rounded-xl border px-3 py-2 text-sm" style={{ borderColor: '#16a34a', background: 'rgba(22,163,74,.12)', color: '#16a34a' }}>
+            {registrationNotice}
+          </div>
+        )}
+
         <div className="mt-6 space-y-3">
           {mode === 'register' ? (
             <>
@@ -79,14 +99,25 @@ export function AuthPanel({ onAuthenticated }: Props) {
           {loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Cadastrar'}
         </button>
 
-        <button
-          type="button"
-          onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-          className="mt-4 w-full text-sm font-medium"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {mode === 'login' ? 'Nao tenho conta ainda' : 'Ja tenho conta'}
-        </button>
+        {(registrationEnabled || mode === 'register') && (
+          <button
+            type="button"
+            onClick={() => {
+              setRegistrationNotice('')
+              setMode(mode === 'login' ? 'register' : 'login')
+            }}
+            className="mt-4 w-full text-sm font-medium"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {mode === 'login' ? 'Solicitar uma conta' : 'Ja tenho conta'}
+          </button>
+        )}
+
+        {!registrationEnabled && mode === 'login' && (
+          <p className="mt-4 text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            Novas solicitacoes de cadastro estao fechadas.
+          </p>
+        )}
       </form>
     </div>
   )

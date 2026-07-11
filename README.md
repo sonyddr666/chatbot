@@ -9,7 +9,7 @@ Repositorio alvo: `sonyddr666/chatbot`.
 O projeto hoje e uma base funcional de chatbot multiusuario. As funcionalidades principais ja implementadas sao:
 
 - Login.
-- Cadastro.
+- Cadastro com aprovacao administrativa.
 - Autenticacao por token.
 - Multiusuario com isolamento por `user_id`.
 - Conversas e mensagens por usuario.
@@ -197,7 +197,11 @@ user_2_documents
 
 Implementado:
 
-- Cadastro de usuario.
+- Cadastro publico controlado por `ALLOW_REGISTRATION`.
+- Nova conta nasce pendente e inativa, sem token ou login automatico.
+- Email e usuario ficam reservados enquanto a solicitacao existir.
+- Painel exclusivo do administrador para listar, aprovar, rejeitar e excluir solicitacoes.
+- Excluir solicitacao pendente/rejeitada libera email e usuario para novo cadastro.
 - Login com senha.
 - Hash de senha.
 - Token assinado.
@@ -211,6 +215,12 @@ Rotas:
 POST /api/v1/auth/register
 POST /api/v1/auth/login
 GET  /api/v1/auth/me
+GET  /api/v1/auth/registration-status
+
+GET    /api/v1/admin/users
+POST   /api/v1/admin/users/{user_id}/approve
+POST   /api/v1/admin/users/{user_id}/reject
+DELETE /api/v1/admin/users/{user_id}
 ```
 
 ### Multiusuario
@@ -971,11 +981,17 @@ INITIAL_ADMIN_PASSWORD=use-uma-senha-forte-com-12-ou-mais-caracteres
 
 O administrador inicial e criado apenas se ainda nao existir. Alterar
 `INITIAL_ADMIN_PASSWORD` depois do primeiro deploy nao redefine a senha gravada.
-O cadastro publico fica desativado por padrao; habilite-o conscientemente com:
+Novas solicitacoes ficam desativadas por padrao. Para permitir que visitantes
+solicitem uma conta, habilite:
 
 ```env
 ALLOW_REGISTRATION=true
 ```
+
+Esse valor nao libera acesso imediato. A conta e criada como `pending` e
+`is_active=false`, sem token. Somente um administrador autenticado pode aprovar
+no painel `Usuarios e aprovacoes`. Rejeitar mantem email/usuario reservados;
+excluir a solicitacao libera os dois dados para um novo cadastro.
 
 As chaves de provider sao opcionais e tambem devem ser configuradas como secrets,
 por exemplo `OPENCODE_ZEN_API_KEY`, `OPENAI_API_KEY` ou `ANTHROPIC_API_KEY`.

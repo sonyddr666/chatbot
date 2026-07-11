@@ -92,6 +92,24 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
+class RegistrationResponse(BaseModel):
+    status: str = "pending"
+    message: str
+
+
+class AdminUserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    display_name: str = ""
+    is_admin: bool = False
+    is_active: bool = False
+    registration_status: str
+    created_at: str
+    approved_at: Optional[str] = None
+    approved_by: Optional[int] = None
+
+
 class OnboardingRequest(BaseModel):
     display_name: Optional[str] = None
     language: Optional[str] = "pt"

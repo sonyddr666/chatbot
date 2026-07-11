@@ -17,6 +17,7 @@ from src.api.schemas import (
     ChatRequest, ChatResponse, ChatStreamRequest,
     IngestRequest, IngestResponse, FeedbackRequest, StatsResponse,
     ConversationResponse, RegisterRequest, LoginRequest, AuthResponse, UserResponse,
+    RegistrationResponse, AdminUserResponse,
     OnboardingRequest, SkillToggleRequest, PreferenceUpdateRequest, PreferenceSuggestionResolveRequest,
 )
 from src.core.memory import get_session
@@ -47,6 +48,7 @@ from src.core.auth import create_access_token
 from src.core.auth_required import resolve_authorized_user
 from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion, save_extracted_text, save_upload_original, write_rag_manifest
 from src.core.userspace import safe_user_path, write_profile_text
+from src.core.time_utils import utc_isoformat
 from src.tools.perplexo_search import perplexo_health
 
 router = APIRouter()
@@ -72,6 +74,21 @@ def _user_response(user) -> UserResponse:
         username=user.username,
         display_name=user.display_name or user.username,
         is_admin=bool(user.is_admin),
+    )
+
+
+def _admin_user_response(user) -> AdminUserResponse:
+    return AdminUserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        display_name=user.display_name or user.username,
+        is_admin=bool(user.is_admin),
+        is_active=bool(user.is_active),
+        registration_status=user.registration_status or "approved",
+        created_at=utc_isoformat(user.created_at),
+        approved_at=utc_isoformat(user.approved_at) if user.approved_at else None,
+        approved_by=user.approved_by,
     )
 
 
@@ -350,7 +367,15 @@ async def async_set_language(session_id: str, lang: str, user_id: int | None = N
 
 # AUTH / ONBOARDING / SKILLS
 
-@router.post("/auth/register", response_model=AuthResponse)
+@router.get("/auth/registration-status")
+async def registration_status():
+    return {
+        "enabled": bool(settings.allow_registration),
+        "approval_required": True,
+    }
+
+
+@router.post("/auth/register", response_model=RegistrationResponse, status_code=202)
 async def register(body: RegisterRequest):
     ensure_db()
     if not settings.allow_registration:
@@ -358,18 +383,24 @@ async def register(body: RegisterRequest):
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 6 caracteres")
     try:
-        user = UserRepo.create_user(body.email, body.username, body.password, body.display_name or "")
+        UserRepo.create_registration_request(body.email, body.username, body.password, body.display_name or "")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    token = create_access_token(user.id, user.username)
-    return AuthResponse(access_token=token, user=_user_response(user))
+    return RegistrationResponse(
+        status="pending",
+        message="Solicitacao enviada. Aguarde a aprovacao de um administrador.",
+    )
 
 
 @router.post("/auth/login", response_model=AuthResponse)
 async def login(body: LoginRequest):
     ensure_db()
-    user = UserRepo.authenticate(body.login, body.password)
+    user, auth_status = UserRepo.authenticate_with_status(body.login, body.password)
     if not user:
+        if auth_status == "pending":
+            raise HTTPException(status_code=403, detail="Cadastro aguardando aprovacao do administrador")
+        if auth_status == "rejected":
+            raise HTTPException(status_code=403, detail="Solicitacao de cadastro rejeitada")
         raise HTTPException(status_code=401, detail="Login ou senha invalidos")
     token = create_access_token(user.id, user.username)
     return AuthResponse(access_token=token, user=_user_response(user))
@@ -378,6 +409,47 @@ async def login(body: LoginRequest):
 @router.get("/auth/me", response_model=UserResponse)
 async def me(user=Depends(get_current_user)):
     return _user_response(user)
+
+
+@router.get("/admin/users", response_model=list[AdminUserResponse])
+async def admin_list_users(
+    status: str = Query(default="all", pattern="^(all|pending|approved|rejected)$"),
+    admin=Depends(get_admin_user),
+):
+    ensure_db()
+    return [_admin_user_response(user) for user in UserRepo.list_for_admin(status)]
+
+
+@router.post("/admin/users/{user_id}/approve", response_model=AdminUserResponse)
+async def admin_approve_user(user_id: int, admin=Depends(get_admin_user)):
+    ensure_db()
+    try:
+        user = UserRepo.approve_registration(user_id, admin.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _admin_user_response(user)
+
+
+@router.post("/admin/users/{user_id}/reject", response_model=AdminUserResponse)
+async def admin_reject_user(user_id: int, admin=Depends(get_admin_user)):
+    ensure_db()
+    try:
+        user = UserRepo.reject_registration(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _admin_user_response(user)
+
+
+@router.delete("/admin/users/{user_id}")
+async def admin_delete_registration(user_id: int, admin=Depends(get_admin_user)):
+    ensure_db()
+    try:
+        deleted = UserRepo.delete_registration(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Solicitacao nao encontrada")
+    return {"status": "deleted", "user_id": user_id}
 
 
 @router.post("/onboarding")
@@ -1277,8 +1349,8 @@ async def list_conversations(user=Depends(get_current_user)):
             title=c.title or f"Conversa {c.id}",
             language=c.language,
             message_count=c.messages_count,
-            created_at=c.created_at.isoformat(),
-            updated_at=c.updated_at.isoformat(),
+            created_at=utc_isoformat(c.created_at),
+            updated_at=utc_isoformat(c.updated_at),
         )
         for c in convs
     ]
@@ -1298,7 +1370,7 @@ async def get_conversation(session_id: str, user=Depends(get_current_user)):
         "session_id": _public_session_id(user.id, conv.session_id),
         "title": conv.title or f"Conversa {conv.id}",
         "language": conv.language,
-        "created_at": conv.created_at.isoformat(),
+        "created_at": utc_isoformat(conv.created_at),
         "messages": [
             {
                 "id": m.id,
@@ -1308,7 +1380,7 @@ async def get_conversation(session_id: str, user=Depends(get_current_user)):
                 "skill_activities": _stored_skill_activities(m.skill_activities_json),
                 "feedback_score": m.feedback_score,
                 "tokens_used": m.tokens_used,
-                "created_at": m.created_at.isoformat(),
+                "created_at": utc_isoformat(m.created_at),
                 "provider_id": m.provider_id,
                 "provider_name": m.provider_name,
                 "model_id": m.model_id,
@@ -1616,7 +1688,7 @@ async def list_documents(user=Depends(get_current_user)):
             "parser": d.parser or "",
             "error_message": d.error_message or "",
             "manifest_path": d.manifest_path or "",
-            "created_at": d.created_at.isoformat(),
+            "created_at": utc_isoformat(d.created_at),
         }
         for d in docs
     ]
@@ -1718,14 +1790,14 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
     if format == "json":
         data = {
             "title": conv.title or f"Conversa {conv.id}",
-            "created_at": conv.created_at.isoformat(),
+            "created_at": utc_isoformat(conv.created_at),
             "messages": [
                 {
                     "role": m.role,
                     "content": m.content,
                     "reasoning": m.reasoning or "",
                     "skill_activities": _stored_skill_activities(m.skill_activities_json),
-                    "created_at": m.created_at.isoformat(),
+                    "created_at": utc_isoformat(m.created_at),
                     "provider_id": m.provider_id,
                     "provider_name": m.provider_name,
                     "model_id": m.model_id,

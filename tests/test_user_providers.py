@@ -122,8 +122,8 @@ class UserProviderConfigTest(unittest.TestCase):
             def __init__(self, memory, provider_config=None):
                 seen.append(provider_config)
 
-            async def chat(self, message):
-                return "ok"
+            async def chat_stream(self, message):
+                yield "content", "ok"
 
         create_user_provider(
             self.user.id,

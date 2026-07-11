@@ -9,6 +9,7 @@ import base64
 from datetime import datetime, timezone
 
 from src.core.provider_manager import get_active_config
+from src.core.time_utils import utc_isoformat
 from src.db.models import UserProviderConfig, get_session_db
 
 
@@ -53,8 +54,8 @@ def _public_config(row: UserProviderConfig) -> dict:
         "is_default": bool(row.is_default),
         "has_key": bool(api_key),
         "key_masked": _mask_api_key(api_key),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_at": utc_isoformat(row.created_at) if row.created_at else None,
+        "updated_at": utc_isoformat(row.updated_at) if row.updated_at else None,
     }
 
 

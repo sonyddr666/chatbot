@@ -48,6 +48,14 @@ export interface Conversation {
   id: number; session_id: string; title: string; language: string
   message_count: number; created_at: string; updated_at: string
 }
+
+export function parseApiTimestamp(value: string | Date) {
+  if (value instanceof Date) return value
+  const raw = String(value || '').trim()
+  if (!raw) return new Date(Number.NaN)
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  return new Date(hasTimezone ? raw : `${raw}Z`)
+}
 export interface DocumentInfo {
   id: number
   filename: string
@@ -85,6 +93,29 @@ export interface AuthResponse {
   access_token: string
   token_type: string
   user: UserInfo
+}
+
+export interface RegistrationResponse {
+  status: 'pending'
+  message: string
+}
+
+export interface RegistrationStatus {
+  enabled: boolean
+  approval_required: boolean
+}
+
+export interface AdminUserInfo {
+  id: number
+  email: string
+  username: string
+  display_name: string
+  is_admin: boolean
+  is_active: boolean
+  registration_status: 'pending' | 'approved' | 'rejected'
+  created_at: string
+  approved_at?: string | null
+  approved_by?: number | null
 }
 
 export interface SkillInfo {
@@ -289,12 +320,21 @@ export const api = {
   getToken: getAuthToken,
 
   // Auth
+  registrationStatus: () => req<RegistrationStatus>('/auth/registration-status'),
   register: (body: { email: string; username: string; password: string; display_name?: string }) =>
-    req<AuthResponse>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+    req<RegistrationResponse>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   login: (body: { login: string; password: string }) =>
     req<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   me: () => req<UserInfo>('/auth/me'),
   logout: () => setAuthToken(''),
+  adminListUsers: (status: 'all' | 'pending' | 'approved' | 'rejected' = 'all') =>
+    req<AdminUserInfo[]>(`/admin/users?status=${status}`),
+  adminApproveUser: (userId: number) =>
+    req<AdminUserInfo>(`/admin/users/${userId}/approve`, { method: 'POST' }),
+  adminRejectUser: (userId: number) =>
+    req<AdminUserInfo>(`/admin/users/${userId}/reject`, { method: 'POST' }),
+  adminDeleteRegistration: (userId: number) =>
+    req<{ status: string; user_id: number }>(`/admin/users/${userId}`, { method: 'DELETE' }),
   onboarding: (body: {
     display_name?: string
     language?: string

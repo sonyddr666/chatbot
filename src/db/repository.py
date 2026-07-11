@@ -3,10 +3,13 @@
 from datetime import datetime, timezone
 from typing import Optional
 import json
+import re
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 
 from src.core.auth import hash_password, verify_password
 from src.core.userspace import ensure_user_space, safe_user_path
+from src.core.time_utils import utc_isoformat
 from src.core.skill_registry import DEFAULT_SKILLS
 from src.db.models import (
     get_session_db,
@@ -57,6 +60,9 @@ class UserRepo:
                     display_name=username,
                     password_hash=hash_password(password),
                     is_admin=True,
+                    is_active=True,
+                    registration_status="approved",
+                    approved_at=datetime.now(timezone.utc),
                 )
                 db.add(user)
                 db.flush()
@@ -67,6 +73,12 @@ class UserRepo:
                 raise RuntimeError(
                     "As credenciais do administrador inicial conflitam com um usuario existente"
                 )
+            else:
+                user.is_active = True
+                user.registration_status = "approved"
+                if not user.approved_at:
+                    user.approved_at = datetime.now(timezone.utc)
+                db.commit()
             ensure_user_space(user.id)
             return user
         finally:
@@ -84,6 +96,9 @@ class UserRepo:
                 username=username.strip(),
                 display_name=display_name.strip() or username.strip(),
                 password_hash=hash_password(password),
+                is_active=True,
+                registration_status="approved",
+                approved_at=datetime.now(timezone.utc),
             )
             db.add(user)
             db.flush()
@@ -96,29 +111,162 @@ class UserRepo:
             db.close()
 
     @staticmethod
-    def authenticate(login: str, password: str) -> Optional[User]:
+    def create_registration_request(email: str, username: str, password: str, display_name: str = "") -> User:
+        normalized_email = email.strip().lower()
+        normalized_username = username.strip().lower()
+        if len(normalized_email) > 255 or "@" not in normalized_email or any(ch.isspace() for ch in normalized_email):
+            raise ValueError("Email invalido")
+        if not re.fullmatch(r"[a-z0-9_.-]{3,100}", normalized_username):
+            raise ValueError("Usuario deve ter 3 a 100 caracteres: letras, numeros, ponto, traco ou sublinhado")
+
+        db = get_session_db()
+        try:
+            existing = (
+                db.query(User)
+                .filter(
+                    or_(
+                        func.lower(User.email) == normalized_email,
+                        func.lower(User.username) == normalized_username,
+                    )
+                )
+                .first()
+            )
+            if existing:
+                if existing.registration_status == "pending":
+                    raise ValueError("Email ou usuario ja possui solicitacao aguardando aprovacao")
+                raise ValueError("Email ou usuario ja cadastrado")
+            user = User(
+                email=normalized_email,
+                username=normalized_username,
+                display_name=display_name.strip() or normalized_username,
+                password_hash=hash_password(password),
+                is_active=False,
+                is_admin=False,
+                registration_status="pending",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
+            return user
+        except IntegrityError as exc:
+            db.rollback()
+            raise ValueError("Email ou usuario ja cadastrado") from exc
+        finally:
+            db.close()
+
+    @staticmethod
+    def authenticate_with_status(login: str, password: str) -> tuple[Optional[User], str]:
+        normalized_login = login.strip()
         db = get_session_db()
         try:
             user = (
                 db.query(User)
-                .filter(or_(User.email == login.strip().lower(), User.username == login.strip()))
+                .filter(
+                    or_(
+                        func.lower(User.email) == normalized_login.lower(),
+                        func.lower(User.username) == normalized_login.lower(),
+                    )
+                )
                 .first()
             )
-            if not user or not user.is_active or not verify_password(password, user.password_hash):
-                return None
+            if not user or not verify_password(password, user.password_hash):
+                return None, "invalid"
+            status = user.registration_status or "approved"
+            if status != "approved" or not user.is_active:
+                return None, status
+            db.expunge(user)
+            return user, "approved"
+        finally:
+            db.close()
+
+    @staticmethod
+    def authenticate(login: str, password: str) -> Optional[User]:
+        user, _ = UserRepo.authenticate_with_status(login, password)
+        return user
+
+    @staticmethod
+    def get(user_id: int) -> Optional[User]:
+        db = get_session_db()
+        try:
+            user = db.query(User).filter(
+                User.id == user_id,
+                User.is_active == True,
+                User.registration_status == "approved",
+            ).first()
+            if user:
+                db.expunge(user)
+            return user
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_for_admin(status: str | None = None) -> list[User]:
+        db = get_session_db()
+        try:
+            query = db.query(User)
+            if status and status != "all":
+                query = query.filter(User.registration_status == status)
+            users = query.order_by(User.created_at.desc(), User.id.desc()).all()
+            for user in users:
+                db.expunge(user)
+            return users
+        finally:
+            db.close()
+
+    @staticmethod
+    def approve_registration(user_id: int, admin_id: int) -> User:
+        db = get_session_db()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError("Usuario nao encontrado")
+            if user.is_admin:
+                raise ValueError("Conta administrativa nao pode ser alterada por este fluxo")
+            user.registration_status = "approved"
+            user.is_active = True
+            user.approved_by = admin_id
+            user.approved_at = datetime.now(timezone.utc)
+            if not user.profile:
+                db.add(UserProfile(user_id=user.id, language="pt", preferred_tone="direto"))
+            db.commit()
+            db.refresh(user)
+            ensure_user_space(user.id)
             db.expunge(user)
             return user
         finally:
             db.close()
 
     @staticmethod
-    def get(user_id: int) -> Optional[User]:
+    def reject_registration(user_id: int) -> User:
         db = get_session_db()
         try:
-            user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
-            if user:
-                db.expunge(user)
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError("Usuario nao encontrado")
+            if user.is_admin or user.registration_status == "approved":
+                raise ValueError("Somente solicitacoes pendentes podem ser rejeitadas")
+            user.registration_status = "rejected"
+            user.is_active = False
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
             return user
+        finally:
+            db.close()
+
+    @staticmethod
+    def delete_registration(user_id: int) -> bool:
+        db = get_session_db()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            if user.is_admin or user.registration_status == "approved":
+                raise ValueError("Somente solicitacoes pendentes ou rejeitadas podem ser excluidas")
+            db.delete(user)
+            db.commit()
+            return True
         finally:
             db.close()
 
@@ -235,7 +383,7 @@ class UserPreferenceRepo:
                     "value": json.loads(row.value_json or "null"),
                     "source": row.source,
                     "confidence": row.confidence / 100,
-                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                    "updated_at": utc_isoformat(row.updated_at) if row.updated_at else None,
                 }
                 for row in rows
             }
@@ -270,8 +418,8 @@ class PreferenceSuggestionRepo:
             "reason": row.reason,
             "confidence": row.confidence / 100,
             "status": row.status,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+            "created_at": utc_isoformat(row.created_at) if row.created_at else None,
+            "resolved_at": utc_isoformat(row.resolved_at) if row.resolved_at else None,
         }
 
     @staticmethod
@@ -441,8 +589,8 @@ class ConversationRepo:
                 exported.append({
                     "session_id": conversation.session_id,
                     "title": conversation.title,
-                    "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
-                    "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else None,
+                    "created_at": utc_isoformat(conversation.created_at) if conversation.created_at else None,
+                    "updated_at": utc_isoformat(conversation.updated_at) if conversation.updated_at else None,
                     "messages": [
                         {
                             "id": message.id,
@@ -450,7 +598,7 @@ class ConversationRepo:
                             "content": message.content,
                             "reasoning": message.reasoning or "",
                             "skill_activities_json": message.skill_activities_json or "[]",
-                            "created_at": message.created_at.isoformat() if message.created_at else None,
+                            "created_at": utc_isoformat(message.created_at) if message.created_at else None,
                             "provider_name": message.provider_name or "",
                             "model_name": message.model_name or "",
                         }
@@ -931,8 +1079,8 @@ class SkillRunRepo:
                 "input": json.loads(run.input_json or "{}"),
                 "output_summary": run.output_summary,
                 "error_message": run.error_message,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "started_at": utc_isoformat(run.started_at) if run.started_at else None,
+                "finished_at": utc_isoformat(run.finished_at) if run.finished_at else None,
             }
             with audit_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
@@ -990,8 +1138,8 @@ class SkillRunRepo:
                     "input_json": run.input_json,
                     "output_summary": run.output_summary,
                     "error_message": run.error_message,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                    "started_at": utc_isoformat(run.started_at) if run.started_at else None,
+                    "finished_at": utc_isoformat(run.finished_at) if run.finished_at else None,
                 }
                 for run in runs
             ]

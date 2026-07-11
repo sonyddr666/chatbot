@@ -25,6 +25,24 @@ skills/
 
 `safe_user_path` permite apenas as areas `profile`, `workspace`, `uploads`, `rag` e `skills`. Caminhos absolutos, `..`, areas desconhecidas e tentativas de sair da raiz do usuario sao bloqueados.
 
+## Cadastro e aprovacao administrativa
+
+- `ALLOW_REGISTRATION=false` fecha novas solicitacoes sem afetar contas existentes.
+- `ALLOW_REGISTRATION=true` cria solicitacao `pending` e inativa; nunca devolve token.
+- Email e username sao normalizados, consultados sem diferenca de maiusculas e protegidos tambem pelos indices unicos do banco.
+- Login pendente ou rejeitado e bloqueado com mensagem especifica.
+- Somente `is_admin=true` acessa a lista e as acoes de aprovar, rejeitar e excluir.
+- Aprovar cria o perfil/UserSpace e ativa o login.
+- Rejeitar mantem os identificadores reservados.
+- Excluir uma solicitacao pendente/rejeitada remove a linha e permite novo cadastro com os mesmos dados.
+- Usuarios existentes sao migrados automaticamente para `approved`.
+
+## Horarios
+
+- Datetimes UTC sem timezone devolvidos pelo SQLite recebem sufixo `Z` na API.
+- O frontend converte UTC para o horario local do navegador.
+- Respostas antigas sem sufixo tambem sao interpretadas como UTC, evitando que `22:13` apareca como `01:13` depois de recarregar.
+
 ## Fluxo de dados
 
 ```txt

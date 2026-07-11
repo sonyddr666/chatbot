@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats } from '../lib/api'
-import { api } from '../lib/api'
+import { api, parseApiTimestamp } from '../lib/api'
 
 let activeStreamController: AbortController | null = null
 
@@ -217,7 +217,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           id: `msg-${m.id}`,
           role: m.role,
           content: m.content,
-          timestamp: new Date(m.created_at),
+          timestamp: parseApiTimestamp(m.created_at),
           messageId: m.id,
           feedbackScore: m.feedback_score,
           reasoning: m.reasoning || '',

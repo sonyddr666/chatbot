@@ -21,6 +21,9 @@ class User(Base):
     display_name = Column(String(255), default="")
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
+    registration_status = Column(String(20), nullable=False, default="approved", index=True)
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -213,6 +216,15 @@ def init_db():
 
     if settings.database_url.startswith("sqlite"):
         with engine.begin() as conn:
+            user_cols = _sqlite_columns(conn, "users")
+            for name, ddl in {
+                "registration_status": "ALTER TABLE users ADD COLUMN registration_status VARCHAR(20) NOT NULL DEFAULT 'approved'",
+                "approved_at": "ALTER TABLE users ADD COLUMN approved_at DATETIME",
+                "approved_by": "ALTER TABLE users ADD COLUMN approved_by INTEGER",
+            }.items():
+                if name not in user_cols:
+                    conn.execute(text(ddl))
+
             message_cols = _sqlite_columns(conn, "messages")
             for name, ddl in {
                 "provider_id": "ALTER TABLE messages ADD COLUMN provider_id VARCHAR(100)",
