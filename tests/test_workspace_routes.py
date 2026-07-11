@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from src.api.app import app
 from src.config import settings
 from src.core.auth import create_access_token
+from src.core.userspace import safe_user_path
 from src.db.models import init_db
 from src.db.repository import UserRepo
 
@@ -128,6 +129,35 @@ class WorkspaceRoutesTest(unittest.TestCase):
         self.assertTrue(apply_response.json()["applied"])
         self.assertTrue(apply_response.json()["snapshot_path"].startswith(".snapshots/"))
         self.assertEqual(read_response.json()["content"], "depois\n")
+
+    def test_workspace_image_uses_authenticated_raw_preview_instead_of_utf8_editor(self):
+        image_path = safe_user_path(self.user.id, "workspace", "images/sample.webp")
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_bytes = b"RIFF\x08\x00\x00\x00WEBPVP8 \xac"
+        image_path.write_bytes(image_bytes)
+
+        preview = self.client.get(
+            "/api/v1/workspace/raw",
+            headers=self.headers,
+            params={"path": "images/sample.webp"},
+        )
+        text_editor = self.client.get(
+            "/api/v1/workspace/file",
+            headers=self.headers,
+            params={"path": "images/sample.webp"},
+        )
+        traversal = self.client.get(
+            "/api/v1/workspace/raw",
+            headers=self.headers,
+            params={"path": "../sample.webp"},
+        )
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.headers["content-type"], "image/webp")
+        self.assertEqual(preview.content, image_bytes)
+        self.assertEqual(preview.headers["cache-control"], "private, no-store")
+        self.assertEqual(text_editor.status_code, 415)
+        self.assertEqual(traversal.status_code, 400)
 
 
 if __name__ == "__main__":

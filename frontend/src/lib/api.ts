@@ -818,6 +818,17 @@ export const api = {
     req<WorkspaceTree>(`/workspace/tree?path=${encodeURIComponent(path)}`),
   workspaceReadFile: (path: string) =>
     req<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+  async workspaceReadBlob(path: string): Promise<Blob> {
+    const response = await fetch(
+      `${API}/workspace/raw?path=${encodeURIComponent(path)}`,
+      { headers: authHeaders() },
+    )
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+      throw new Error(error.detail || 'Falha ao abrir arquivo')
+    }
+    return response.blob()
+  },
   workspaceWriteFile: (path: string, content: string) =>
     req<WorkspaceInfo>('/workspace/file', {
       method: 'PUT',

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import mimetypes
+
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import FileResponse
 
 from src.api.schemas import (
     WorkspaceFileResponse,
@@ -24,6 +27,7 @@ from src.core.workspace import (
     mkdir,
     move_path,
     read_text_file,
+    resolve_workspace_file,
     write_text_file,
 )
 from src.core.patcher import apply_workspace_patch, preview_workspace_patch
@@ -38,6 +42,25 @@ from src.core.workspace_rag import ingest_selected_workspace_file
 
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
+WORKSPACE_MEDIA_TYPES = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".ico": "image/x-icon",
+    ".jfif": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".pjp": "image/jpeg",
+    ".pjpeg": "image/jpeg",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".webp": "image/webp",
+}
 
 
 async def get_current_user(authorization: str | None = Header(default=None)):
@@ -54,6 +77,8 @@ def _workspace_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail="Caminho nao encontrado")
     if isinstance(exc, FileExistsError):
         return HTTPException(status_code=409, detail="Destino ja existe")
+    if isinstance(exc, UnicodeDecodeError):
+        return HTTPException(status_code=415, detail="Arquivo binario; use a visualizacao ou o download")
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail="Erro no workspace")
@@ -116,6 +141,25 @@ async def workspace_tree(path: str = "", user=Depends(get_current_user)):
 async def workspace_read_file(path: str, user=Depends(get_current_user)):
     try:
         return {"path": path, "content": read_text_file(user.id, path)}
+    except Exception as exc:
+        raise _workspace_error(exc)
+
+
+@router.get("/raw")
+async def workspace_raw_file(path: str, user=Depends(get_current_user)):
+    """Return original bytes for authenticated previews and downloads."""
+    try:
+        file_path = resolve_workspace_file(user.id, path)
+        media_type = (
+            WORKSPACE_MEDIA_TYPES.get(file_path.suffix.lower())
+            or mimetypes.guess_type(file_path.name)[0]
+            or "application/octet-stream"
+        )
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={"Cache-Control": "private, no-store"},
+        )
     except Exception as exc:
         raise _workspace_error(exc)
 

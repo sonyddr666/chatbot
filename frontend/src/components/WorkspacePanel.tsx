@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react'
 import toast from 'react-hot-toast'
 import {
   ChevronDown,
   ChevronRight,
   Database,
+  Download,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
   GripVertical,
+  Image as ImageIcon,
+  Maximize2,
   MoveRight,
   Pencil,
   RefreshCw,
@@ -40,6 +43,16 @@ interface PendingDelete {
 
 const MAX_TREE_DEPTH = 12
 const MAX_IMPORT_BYTES = 1024 * 1024
+const IMAGE_EXTENSIONS = new Set([
+  '.apng', '.avif', '.bmp', '.gif', '.heic', '.heif', '.ico', '.jfif',
+  '.jpeg', '.jpg', '.pjp', '.pjpeg', '.png', '.svg', '.tif', '.tiff', '.webp',
+])
+
+function isImagePath(path: string) {
+  const filename = path.split('/').pop() || ''
+  const dot = filename.lastIndexOf('.')
+  return dot >= 0 && IMAGE_EXTENSIONS.has(filename.slice(dot).toLowerCase())
+}
 
 export function WorkspacePanel({ open, onClose }: Props) {
   const [tree, setTree] = useState<WorkspaceTreeNode[]>([])
@@ -48,7 +61,12 @@ export function WorkspacePanel({ open, onClose }: Props) {
   const [selectedPath, setSelectedPath] = useState('')
   const [selectedKind, setSelectedKind] = useState<'file' | 'folder' | ''>('')
   const [selectedFile, setSelectedFile] = useState('')
+  const [fileMode, setFileMode] = useState<'text' | 'image' | ''>('')
   const [content, setContent] = useState('')
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('')
+  const [imageExpanded, setImageExpanded] = useState(false)
+  const [imageLoadError, setImageLoadError] = useState(false)
+  const imagePreviewUrlRef = useRef('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [patchPreview, setPatchPreview] = useState<WorkspacePatchPreview | null>(null)
@@ -60,6 +78,22 @@ export function WorkspacePanel({ open, onClose }: Props) {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [ragConfirm, setRagConfirm] = useState(false)
   const [ragLoading, setRagLoading] = useState(false)
+
+  const clearImagePreview = useCallback(() => {
+    if (imagePreviewUrlRef.current) URL.revokeObjectURL(imagePreviewUrlRef.current)
+    imagePreviewUrlRef.current = ''
+    setImagePreviewUrl('')
+    setImageExpanded(false)
+    setImageLoadError(false)
+  }, [])
+
+  useEffect(() => () => {
+    if (imagePreviewUrlRef.current) URL.revokeObjectURL(imagePreviewUrlRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!open) clearImagePreview()
+  }, [open, clearImagePreview])
 
   const loadBranch = useCallback(async (path: string, depth = 0): Promise<WorkspaceTreeNode[]> => {
     const branch = await api.workspaceTree(path)
@@ -101,9 +135,11 @@ export function WorkspacePanel({ open, onClose }: Props) {
   }, [tree])
 
   const selectFolder = (node: WorkspaceTreeNode) => {
+    clearImagePreview()
     setSelectedPath(node.path)
     setSelectedKind('folder')
     setSelectedFile('')
+    setFileMode('')
     setContent('')
     setMoveTarget(node.path)
     setCurrentFolder(node.path)
@@ -119,10 +155,29 @@ export function WorkspacePanel({ open, onClose }: Props) {
 
   const openFile = async (node: WorkspaceTreeNode) => {
     try {
+      if (isImagePath(node.path)) {
+        const blob = await api.workspaceReadBlob(node.path)
+        clearImagePreview()
+        const previewUrl = URL.createObjectURL(blob)
+        imagePreviewUrlRef.current = previewUrl
+        setImagePreviewUrl(previewUrl)
+        setSelectedPath(node.path)
+        setSelectedKind('file')
+        setSelectedFile(node.path)
+        setFileMode('image')
+        setContent('')
+        setMoveTarget(node.path)
+        setPatchPreview(null)
+        setRagConfirm(false)
+        return
+      }
+
       const file = await api.workspaceReadFile(node.path)
+      clearImagePreview()
       setSelectedPath(file.path)
       setSelectedKind('file')
       setSelectedFile(file.path)
+      setFileMode('text')
       setContent(file.content)
       setMoveTarget(file.path)
       setPatchPreview(null)
@@ -157,6 +212,8 @@ export function WorkspacePanel({ open, onClose }: Props) {
       setSelectedPath(target)
       setSelectedKind('file')
       setSelectedFile(target)
+      setFileMode('text')
+      clearImagePreview()
       setContent('')
       setMoveTarget(target)
       setPatchPreview(null)
@@ -279,9 +336,11 @@ export function WorkspacePanel({ open, onClose }: Props) {
       await api.workspaceDeletePath(pendingDelete.path, pendingDelete.kind === 'folder')
       toast.success('Item apagado apos confirmacao')
       if (selectedPath === pendingDelete.path) {
+        clearImagePreview()
         setSelectedPath('')
         setSelectedKind('')
         setSelectedFile('')
+        setFileMode('')
         setContent('')
         setMoveTarget('')
       }
@@ -307,6 +366,16 @@ export function WorkspacePanel({ open, onClose }: Props) {
     } finally {
       setRagLoading(false)
     }
+  }
+
+  const downloadSelectedImage = () => {
+    if (!selectedFile || !imagePreviewUrl) return
+    const anchor = document.createElement('a')
+    anchor.href = imagePreviewUrl
+    anchor.download = selectedFile.split('/').pop() || 'imagem'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
   }
 
   const renderTree = (nodes: WorkspaceTreeNode[], depth = 0): ReactNode => nodes.map(node => {
@@ -343,7 +412,9 @@ export function WorkspacePanel({ open, onClose }: Props) {
         >
           <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
           {isFolder ? (isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : <span className="w-[13px]" />}
-          {isFolder ? (isExpanded ? <FolderOpen size={16} /> : <Folder size={16} />) : <FileText size={16} />}
+          {isFolder
+            ? (isExpanded ? <FolderOpen size={16} /> : <Folder size={16} />)
+            : isImagePath(node.path) ? <ImageIcon size={16} /> : <FileText size={16} />}
           <span className="min-w-0 flex-1 truncate">{node.name}</span>
           {!isFolder ? <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{node.size}b</span> : null}
         </button>
@@ -434,7 +505,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
                     <h3 className="truncate font-bold" style={{ color: 'var(--text-primary)' }}>{selectedPath}</h3>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {selectedFile ? (
+                    {selectedFile && fileMode === 'text' ? (
                       <>
                         <button onClick={previewPatch} disabled={patching} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-60" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
                           <Pencil size={14} /> {patching ? 'Gerando...' : 'Preview patch'}
@@ -451,6 +522,25 @@ export function WorkspacePanel({ open, onClose }: Props) {
                         </button>
                       </>
                     ) : null}
+                    {selectedFile && fileMode === 'image' ? (
+                      <>
+                        <button
+                          onClick={downloadSelectedImage}
+                          className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold"
+                          style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+                        >
+                          <Download size={14} /> Baixar
+                        </button>
+                        <button
+                          onClick={() => setImageExpanded(true)}
+                          disabled={!imagePreviewUrl || imageLoadError}
+                          className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"
+                          style={{ background: 'var(--accent)', color: '#fff' }}
+                        >
+                          <Maximize2 size={14} /> Ampliar
+                        </button>
+                      </>
+                    ) : null}
                     <button onClick={() => setPendingDelete({ path: selectedPath, kind: selectedKind as 'file' | 'folder' })} className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: '#fee2e2', color: '#dc2626' }}>
                       <Trash2 size={14} /> Apagar
                     </button>
@@ -464,7 +554,52 @@ export function WorkspacePanel({ open, onClose }: Props) {
                   </button>
                 </div>
 
-                {selectedFile ? (
+                {selectedFile && fileMode === 'image' ? (
+                  <div
+                    className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border"
+                    style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
+                  >
+                    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 md:p-8">
+                      {imageLoadError ? (
+                        <div className="max-w-sm text-center">
+                          <ImageIcon className="mx-auto mb-3 opacity-50" size={48} />
+                          <h4 className="font-bold">O navegador nao renderiza este formato</h4>
+                          <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                            O arquivo continua intacto e disponivel para download.
+                          </p>
+                          <button
+                            onClick={downloadSelectedImage}
+                            className="mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold"
+                            style={{ background: 'var(--accent)', color: '#fff' }}
+                          >
+                            <Download size={16} /> Baixar original
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setImageExpanded(true)}
+                          className="group relative flex h-full w-full items-center justify-center"
+                          title="Clique para ampliar"
+                        >
+                          <img
+                            src={imagePreviewUrl}
+                            alt={selectedFile.split('/').pop() || 'Imagem do Workspace'}
+                            onError={() => setImageLoadError(true)}
+                            className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+                          />
+                          <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-black/70 px-3 py-1.5 text-xs font-bold text-white opacity-0 transition group-hover:opacity-100">
+                            <Maximize2 size={13} /> Ampliar
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+                      <span>Preview visual - original preservado</span>
+                      <span className="font-mono uppercase">{selectedFile.split('.').pop()}</span>
+                    </div>
+                  </div>
+                ) : selectedFile ? (
                   <textarea
                     value={content}
                     onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -528,6 +663,41 @@ export function WorkspacePanel({ open, onClose }: Props) {
           </div>
         ) : null}
       </aside>
+
+      {imageExpanded && imagePreviewUrl && !imageLoadError ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/90 p-3 md:p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Visualizacao ampliada de ${selectedFile}`}
+          onClick={() => setImageExpanded(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setImageExpanded(false)}
+            className="absolute right-4 top-4 rounded-full bg-black/70 p-3 text-white transition hover:bg-black"
+            aria-label="Fechar imagem ampliada"
+          >
+            <X size={22} />
+          </button>
+          <img
+            src={imagePreviewUrl}
+            alt={selectedFile.split('/').pop() || 'Imagem ampliada do Workspace'}
+            className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+            onClick={event => event.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation()
+              downloadSelectedImage()
+            }}
+            className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-black shadow-xl"
+          >
+            <Download size={16} /> Baixar original
+          </button>
+        </div>
+      ) : null}
     </>
   )
 }

@@ -84,6 +84,15 @@ def read_text_file(user_id: int, path: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
+def resolve_workspace_file(user_id: int, path: str) -> Path:
+    """Resolve an existing user-owned file for authenticated preview or download."""
+    _require_relative_path(path, "Caminho do arquivo nao pode ser vazio")
+    file_path = _workspace_path(user_id, path)
+    if not file_path.exists() or not file_path.is_file():
+        raise FileNotFoundError(path)
+    return file_path
+
+
 def write_text_file(user_id: int, path: str, content: str) -> WorkspaceFileInfo:
     _require_relative_path(path, "Caminho do arquivo nao pode ser vazio")
     data = content.encode("utf-8")

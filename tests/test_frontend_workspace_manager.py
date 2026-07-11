@@ -31,6 +31,11 @@ class FrontendWorkspaceManagerTest(unittest.TestCase):
         self.assertIn("hover:brightness-150", panel)
         self.assertIn("Extraindo texto, criando chunks", panel)
         self.assertIn("Processando ${index + 1}", plan_card)
+        self.assertIn("workspaceReadBlob", panel + api)
+        self.assertIn("'.webp'", panel)
+        self.assertIn("Preview visual - original preservado", panel)
+        self.assertIn("imageExpanded", panel)
+        self.assertIn("Baixar original", panel)
 
     def test_sidebar_upload_no_longer_uses_immediate_rag_endpoint(self):
         sidebar = Path("frontend/src/components/Sidebar.tsx").read_text(encoding="utf-8")
