@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from src.api.app import app
 from src.config import settings
 from src.core.auth import create_access_token
-from src.core.chat_attachments import save_chat_attachment
+from src.core.chat_attachments import build_model_user_content, save_chat_attachment
 from src.core.chat import ChatEngine
 from src.core.chat_jobs import process_chat_job
 from src.core.llm import _convert_messages_to_codex
@@ -54,6 +54,50 @@ class ChatAttachmentTest(unittest.TestCase):
         self.assertTrue((Path(settings.user_data_dir) / str(self.user.id) / "workspace" / artifact.relative_path).is_file())
         self.assertTrue(expected_root.is_dir())
         self.assertIn("Dados do usuario", artifact.extracted_text)
+
+    def test_svg_and_arbitrary_binary_are_accepted_without_automatic_rag(self):
+        svg = self.client.post(
+            "/api/v1/chat/attachments",
+            headers=self.headers,
+            data={"session_id": "anything"},
+            files=[(
+                "files",
+                ("drawing.svg", b'<svg><text id="answer">conteudo-svg</text></svg>', "image/svg+xml"),
+            )],
+        )
+        binary = self.client.post(
+            "/api/v1/chat/attachments",
+            headers=self.headers,
+            data={"session_id": "anything"},
+            files=[("files", ("archive.unknown", b"\x00\xff\x00\x81", "application/octet-stream"))],
+        )
+
+        self.assertEqual(svg.status_code, 200, svg.text)
+        self.assertEqual(binary.status_code, 200, binary.text)
+        self.assertFalse(svg.json()["rag_indexed"])
+        self.assertEqual(svg.json()["attachments"][0]["kind"], "text")
+        self.assertEqual(binary.json()["attachments"][0]["kind"], "binary")
+
+        binary_attachment = binary.json()["attachments"][0]
+        svg_content = build_model_user_content(
+            self.user.id,
+            "Leia o SVG",
+            [svg.json()["attachments"][0]],
+        )
+        binary_content = build_model_user_content(
+            self.user.id,
+            "Guarde o binario",
+            [binary_attachment],
+        )
+        self.assertIn("conteudo-svg", svg_content)
+        self.assertIn("formato binario nao decodificado", binary_content)
+
+        binary_download = self.client.get(
+            f'/api/v1/chat/attachments/{binary_attachment["id"]}/download',
+            headers=self.headers,
+        )
+        self.assertEqual(binary_download.status_code, 200)
+        self.assertEqual(binary_download.content, b"\x00\xff\x00\x81")
 
     def test_upload_and_job_attach_file_without_rag_ingestion(self):
         with patch("src.api.routes.add_user_documents") as rag_add:

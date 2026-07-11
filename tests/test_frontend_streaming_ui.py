@@ -58,6 +58,7 @@ class FrontendStreamingUiTest(unittest.TestCase):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
 
         self.assertIn("type=\"file\"", chat_input)
+        self.assertNotIn("accept={ACCEPTED_FILES}", chat_input)
         self.assertIn("window.addEventListener('drop'", chat_input)
         self.assertIn("Workspace/chat/uploads", chat_input)
         self.assertIn("api.uploadChatAttachments", store)

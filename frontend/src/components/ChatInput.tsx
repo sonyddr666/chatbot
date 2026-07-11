@@ -2,15 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type Keyboa
 import { FileText, Image as ImageIcon, Paperclip, Send, StopCircle, UploadCloud, X } from 'lucide-react'
 
 const MAX_FILES = 5
-const ACCEPTED_FILES = [
-  '.txt', '.md', '.markdown', '.csv', '.json', '.jsonl', '.xml', '.html', '.htm',
-  '.css', '.scss', '.less', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.py',
-  '.java', '.kt', '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.go', '.rs', '.php',
-  '.rb', '.swift', '.scala', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.yaml', '.yml',
-  '.toml', '.ini', '.cfg', '.conf', '.env', '.log', '.pdf', '.docx', '.png', '.jpg',
-  '.jpeg', '.webp', '.gif', 'image/*',
-].join(',')
-
 interface Props {
   onSend: (message: string, files: File[]) => Promise<boolean | void> | boolean | void
   busy?: boolean
@@ -146,7 +137,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
             <UploadCloud size={42} className="mx-auto mb-4" style={{ color: 'var(--accent)' }} />
             <p className="text-lg font-bold">Solte os arquivos na conversa</p>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              Eles serao salvos em Workspace / chat / uploads e enviados ao modelo, sem entrar no RAG.
+              Eles serao salvos em Workspace/chat/uploads e enviados ao modelo, sem entrar no RAG.
             </p>
           </div>
         </div>
@@ -202,7 +193,6 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
             ref={fileInputRef}
             type="file"
             multiple
-            accept={ACCEPTED_FILES}
             className="hidden"
             onChange={handleFileInput}
           />
@@ -256,7 +246,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
           </div>
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] sm:text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          <span>Anexos: Workspace/chat/uploads. RAG so quando voce escolher; imagens dependem do modelo.</span>
+          <span>Qualquer arquivo vai ao Workspace; o modelo le texto/imagens compativeis. RAG so quando voce escolher.</span>
           <span className="shrink-0">{files.length}/{MAX_FILES}</span>
         </div>
       </div>

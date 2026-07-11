@@ -55,7 +55,6 @@ from src.tools.perplexo_search import perplexo_health
 from src.core.chat_jobs import cancel_chat_job, start_chat_job
 from src.core.chat_attachments import (
     MAX_CHAT_ATTACHMENTS,
-    SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS,
     remove_chat_attachment_file,
     save_chat_attachment,
 )
@@ -1362,16 +1361,6 @@ async def upload_chat_attachments(
         for file in files:
             if not file.filename:
                 raise ValueError("Nome de arquivo invalido")
-            extension = os.path.splitext(file.filename)[1].lower()
-            normalized_name = file.filename.lower()
-            if normalized_name == "dockerfile":
-                extension = ".dockerfile"
-            elif normalized_name == ".gitignore":
-                extension = ".gitignore"
-            elif normalized_name == ".env":
-                extension = ".env"
-            if extension not in SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS:
-                raise ValueError(f"Extensao nao suportada no chat: {extension or '(sem extensao)'}")
             content = await file.read()
             if not content:
                 raise ValueError(f"Arquivo vazio: {file.filename}")

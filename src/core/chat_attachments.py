@@ -17,7 +17,7 @@ from src.core.userspace import safe_user_path
 
 CHAT_TEXT_EXTENSIONS = frozenset({
     ".txt", ".md", ".markdown", ".csv", ".json", ".jsonl", ".xml",
-    ".html", ".htm", ".css", ".scss", ".less", ".js", ".jsx", ".mjs",
+    ".html", ".htm", ".svg", ".css", ".scss", ".less", ".js", ".jsx", ".mjs",
     ".cjs", ".ts", ".tsx", ".py", ".pyi", ".java", ".kt", ".kts",
     ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php",
     ".rb", ".swift", ".scala", ".sh", ".bash", ".zsh", ".ps1", ".sql",
@@ -26,9 +26,13 @@ CHAT_TEXT_EXTENSIONS = frozenset({
 })
 CHAT_DOCUMENT_EXTENSIONS = frozenset({".pdf", ".docx"})
 CHAT_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
-SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS = (
-    CHAT_TEXT_EXTENSIONS | CHAT_DOCUMENT_EXTENSIONS | CHAT_IMAGE_EXTENSIONS
-)
+CHAT_IMAGE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+})
+CHAT_TEXT_CONTENT_TYPES = frozenset({
+    "application/json", "application/ld+json", "application/xml",
+    "application/javascript", "application/x-javascript", "image/svg+xml",
+})
 
 MAX_CHAT_ATTACHMENTS = 5
 MAX_EXTRACTED_CHARS_PER_FILE = 60_000
@@ -58,7 +62,8 @@ def _attachment_extension(filename: str) -> str:
         return ".gitignore"
     if name == ".env":
         return ".env"
-    return Path(filename).suffix.lower()
+    # The complete filename remains preserved; the database extension is metadata only.
+    return Path(filename).suffix.lower()[:32]
 
 
 def _truncate_extracted_text(text: str) -> tuple[str, bool]:
@@ -71,6 +76,60 @@ def _truncate_extracted_text(text: str) -> tuple[str, bool]:
     return cleaned[:head_size] + marker + cleaned[-tail_size:], True
 
 
+def _decode_probable_text(content: bytes, content_type: str, force: bool = False) -> str | None:
+    normalized_type = content_type.partition(";")[0].strip().lower()
+    explicit_text = (
+        force
+        or normalized_type.startswith("text/")
+        or normalized_type in CHAT_TEXT_CONTENT_TYPES
+    )
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        if not explicit_text:
+            return None
+        text = content.decode("utf-8-sig", errors="replace")
+
+    if "\x00" in text and not explicit_text:
+        return None
+    if not explicit_text and text:
+        printable = sum(character.isprintable() or character in "\r\n\t" for character in text)
+        if printable / len(text) < 0.85:
+            return None
+    return text
+
+
+def _classify_attachment(
+    filename: str,
+    extension: str,
+    content: bytes,
+    content_type: str,
+) -> tuple[str, str, bool]:
+    normalized_type = content_type.partition(";")[0].strip().lower()
+    if extension in CHAT_TEXT_EXTENSIONS:
+        raw_text = _decode_probable_text(content, content_type, force=True) or ""
+        extracted_text, is_truncated = _truncate_extracted_text(raw_text)
+        return "text", extracted_text, is_truncated
+
+    if extension in CHAT_DOCUMENT_EXTENSIONS:
+        try:
+            raw_text = extract_text_for_ingestion(filename, content)
+        except Exception:
+            # A parser failure must not prevent the original from being preserved.
+            return "binary", "", False
+        extracted_text, is_truncated = _truncate_extracted_text(raw_text)
+        return ("text", extracted_text, is_truncated) if extracted_text else ("binary", "", False)
+
+    if extension in CHAT_IMAGE_EXTENSIONS or normalized_type in CHAT_IMAGE_CONTENT_TYPES:
+        return "image", "", False
+
+    raw_text = _decode_probable_text(content, content_type)
+    if raw_text is not None:
+        extracted_text, is_truncated = _truncate_extracted_text(raw_text)
+        return "text", extracted_text, is_truncated
+    return "binary", "", False
+
+
 def save_chat_attachment(
     user_id: int,
     filename: str,
@@ -79,8 +138,6 @@ def save_chat_attachment(
 ) -> ChatAttachmentArtifact:
     safe_name = sanitize_upload_filename(filename)
     extension = _attachment_extension(safe_name)
-    if extension not in SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS:
-        raise ValueError(f"Extensao nao suportada no chat: {extension or '(sem extensao)'}")
 
     attachment_id = f"att_{uuid4().hex}"
     relative_path = f"chat/uploads/{attachment_id}/{safe_name}"
@@ -89,19 +146,12 @@ def save_chat_attachment(
 
     try:
         storage_path.write_bytes(content)
-        if extension in CHAT_IMAGE_EXTENSIONS:
-            extracted_text = ""
-            is_truncated = False
-            kind = "image"
-        else:
-            if extension in CHAT_DOCUMENT_EXTENSIONS:
-                raw_text = extract_text_for_ingestion(safe_name, content)
-            else:
-                raw_text = content.decode("utf-8", errors="replace")
-            extracted_text, is_truncated = _truncate_extracted_text(raw_text)
-            if not extracted_text:
-                raise ValueError("Arquivo nao contem texto legivel")
-            kind = "text"
+        kind, extracted_text, is_truncated = _classify_attachment(
+            safe_name,
+            extension,
+            content,
+            content_type,
+        )
     except Exception:
         shutil.rmtree(storage_path.parent, ignore_errors=True)
         raise
@@ -132,25 +182,37 @@ def remove_chat_attachment_file(user_id: int, relative_path: str) -> None:
         shutil.rmtree(parent, ignore_errors=True)
 
 
-def _text_attachment_block(attachments: list[dict]) -> str:
+def _attachment_context_block(attachments: list[dict]) -> str:
     remaining = MAX_ATTACHMENT_CONTEXT_CHARS
     blocks: list[str] = []
     for attachment in attachments:
-        if attachment.get("kind") != "text":
-            continue
-        text = str(attachment.get("extracted_text") or "")
-        if not text or remaining <= 0:
-            continue
-        selected = text[:remaining]
-        remaining -= len(selected)
-        truncation_note = "\n[conteudo truncado para caber no contexto]" if len(selected) < len(text) else ""
-        blocks.append(
+        kind = str(attachment.get("kind") or "binary")
+        common = (
             "<arquivo_anexado>\n"
             f"id: {json.dumps(str(attachment['id']), ensure_ascii=False)}\n"
             f"nome: {json.dumps(str(attachment['filename']), ensure_ascii=False)}\n"
             f"caminho_workspace: {json.dumps(str(attachment['relative_path']), ensure_ascii=False)}\n"
-            f"conteudo:\n{selected}{truncation_note}\n</arquivo_anexado>"
+            f"tipo: {json.dumps(kind, ensure_ascii=False)}\n"
+            f"mime: {json.dumps(str(attachment.get('content_type') or 'application/octet-stream'), ensure_ascii=False)}\n"
+            f"tamanho_bytes: {int(attachment.get('size') or 0)}\n"
         )
+        if kind == "text":
+            text = str(attachment.get("extracted_text") or "")
+            if not text or remaining <= 0:
+                blocks.append(common + "observacao: arquivo textual sem conteudo legivel disponivel\n</arquivo_anexado>")
+                continue
+            selected = text[:remaining]
+            remaining -= len(selected)
+            truncation_note = "\n[conteudo truncado para caber no contexto]" if len(selected) < len(text) else ""
+            blocks.append(common + f"conteudo:\n{selected}{truncation_note}\n</arquivo_anexado>")
+        elif kind == "image":
+            blocks.append(common + "observacao: imagem enviada separadamente como entrada multimodal\n</arquivo_anexado>")
+        else:
+            blocks.append(
+                common
+                + "observacao: original salvo no Workspace; formato binario nao decodificado diretamente\n"
+                + "</arquivo_anexado>"
+            )
     if not blocks:
         return ""
     return (
@@ -167,21 +229,23 @@ def build_model_user_content(user_id: int, user_text: str, attachments: list[dic
     current_attachments: list[dict] = []
     for attachment in attachments:
         current = dict(attachment)
-        if current.get("kind") == "text":
-            try:
-                path = safe_user_path(user_id, "workspace", str(current["relative_path"]))
-                content = path.read_bytes()
-                extension = str(current.get("extension") or "")
-                if extension in CHAT_DOCUMENT_EXTENSIONS:
-                    raw_text = extract_text_for_ingestion(str(current["filename"]), content)
-                else:
-                    raw_text = content.decode("utf-8", errors="replace")
-                current["extracted_text"], current["is_truncated"] = _truncate_extracted_text(raw_text)
-            except (OSError, ValueError):
-                pass
+        try:
+            path = safe_user_path(user_id, "workspace", str(current["relative_path"]))
+            content = path.read_bytes()
+            kind, extracted_text, is_truncated = _classify_attachment(
+                str(current["filename"]),
+                str(current.get("extension") or ""),
+                content,
+                str(current.get("content_type") or ""),
+            )
+            current["kind"] = kind
+            current["extracted_text"] = extracted_text
+            current["is_truncated"] = is_truncated
+        except OSError:
+            pass
         current_attachments.append(current)
 
-    text_block = _text_attachment_block(current_attachments)
+    text_block = _attachment_context_block(current_attachments)
     image_attachments = [item for item in current_attachments if item.get("kind") == "image"]
     combined_text = base_text + text_block
     if not image_attachments:
