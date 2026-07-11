@@ -1,14 +1,20 @@
 """Modelos Pydantic para a API."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Optional, Any, Literal
+
+
+ResponseMode = Literal["normal", "thinking", "live"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = "default"
     use_rag: bool = False
-    use_thinking: bool = True
+    use_thinking: Optional[bool] = None
+    response_mode: Optional[ResponseMode] = None
+    reasoning_effort: Optional[ReasoningEffort] = None
 
 
 class ChatResponse(BaseModel):
@@ -29,7 +35,9 @@ class ChatStreamRequest(BaseModel):
     message: str
     session_id: Optional[str] = "default"
     use_rag: bool = False
-    use_thinking: bool = True
+    use_thinking: Optional[bool] = None
+    response_mode: Optional[ResponseMode] = None
+    reasoning_effort: Optional[ReasoningEffort] = None
 
 
 class IngestRequest(BaseModel):

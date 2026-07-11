@@ -303,7 +303,44 @@ def _extract_response_output_text(response: dict) -> str:
     return "".join(texts)
 
 
-async def codex_responses_stream(
+def _extract_response_reasoning_summary(response: dict) -> str:
+    """Extract only provider-authored reasoning summaries from a response."""
+    texts: list[str] = []
+    for item in response.get("output", []):
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        for part in item.get("summary", []):
+            if isinstance(part, dict) and part.get("type") == "summary_text":
+                texts.append(str(part.get("text") or ""))
+    return "".join(texts)
+
+
+def parse_codex_sse_event(event: dict) -> list[tuple[str, str]]:
+    """Map explicit Responses events without treating tool arguments as text."""
+    event_type = str(event.get("type") or "")
+    delta = event.get("delta")
+    text = delta if isinstance(delta, str) else ""
+
+    if event_type == "response.output_text.delta" and text:
+        return [("content", text)]
+    if event_type == "response.refusal.delta" and text:
+        return [("content", text)]
+    if event_type in {
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+    } and text:
+        return [("reasoning", text)]
+    if event_type in {"error", "response.failed"}:
+        error = event.get("error") or event.get("response", {}).get("error") or event
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("code") or "Falha no stream do Codex")
+        else:
+            message = str(error)
+        return [("error", message)]
+    return []
+
+
+async def _legacy_codex_responses_stream(
     access_token: str,
     account_id: str,
     model: str,
@@ -382,7 +419,7 @@ async def codex_responses_stream(
         yield f"ERRO: {str(e)}"
 
 
-async def chat_completion_stream(
+async def _legacy_chat_completion_stream(
     access_token: str,
     account_id: str,
     model: str,
@@ -398,7 +435,7 @@ async def chat_completion_stream(
     """
     # Primeiro tenta a nova API Responses
     if model and messages:
-        generator = codex_responses_stream(
+        generator = _legacy_codex_responses_stream(
             access_token=access_token,
             account_id=account_id,
             model=model,
@@ -447,6 +484,7 @@ async def chat_completion_stream(
                     yield f"ERRO: HTTP {resp.status_code}"
                     return
 
+                previous_content = ""
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
                         data_str = line[6:]
@@ -456,11 +494,198 @@ async def chat_completion_stream(
                             data = json.loads(data_str)
                             content = data.get("message", {}).get("content", {}).get("parts", [""])[0]
                             if content:
-                                yield content
+                                text = str(content)
+                                delta = text[len(previous_content):] if text.startswith(previous_content) else text
+                                previous_content = text
+                                if delta:
+                                    yield delta
                         except json.JSONDecodeError:
                             continue
     except Exception as e:
         yield f"ERRO: {str(e)}"
+
+
+async def codex_responses_stream(
+    access_token: str,
+    account_id: str,
+    model: str,
+    input_messages: list[dict],
+    instructions: str = "",
+    reasoning_effort: str = "medium",
+    reasoning_summary: str = "auto",
+) -> AsyncGenerator[tuple[str, str], None]:
+    """Yield typed reasoning and content deltas from the Codex Responses SSE."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "User-Agent": "Mozilla/5.0 (compatible; CodexChat/1.0)",
+    }
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+
+    reasoning = {"effort": reasoning_effort}
+    if reasoning_summary in {"auto", "concise", "detailed"}:
+        reasoning["summary"] = reasoning_summary
+    body = {
+        "model": model,
+        "input": input_messages,
+        "store": False,
+        "stream": True,
+        "reasoning": reasoning,
+        "instructions": instructions or DEFAULT_INSTRUCTIONS,
+    }
+
+    try:
+        timeout = httpx.Timeout(120.0, connect=15.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # The private Codex endpoint can lag behind the public Responses schema.
+            # Retry once without summary instead of dropping the response.
+            for include_summary in (True, False):
+                request_body = body
+                if not include_summary and "summary" in reasoning:
+                    request_body = {**body, "reasoning": {"effort": reasoning_effort}}
+                async with client.stream(
+                    "POST",
+                    CODEX_RESPONSES_URL,
+                    json=request_body,
+                    headers=headers,
+                ) as response:
+                    if response.status_code == 400 and include_summary and "summary" in reasoning:
+                        await response.aread()
+                        continue
+                    if response.status_code != 200:
+                        detail = (await response.aread()).decode("utf-8", errors="replace")[:300]
+                        yield ("error", f"HTTP {response.status_code}: {detail}")
+                        return
+
+                    content_seen = False
+                    reasoning_seen = False
+                    reasoning_item_seen = False
+                    reasoning_started_emitted = False
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            event = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+
+                        item = event.get("item")
+                        if (
+                            event.get("type") == "response.output_item.added"
+                            and isinstance(item, dict)
+                            and item.get("type") == "reasoning"
+                        ):
+                            reasoning_item_seen = True
+                            if not reasoning_started_emitted:
+                                labels = {
+                                    "low": "Leve",
+                                    "medium": "Medio",
+                                    "high": "Alto",
+                                    "xhigh": "Extra alto",
+                                }
+                                label = labels.get(reasoning_effort, reasoning_effort)
+                                yield (
+                                    "reasoning",
+                                    f"Codex iniciou raciocinio interno. Esforco solicitado: {label}.\n\n",
+                                )
+                                reasoning_started_emitted = True
+
+                        for typ, text in parse_codex_sse_event(event):
+                            if typ == "content":
+                                content_seen = True
+                            elif typ == "reasoning":
+                                reasoning_seen = True
+                            yield (typ, text)
+
+                        if event.get("type") == "response.completed":
+                            completed = event.get("response") or {}
+                            if not reasoning_seen:
+                                summary = _extract_response_reasoning_summary(completed)
+                                if summary:
+                                    reasoning_seen = True
+                                    yield ("reasoning", summary)
+                            if not content_seen:
+                                final_text = _extract_response_output_text(completed)
+                                if final_text:
+                                    content_seen = True
+                                    yield ("content", final_text)
+                    if reasoning_item_seen and not reasoning_seen:
+                        yield (
+                            "reasoning",
+                            "O provider confirmou o raciocinio, mas nao disponibilizou "
+                            "um resumo textual para este modelo.",
+                        )
+                    if not content_seen:
+                        yield ("error", "Codex encerrou o stream sem resposta de texto")
+                    return
+    except Exception as exc:
+        yield ("error", str(exc))
+
+
+async def chat_completion_stream(
+    access_token: str,
+    account_id: str,
+    model: str,
+    messages: list[dict],
+    max_tokens: int = 4096,
+    instructions: str = "",
+    reasoning_effort: str = "medium",
+    reasoning_summary: str = "auto",
+    typed_sse: bool = True,
+) -> AsyncGenerator[tuple[str, str], None]:
+    """Use typed SSE when enabled and retain the original flow as rollback."""
+    if not typed_sse:
+        async for chunk in _legacy_chat_completion_stream(
+            access_token,
+            account_id,
+            model,
+            messages,
+            max_tokens,
+            instructions,
+            reasoning_effort,
+        ):
+            if chunk.startswith("ERRO:"):
+                yield ("error", chunk[5:].strip())
+            else:
+                yield ("content", chunk)
+        return
+
+    first = True
+    async for typ, text in codex_responses_stream(
+        access_token=access_token,
+        account_id=account_id,
+        model=model,
+        input_messages=messages,
+        instructions=instructions,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+    ):
+        if first and typ == "error" and text.startswith("HTTP"):
+            break
+        first = False
+        yield (typ, text)
+    else:
+        return
+
+    # Preserve the old endpoint fallback if Responses is unavailable.
+    async for chunk in _legacy_chat_completion_stream(
+        access_token,
+        account_id,
+        model,
+        messages,
+        max_tokens,
+        instructions,
+        reasoning_effort,
+    ):
+        if chunk.startswith("ERRO:"):
+            yield ("error", chunk[5:].strip())
+            continue
+        yield ("content", chunk)
 
 
 async def check_account_valid(access_token: str, account_id: str) -> dict:

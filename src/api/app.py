@@ -68,6 +68,7 @@ async def websocket_chat(websocket: WebSocket):
     from src.db.repository import ConversationRepo, SkillRepo, UserPreferenceRepo
     from src.db.models import init_db
     from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, LATENCY_HISTOGRAM
+    from src.core.response_modes import normalize_reasoning_effort, normalize_response_mode, response_mode_status
 
     async def _add_msg(session_id: str, role: str, content: str, user_id: int | None = None, **metadata):
         loop = asyncio.get_event_loop()
@@ -138,7 +139,15 @@ async def websocket_chat(websocket: WebSocket):
                 session_id = _scoped_session_id(user.id, data.get("session_id", "default"))
                 message = data.get("message", "").strip()
                 use_rag = data.get("use_rag", True)
-                use_thinking = data.get("use_thinking", True)
+                response_mode = normalize_response_mode(
+                    data.get("response_mode"),
+                    legacy_use_thinking=data.get("use_thinking"),
+                    default=settings.codex_response_mode_default,
+                )
+                reasoning_effort = normalize_reasoning_effort(
+                    data.get("reasoning_effort"),
+                    mode=response_mode,
+                )
 
                 if not message:
                     await websocket.send_json({"type": "error", "text": "Mensagem vazia"})
@@ -169,7 +178,14 @@ async def websocket_chat(websocket: WebSocket):
                     use_rag = True
 
                 # Start
-                await websocket.send_json({"type": "start", "route": route, "session_id": session_id, **model_meta})
+                await websocket.send_json({
+                    "type": "start",
+                    "route": route,
+                    "session_id": session_id,
+                    "response_mode": response_mode,
+                    "reasoning_effort": reasoning_effort,
+                    **model_meta,
+                })
                 MESSAGES_TOTAL.labels(role="user").inc()
                 memory = get_session(session_id)
 
@@ -229,23 +245,30 @@ async def websocket_chat(websocket: WebSocket):
                 memory.update_system_prompt(prompt_context)
                 await websocket.send_json({
                     "type": "status",
-                    "text": "Modelo pensando..." if use_thinking else "Gerando resposta...",
+                    "text": response_mode_status(response_mode),
                 })
 
                 # Streaming LLM
-                engine = ChatEngine(memory, provider_config=provider_config)
+                engine = ChatEngine(
+                    memory,
+                    provider_config=provider_config,
+                    response_mode=response_mode,
+                    reasoning_effort=reasoning_effort,
+                )
                 full_response = ""
                 full_reasoning = ""
                 has_reasoning = False
-                t_start = time.time()
+                t_start = time.perf_counter()
+                first_output_at = None
 
                 try:
                     async for typ, text in engine.chat_stream(message):
+                        if first_output_at is None:
+                            first_output_at = time.perf_counter()
                         if typ == "reasoning":
-                            if use_thinking:
-                                has_reasoning = True
-                                full_reasoning += text
-                                await websocket.send_json({"type": "reasoning", "text": text})
+                            has_reasoning = True
+                            full_reasoning += text
+                            await websocket.send_json({"type": "reasoning", "text": text})
                         else:
                             full_response += text
                             await websocket.send_json({"type": "token", "text": text})
@@ -267,18 +290,20 @@ async def websocket_chat(websocket: WebSocket):
                     **model_meta,
                 )
 
-                total_time = time.time() - t_start
+                total_time = time.perf_counter() - t_start
                 LATENCY_HISTOGRAM.labels(route=route).observe(total_time)
 
                 await websocket.send_json({
                     "type": "done",
                     "message_id": ai_msg.id,
                     "has_reasoning": has_reasoning,
+                    "response_mode": response_mode,
+                    "reasoning_effort": reasoning_effort,
                     **model_meta,
                     "metrics": {
                         "total_s": round(total_time, 2),
                         "route": route,
-                        "ttft_s": round(total_time * 0.3, 2),  # estimativa
+                        "ttft_s": round((first_output_at or time.perf_counter()) - t_start, 3),
                     },
                 })
 

@@ -123,6 +123,10 @@ class Settings(BaseSettings):
     inworld_tts_audio_cache_seconds: int = 300
     inworld_tts_audio_cache_max_items: int = 256
 
+    # Codex SSE v2 keeps the current parser available as an instant rollback.
+    codex_sse_enabled: bool = True
+    codex_response_mode_default: Literal["normal", "thinking", "live"] = "normal"
+
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"
     redis_port: int = 6379

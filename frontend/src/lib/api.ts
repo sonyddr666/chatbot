@@ -33,6 +33,8 @@ export interface SkillActivity {
   source_count: number
   sources: SkillSource[]
 }
+export type ResponseMode = 'normal' | 'thinking' | 'live'
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; content: string; timestamp: Date
   messageId?: number; feedbackScore?: number | null; tokens?: number
@@ -288,6 +290,8 @@ export interface StreamChunk {
   hasReasoning?: boolean
   route?: 'fast' | 'full'
   sessionId?: string
+  responseMode?: ResponseMode
+  reasoningEffort?: ReasoningEffort
   providerId?: string
   providerName?: string
   modelId?: string
@@ -412,12 +416,19 @@ export const api = {
     message: string,
     sessionId = 'default',
     useRag = false,
-    useThinking = true,
+    responseMode: ResponseMode = 'normal',
+    reasoningEffort: ReasoningEffort = 'low',
     signal?: AbortSignal,
   ): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat/stream`, {
       method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag, use_thinking: useThinking }),
+      body: JSON.stringify({
+        message,
+        session_id: sessionId,
+        use_rag: useRag,
+        response_mode: responseMode,
+        reasoning_effort: reasoningEffort,
+      }),
       signal,
     })
     if (!res.ok) throw new Error('Falha no streaming')
@@ -486,10 +497,13 @@ export const api = {
                 type: 'done',
                 messageId: p.message_id,
                 hasReasoning: p.has_reasoning,
+                responseMode: p.response_mode,
+                reasoningEffort: p.reasoning_effort,
                 providerId: p.provider_id,
                 providerName: p.provider_name,
                 modelId: p.model_id,
                 modelName: p.model_name,
+                metrics: p.metrics,
               }
             } catch {
               yield { type: 'done' }
@@ -504,6 +518,8 @@ export const api = {
                 type: 'start',
                 sessionId: p.session_id,
                 route: p.route,
+                responseMode: p.response_mode,
+                reasoningEffort: p.reasoning_effort,
                 providerId: p.provider_id,
                 providerName: p.provider_name,
                 modelId: p.model_id,

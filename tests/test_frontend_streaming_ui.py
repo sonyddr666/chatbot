@@ -6,12 +6,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendStreamingUiTest(unittest.TestCase):
-    def test_http_stream_sends_thinking_preference_and_displays_status(self):
+    def test_http_stream_sends_response_mode_and_displays_status(self):
         api = (ROOT / "frontend/src/lib/api.ts").read_text(encoding="utf-8")
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
         message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
 
-        self.assertIn("use_thinking: useThinking", api)
+        self.assertIn("response_mode: responseMode", api)
+        self.assertIn("'normal' | 'thinking' | 'live'", api)
         self.assertIn("streamStatus: chunk.text || 'Processando...'", store)
         self.assertIn("status || 'Aguardando o primeiro token...'", message)
 

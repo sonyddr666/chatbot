@@ -80,6 +80,30 @@ Na duvida escolha chat. Retorne somente JSON estrito, sem markdown:
     return [SystemMessage(content=system), HumanMessage(content=human)]
 
 
+def workspace_request_candidate(message: str) -> bool:
+    """Avoid an extra LLM call when the message cannot be a Workspace action."""
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    if "@workspace" in text or "workspace" in text:
+        return True
+
+    action = re.search(
+        r"\b(cri(?:a|ar|e)|salv(?:a|ar|e)|edit(?:a|ar|e)|mov(?:a|er|e)|"
+        r"renome(?:ia|ar|ie)|organiz(?:a|ar|e)|apag(?:a|ar|ue)|exclu(?:i|ir|a)|"
+        r"escrev(?:a|er|e)|atualiz(?:a|ar|e))\b",
+        text,
+    )
+    if not action:
+        return False
+    target = re.search(
+        r"\b(arquivo|documento|doc|pasta|diretorio|diretório|markdown|txt|json|csv|pdf|"
+        r"readme|\.md|\.txt|\.json|\.csv|ele|ela|isso)\b",
+        text,
+    )
+    return bool(target)
+
+
 async def model_requests_workspace(
     user_id: int,
     message: str,
@@ -87,6 +111,8 @@ async def model_requests_workspace(
     session_id: str | None = None,
 ) -> bool:
     """Route with semantic model judgment; every failure safely becomes normal chat."""
+    if not workspace_request_candidate(message):
+        return False
     try:
         raw = await asyncio.wait_for(
             generate(

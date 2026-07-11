@@ -4,6 +4,7 @@ import os
 import json
 import hashlib
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,6 +30,7 @@ from src.core.metrics import MESSAGES_TOTAL, ERRORS_TOTAL, DOCUMENTS_INGESTED, A
 from src.core.cache import cache_llm_response, get_cached_llm_response
 from src.core.classifier import classify_route
 from src.core.llm import get_llm
+from src.core.response_modes import normalize_reasoning_effort, normalize_response_mode, response_mode_status
 from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
 from src.core.workspace_agent import create_workspace_plan, model_requests_workspace, workspace_plan_message, workspace_plan_status_context
 from src.core.preference_suggestions import create_suggestion_from_message
@@ -1102,9 +1104,19 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
 
     provider_config = get_active_config_for_user(user.id)
     model_meta = metadata_from_config(provider_config)
-    engine = ChatEngine(memory, provider_config=provider_config)
+    response_mode = normalize_response_mode(
+        body.response_mode,
+        legacy_use_thinking=body.use_thinking,
+        default=settings.codex_response_mode_default,
+    )
+    reasoning_effort = normalize_reasoning_effort(body.reasoning_effort, mode=response_mode)
+    engine = ChatEngine(
+        memory,
+        provider_config=provider_config,
+        response_mode=response_mode,
+        reasoning_effort=reasoning_effort,
+    )
     route = classify_route(body.message)
-    use_thinking = body.use_thinking
     MESSAGES_TOTAL.labels(role="user").inc()
 
     try:
@@ -1112,8 +1124,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
         reasoning_parts: list[str] = []
         async for typ, text in engine.chat_stream(body.message):
             if typ == "reasoning":
-                if body.use_thinking:
-                    reasoning_parts.append(text)
+                reasoning_parts.append(text)
             else:
                 response_parts.append(text)
         response = "".join(response_parts)
@@ -1161,6 +1172,13 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     session_id = _scoped_session_id(user.id, body.session_id)
     memory = get_session(session_id)
     provider_config = get_active_config_for_user(user.id)
+    route = classify_route(body.message)
+    response_mode = normalize_response_mode(
+        body.response_mode,
+        legacy_use_thinking=body.use_thinking,
+        default=settings.codex_response_mode_default,
+    )
+    reasoning_effort = normalize_reasoning_effort(body.reasoning_effort, mode=response_mode)
     workspace_request = await model_requests_workspace(
         user.id,
         body.message,
@@ -1183,7 +1201,12 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         rag_task = None
 
     model_meta = metadata_from_config(provider_config)
-    engine = ChatEngine(memory, provider_config=provider_config)
+    engine = ChatEngine(
+        memory,
+        provider_config=provider_config,
+        response_mode=response_mode,
+        reasoning_effort=reasoning_effort,
+    )
 
     async def event_generator():
         nonlocal rag_context
@@ -1191,11 +1214,15 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         full_reasoning = ""
         MESSAGES_TOTAL.labels(role="user").inc()
         has_reasoning = False
+        stream_started = time.perf_counter()
+        first_output_at: float | None = None
 
         # Sinaliza início imediato da conexão
         yield {"event": "start", "data": json.dumps({
             "session_id": body.session_id,
             "route": route,
+            "response_mode": response_mode,
+            "reasoning_effort": reasoning_effort,
             **model_meta,
         })}
 
@@ -1249,17 +1276,18 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
         memory.update_system_prompt(prompt_context)
         yield {
             "event": "status",
-            "data": "Modelo pensando..." if use_thinking else "Gerando resposta...",
+            "data": response_mode_status(response_mode),
         }
 
         # Inicia o streaming do LLM
         try:
             async for typ, text in engine.chat_stream(body.message):
+                if first_output_at is None:
+                    first_output_at = time.perf_counter()
                 if typ == "reasoning":
-                    if use_thinking:
-                        has_reasoning = True
-                        full_reasoning += text
-                        yield {"event": "reasoning", "data": text}
+                    has_reasoning = True
+                    full_reasoning += text
+                    yield {"event": "reasoning", "data": text}
                 else:
                     full_response += text
                     yield {"event": "token", "data": text}
@@ -1281,7 +1309,14 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             yield {"event": "done", "data": json.dumps({
                 "message_id": ai_msg.id,
                 "has_reasoning": has_reasoning,
+                "response_mode": response_mode,
+                "reasoning_effort": reasoning_effort,
                 **model_meta,
+                "metrics": {
+                    "ttft_s": round((first_output_at or time.perf_counter()) - stream_started, 3),
+                    "total_s": round(time.perf_counter() - stream_started, 3),
+                    "route": route,
+                },
             })}
         except Exception as e:
             ERRORS_TOTAL.labels(type="llm").inc()

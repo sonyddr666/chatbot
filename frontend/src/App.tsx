@@ -15,7 +15,7 @@ import { DocumentsPanel } from './components/DocumentsPanel'
 import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { useChatStore } from './hooks/useChatStore'
-import { api, getAuthToken, setAuthToken, type ChatMessage, type StreamChunk, type UserInfo } from './lib/api'
+import { api, getAuthToken, setAuthToken, type ChatMessage, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useLiveVoice } from './voice/useLiveVoice'
 
@@ -24,7 +24,7 @@ export default function App() {
     messages, isLoading, error, route, streamStatus,
     sendMessage, regenerate, stopGeneration, loadConfig, loadProfiles,
     toggleSidebar, setError, sessionId,
-    useThinking, useRag,
+    responseMode, setResponseMode, reasoningEffort, setReasoningEffort, useRag,
     setWsConnected, lastMetrics,
   } = useChatStore()
 
@@ -40,6 +40,7 @@ export default function App() {
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const autoScrollRef = useRef(true)
+  const liveEnabledRef = useRef(false)
 
   const handleStreamChunk = useCallback((chunk: StreamChunk) => {
     if (chunk.type === 'start') {
@@ -231,6 +232,7 @@ export default function App() {
   }, [user])
 
   const handleSend = useCallback((content: string) => {
+    const effectiveMode: ResponseMode = liveEnabledRef.current ? 'live' : responseMode
     if (wsConnected) {
       useChatStore.setState({ isLoading: true, error: null, streamStatus: 'Preparando resposta...' })
       const userMsg: ChatMessage = {
@@ -247,12 +249,12 @@ export default function App() {
         reasoning: '',
       }
       useChatStore.setState(state => ({ messages: [...state.messages, userMsg, assistantMsg] }))
-      wsSend(content, sessionId, useRag, useThinking)
+      wsSend(content, sessionId, useRag, effectiveMode, reasoningEffort)
       return
     }
 
-    sendMessage(content)
-  }, [sendMessage, sessionId, useRag, useThinking, wsConnected, wsSend])
+    sendMessage(content, effectiveMode, reasoningEffort)
+  }, [reasoningEffort, responseMode, sendMessage, sessionId, useRag, wsConnected, wsSend])
 
   const handleStop = useCallback(() => {
     stopGeneration()
@@ -268,6 +270,7 @@ export default function App() {
     onSend: handleSend,
     onInterruptGeneration: handleStop,
   })
+  liveEnabledRef.current = liveVoice.enabled
 
   const isLastAssistant = messages.length > 0 && messages[messages.length - 1]?.role === 'assistant'
 
@@ -363,6 +366,31 @@ export default function App() {
               )}
             </span>
             <ModelSelector />
+            <select
+              value={liveVoice.enabled ? 'live' : responseMode}
+              onChange={event => setResponseMode(event.target.value as ResponseMode)}
+              disabled={liveVoice.enabled}
+              className="hidden sm:block rounded-lg border px-2 py-1.5 text-xs font-semibold outline-none disabled:opacity-70"
+              style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+              title={liveVoice.enabled ? 'O modo Live esta ativo enquanto o microfone estiver ligado' : 'Modo de resposta'}
+            >
+              <option value="normal">Normal</option>
+              <option value="thinking">Pensando</option>
+              <option value="live">Live</option>
+            </select>
+            <select
+              value={reasoningEffort}
+              onChange={event => setReasoningEffort(event.target.value as ReasoningEffort)}
+              className="hidden md:block rounded-lg border px-2 py-1.5 text-xs font-semibold outline-none"
+              style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+              title="Esforco de raciocinio enviado ao modelo"
+            >
+              <option value="low">Leve</option>
+              <option value="medium">Medio</option>
+              <option value="high">Alto</option>
+              <option value="xhigh">Extra alto</option>
+              <option value="max">Maximo</option>
+            </select>
             <LiveVoiceButton controller={liveVoice} />
             {user.is_admin && (
               <button

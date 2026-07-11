@@ -17,6 +17,12 @@ from src.config import settings
 from src.core.provider_manager import get_active_config
 from src.core.account_pool import get_best_account, fetch_codex_quota
 from src.core.codex_client import chat_completion_stream
+from src.core.response_modes import (
+    CODEX_MODE_PROFILES,
+    codex_wire_reasoning_effort,
+    normalize_reasoning_effort,
+    normalize_response_mode,
+)
 
 
 def _is_codex_provider(provider_id: str) -> bool:
@@ -242,7 +248,8 @@ async def generate_codex_stream(
     messages: list[BaseMessage],
     model: str = "gpt-4o",
     instructions: str = "",
-    reasoning_effort: str = "medium",
+    response_mode: str = "normal",
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[Tuple[str, str], None]:
     """Gera resposta em streaming usando Codex ChatGPT (nova API Responses).
     
@@ -272,24 +279,28 @@ async def generate_codex_stream(
     # Converte mensagens pro formato Codex (sem o system message)
     codex_messages = _convert_messages_to_codex(user_msgs)
     final_instructions = instructions or system_msg
+    mode = normalize_response_mode(response_mode, default=settings.codex_response_mode_default)
+    profile = CODEX_MODE_PROFILES[mode]
+    selected_effort = normalize_reasoning_effort(reasoning_effort, mode=mode)
 
-    async for chunk in chat_completion_stream(
+    async for typ, text in chat_completion_stream(
         access_token=access_token,
         account_id=account_id,
         model=model,
         messages=codex_messages,
         instructions=final_instructions,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=codex_wire_reasoning_effort(selected_effort),
+        reasoning_summary=str(profile["reasoning_summary"]),
+        typed_sse=settings.codex_sse_enabled,
     ):
-        if chunk.startswith("ERRO:"):
-            yield ("error", chunk)
-        else:
-            yield ("content", chunk)
+        yield (typ, text)
 
 
 async def generate_stream(
     messages: list[BaseMessage],
     provider_config: dict | None = None,
+    response_mode: str = "normal",
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[Tuple[str, str], None]:
     """Gera resposta em streaming, emitindo tuplas (tipo, texto).
 
@@ -310,7 +321,8 @@ async def generate_stream(
         async for chunk in generate_codex_stream(
             messages,
             model=model_id,
-            reasoning_effort="high" if "codex" in model_id.lower() else "medium",
+            response_mode=response_mode,
+            reasoning_effort=reasoning_effort,
         ):
             yield chunk
         return

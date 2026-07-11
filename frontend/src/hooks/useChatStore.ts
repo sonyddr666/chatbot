@@ -1,8 +1,18 @@
 import { create } from 'zustand'
-import type { ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats } from '../lib/api'
+import type { ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats, ReasoningEffort, ResponseMode } from '../lib/api'
 import { api, parseApiTimestamp } from '../lib/api'
 
 let activeStreamController: AbortController | null = null
+
+function loadResponseMode(): ResponseMode {
+  const saved = localStorage.getItem('chatbot_response_mode')
+  return saved === 'thinking' || saved === 'live' ? saved : 'normal'
+}
+
+function loadReasoningEffort(): ReasoningEffort {
+  const saved = localStorage.getItem('chatbot_reasoning_effort')
+  return saved === 'medium' || saved === 'high' || saved === 'xhigh' || saved === 'max' ? saved : 'low'
+}
 
 // ─── Tipos locais ───
 export interface ChatMetrics {
@@ -33,7 +43,8 @@ interface ChatState {
   selectedProfile: string
 
   // Toggles
-  useThinking: boolean
+  responseMode: ResponseMode
+  reasoningEffort: ReasoningEffort
   useRag: boolean
 
   // WebSocket
@@ -47,7 +58,11 @@ interface ChatState {
   stats: Stats | null
 
   // Actions
-  sendMessage: (content: string) => Promise<void>
+  sendMessage: (
+    content: string,
+    responseModeOverride?: ResponseMode,
+    reasoningEffortOverride?: ReasoningEffort,
+  ) => Promise<void>
   regenerate: () => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
@@ -60,7 +75,8 @@ interface ChatState {
   toggleSidebar: () => void
   setError: (err: string | null) => void
   setSelectedProfile: (id: string) => void
-  setUseThinking: (v: boolean) => void
+  setResponseMode: (mode: ResponseMode) => void
+  setReasoningEffort: (effort: ReasoningEffort) => void
   setUseRag: (v: boolean) => void
   setWsConnected: (v: boolean) => void
   setWsReconnecting: (v: boolean) => void
@@ -98,7 +114,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   config: null,
   profiles: [],
   selectedProfile: 'zen-free',
-  useThinking: true,
+  responseMode: loadResponseMode(),
+  reasoningEffort: loadReasoningEffort(),
   useRag: true,
   wsConnected: false,
   wsReconnecting: false,
@@ -107,11 +124,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setWsConnected: (v) => set({ wsConnected: v }),
   setWsReconnecting: (v) => set({ wsReconnecting: v }),
-  setUseThinking: (v) => set({ useThinking: v }),
+  setResponseMode: (mode) => {
+    localStorage.setItem('chatbot_response_mode', mode)
+    set({ responseMode: mode })
+  },
+  setReasoningEffort: (effort) => {
+    localStorage.setItem('chatbot_reasoning_effort', effort)
+    set({ reasoningEffort: effort })
+  },
   setUseRag: (v) => set({ useRag: v }),
 
-  sendMessage: async (content: string) => {
-    const { isLoading, sessionId, useThinking, useRag, wsConnected } = get()
+  sendMessage: async (content: string, responseModeOverride?: ResponseMode, reasoningEffortOverride?: ReasoningEffort) => {
+    const { isLoading, sessionId, responseMode, reasoningEffort, useRag, wsConnected } = get()
     if (!content.trim() || isLoading) return
 
     const userMsg = createUserMsg(content)
@@ -136,9 +160,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // O WebSocket vai chamar os handlers que atualizam o estado
         // Isso é gerenciado pelo App.tsx via WebSocketProvider
         // Por enquanto, fallback para HTTP SSE
-        await httpStream(content, sessionId, useRag, useThinking, controller.signal)
+        await httpStream(
+          content,
+          sessionId,
+          useRag,
+          responseModeOverride || responseMode,
+          reasoningEffortOverride || reasoningEffort,
+          controller.signal,
+        )
       } else {
-        await httpStream(content, sessionId, useRag, useThinking, controller.signal)
+        await httpStream(
+          content,
+          sessionId,
+          useRag,
+          responseModeOverride || responseMode,
+          reasoningEffortOverride || reasoningEffort,
+          controller.signal,
+        )
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -159,7 +197,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   regenerate: async () => {
-    const { messages, sessionId, isLoading } = get()
+    const { messages, sessionId, isLoading, responseMode, reasoningEffort } = get()
     if (messages.length < 2 || isLoading) return
 
     const lastUser = [...messages].reverse().find(m => m.role === 'user')
@@ -180,7 +218,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeStreamController?.abort()
       controller = new AbortController()
       activeStreamController = controller
-      await httpStream(lastUser.content, sessionId, false, true, controller.signal)
+      await httpStream(lastUser.content, sessionId, false, responseMode, reasoningEffort, controller.signal)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       set({ isLoading: false, error: 'Falha ao regenerar', streamStatus: null })
@@ -292,10 +330,11 @@ async function httpStream(
   content: string,
   sessionId: string,
   useRag = false,
-  useThinking = true,
+  responseMode: ResponseMode = 'normal',
+  reasoningEffort: ReasoningEffort = 'low',
   signal?: AbortSignal,
 ) {
-  for await (const chunk of api.stream(content, sessionId, useRag, useThinking, signal)) {
+  for await (const chunk of api.stream(content, sessionId, useRag, responseMode, reasoningEffort, signal)) {
     if (chunk.type === 'reasoning') {
       const s = useChatStore.getState()
       const msgs = [...s.messages]

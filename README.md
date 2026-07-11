@@ -1008,6 +1008,23 @@ Para Cloudflare Tunnel executado no host, o frontend tambem e publicado somente 
 loopback em `127.0.0.1:${FRONTEND_HOST_PORT:-3100}`. Configure a origem do tunnel como
 `http://127.0.0.1:3100`. Essa porta nao fica exposta na interface publica do servidor.
 
+## Modos de Resposta e Codex SSE
+
+O chat oferece tres modos selecionaveis na barra superior e nas configuracoes:
+
+- `Normal`: equilibrio entre latencia e qualidade, com resumo de raciocinio recolhivel quando o provider fornecer.
+- `Pensando`: solicita maior esforco e resumo detalhado de raciocinio ao Codex.
+- `Live`: prioriza primeiro token e alimenta o Inworld TTS enquanto o texto chega. Ao ligar o microfone Live, esse modo e usado automaticamente sem substituir a preferencia salva.
+
+O parser Codex separa explicitamente texto final, resumo de raciocinio e erros. Deltas de argumentos de ferramentas nao sao enviados para a resposta nem para o TTS. Configure no Coolify:
+
+```env
+CODEX_SSE_ENABLED=true
+CODEX_RESPONSE_MODE_DEFAULT=normal
+```
+
+Defina `CODEX_SSE_ENABLED=false` para voltar imediatamente ao parser legado. O raciocinio exibido e somente o resumo realmente enviado pelo provider; quando ele nao estiver disponivel, a interface mostra apenas o status de processamento.
+
 ## Banco de Dados
 
 Modelos principais:

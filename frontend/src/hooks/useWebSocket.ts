@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { getAuthToken, type StreamChunk } from '../lib/api'
+import { getAuthToken, type ReasoningEffort, type ResponseMode, type StreamChunk } from '../lib/api'
 
 type ChunkHandler = (chunk: StreamChunk) => void
 type StatusHandler = (status: string) => void
@@ -48,6 +48,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
               type: 'start',
               route: data.route,
               sessionId: data.session_id,
+              responseMode: data.response_mode,
+              reasoningEffort: data.reasoning_effort,
               providerId: data.provider_id,
               providerName: data.provider_name,
               modelId: data.model_id,
@@ -80,6 +82,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
               type: 'done',
               messageId: data.message_id,
               hasReasoning: data.has_reasoning,
+              responseMode: data.response_mode,
+              reasoningEffort: data.reasoning_effort,
               providerId: data.provider_id,
               providerName: data.provider_name,
               modelId: data.model_id,
@@ -153,13 +157,20 @@ export function useWebSocket(options: UseWebSocketOptions) {
   )
 
   const sendMessage = useCallback(
-    (message: string, sessionId: string, useRag = false, useThinking = true) => {
+    (
+      message: string,
+      sessionId: string,
+      useRag = false,
+      responseMode: ResponseMode = 'normal',
+      reasoningEffort: ReasoningEffort = 'low',
+    ) => {
       return send({
         type: 'chat',
         message,
         session_id: sessionId,
         use_rag: useRag,
-        use_thinking: useThinking,
+        response_mode: responseMode,
+        reasoning_effort: reasoningEffort,
       })
     },
     [send],

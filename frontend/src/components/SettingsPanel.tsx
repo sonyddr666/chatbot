@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu } from 'lucide-react'
+import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu, Radio, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { api, getAuthToken, type PreferenceSuggestionInfo } from '../lib/api'
+import { api, getAuthToken, type PreferenceSuggestionInfo, type ReasoningEffort } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -37,7 +37,7 @@ interface ProviderInfo {
 export function SettingsPanel({ open, onClose }: Props) {
   const {
     config, loadConfig,
-    useThinking, setUseThinking, useRag, setUseRag,
+    responseMode, setResponseMode, reasoningEffort, setReasoningEffort, useRag, setUseRag,
     lastMetrics, route, wsConnected,
   } = useChatStore()
 
@@ -61,9 +61,8 @@ export function SettingsPanel({ open, onClose }: Props) {
   useEffect(() => {
     if (config) {
       setUseRag(config.rag)
-      setUseThinking(true)
     }
-  }, [config, setUseRag, setUseThinking])
+  }, [config, setUseRag])
 
   useEffect(() => {
     if (open) loadConfig()
@@ -320,37 +319,57 @@ export function SettingsPanel({ open, onClose }: Props) {
               Otimização
             </label>
             <div className="space-y-2">
-              {/* Thinking toggle */}
-              <button
-                onClick={() => {
-                  setUseThinking(!useThinking)
-                  toast.success(`Modo raciocínio ${useThinking ? 'desligado' : 'ligado'}`)
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all"
-                style={{
-                  background: useThinking ? 'var(--accent-light)' : 'var(--bg-secondary)',
-                  border: `1px solid ${useThinking ? 'var(--accent)' : 'var(--border)'}`,
-                }}
-              >
-                <Brain size={18} style={{ color: useThinking ? 'var(--accent)' : 'var(--text-tertiary)' }} />
-                <div className="text-left flex-1">
-                  <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                    Raciocínio (Thinking)
-                  </p>
-                  <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    {useThinking ? 'Ligado — modelo pensa antes de responder' : 'Desligado — resposta mais rápida'}
-                  </p>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { id: 'normal', label: 'Normal', detail: 'Equilibrado', icon: MessageCircle },
+                  { id: 'thinking', label: 'Pensando', detail: 'Mais analise', icon: Brain },
+                  { id: 'live', label: 'Live', detail: 'Baixa latencia', icon: Radio },
+                ] as const).map(mode => {
+                  const Icon = mode.icon
+                  const selected = responseMode === mode.id
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => {
+                        setResponseMode(mode.id)
+                        toast.success(`Modo ${mode.label} selecionado`)
+                      }}
+                      className="rounded-xl border px-2 py-3 text-center transition-all"
+                      style={{
+                        background: selected ? 'var(--accent-light)' : 'var(--bg-secondary)',
+                        borderColor: selected ? 'var(--accent)' : 'var(--border)',
+                      }}
+                    >
+                      <Icon size={18} className="mx-auto mb-1.5" style={{ color: selected ? 'var(--accent)' : 'var(--text-tertiary)' }} />
+                      <span className="block text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{mode.label}</span>
+                      <span className="mt-0.5 block text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{mode.detail}</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="rounded-xl border p-3" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Esforco do modelo</p>
+                    <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>Mais esforco aumenta qualidade, latencia e consumo.</p>
+                  </div>
+                  <Brain size={18} style={{ color: 'var(--accent)' }} />
                 </div>
-                <div
-                  className="w-10 h-5 rounded-full transition-colors relative"
-                  style={{ background: useThinking ? 'var(--accent)' : 'var(--border)' }}
+                <select
+                  value={reasoningEffort}
+                  onChange={event => setReasoningEffort(event.target.value as ReasoningEffort)}
+                  className="w-full rounded-lg border px-3 py-2 text-sm font-semibold outline-none"
+                  style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                 >
-                  <div
-                    className="w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all shadow-sm"
-                    style={{ left: useThinking ? '22px' : '2px' }}
-                  />
-                </div>
-              </button>
+                  <option value="low">Leve</option>
+                  <option value="medium">Medio</option>
+                  <option value="high">Alto</option>
+                  <option value="xhigh">Extra alto</option>
+                  <option value="max">Maximo (usa o teto xhigh do Codex)</option>
+                </select>
+              </div>
 
               {/* RAG toggle */}
               <button
@@ -418,7 +437,8 @@ export function SettingsPanel({ open, onClose }: Props) {
             <p>⚡ Provider: {activeProvider?.name || config?.provider || '—'}</p>
             <p>🧠 Modelo: {activeModel?.name || config?.model || '—'}</p>
             <p>📦 Vector DB: ChromaDB</p>
-            <p>🧠 Thinking: {useThinking ? 'ON' : 'OFF'}</p>
+            <p>🧠 Modo: {responseMode}</p>
+            <p>⚙ Esforco: {reasoningEffort}</p>
             <p>📄 RAG: {useRag ? 'ON' : 'OFF'}</p>
           </div>
         </div>
