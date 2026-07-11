@@ -166,11 +166,20 @@ def _convert_messages_to_codex(messages: list[BaseMessage]) -> list[dict]:
         
         content = msg.content
         if isinstance(content, list):
-            # Multi-modal: extrai texto
-            texts = [p.get("text", "") for p in content if isinstance(p, dict)]
-            content = "\n".join(texts)
-        
-        result.append({"role": role, "content": str(content)})
+            codex_parts = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and part.get("text"):
+                    codex_parts.append({"type": "input_text", "text": str(part["text"])})
+                elif part.get("type") == "image_url":
+                    image_value = part.get("image_url")
+                    image_url = image_value.get("url") if isinstance(image_value, dict) else image_value
+                    if image_url:
+                        codex_parts.append({"type": "input_image", "image_url": str(image_url)})
+            content = codex_parts or [{"type": "input_text", "text": ""}]
+
+        result.append({"role": role, "content": content if isinstance(content, list) else str(content)})
     return result
 
 

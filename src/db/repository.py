@@ -24,6 +24,7 @@ from src.db.models import (
     Skill,
     UserSkill,
     SkillRun,
+    ChatAttachment,
     ChatJob,
     ChatJobEvent,
 )
@@ -601,6 +602,7 @@ class ConversationRepo:
                             "content": message.content,
                             "reasoning": message.reasoning or "",
                             "skill_activities_json": message.skill_activities_json or "[]",
+                            "attachments_json": message.attachments_json or "[]",
                             "created_at": utc_isoformat(message.created_at) if message.created_at else None,
                             "provider_name": message.provider_name or "",
                             "model_name": message.model_name or "",
@@ -774,6 +776,110 @@ class ConversationRepo:
             db.close()
 
 
+class ChatAttachmentRepo:
+    @staticmethod
+    def _public(attachment: ChatAttachment) -> dict:
+        return {
+            "id": attachment.id,
+            "filename": attachment.filename,
+            "path": attachment.relative_path,
+            "relative_path": attachment.relative_path,
+            "content_type": attachment.content_type,
+            "extension": attachment.extension,
+            "kind": attachment.kind,
+            "size": attachment.file_size,
+            "checksum": attachment.checksum,
+            "is_truncated": bool(attachment.is_truncated),
+            "status": attachment.status,
+            "created_at": utc_isoformat(attachment.created_at),
+        }
+
+    @staticmethod
+    def create_many(user_id: int, session_id: str, artifacts: list) -> list[dict]:
+        db = get_session_db()
+        try:
+            rows = [
+                ChatAttachment(
+                    id=artifact.id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    filename=artifact.filename,
+                    relative_path=artifact.relative_path,
+                    content_type=artifact.content_type,
+                    extension=artifact.extension,
+                    kind=artifact.kind,
+                    file_size=artifact.file_size,
+                    checksum=artifact.checksum,
+                    extracted_text=artifact.extracted_text,
+                    is_truncated=artifact.is_truncated,
+                    status="ready",
+                )
+                for artifact in artifacts
+            ]
+            db.add_all(rows)
+            db.commit()
+            return [ChatAttachmentRepo._public(row) for row in rows]
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
+    def get_owned(attachment_id: str, user_id: int) -> dict | None:
+        db = get_session_db()
+        try:
+            row = db.query(ChatAttachment).filter(
+                ChatAttachment.id == attachment_id,
+                ChatAttachment.user_id == user_id,
+            ).first()
+            return ChatAttachmentRepo._public(row) if row else None
+        finally:
+            db.close()
+
+    @staticmethod
+    def delete_pending(attachment_id: str, user_id: int) -> dict | None:
+        db = get_session_db()
+        try:
+            row = db.query(ChatAttachment).filter(
+                ChatAttachment.id == attachment_id,
+                ChatAttachment.user_id == user_id,
+                ChatAttachment.message_id.is_(None),
+            ).first()
+            if not row:
+                return None
+            payload = ChatAttachmentRepo._public(row)
+            db.delete(row)
+            db.commit()
+            return payload
+        finally:
+            db.close()
+
+    @staticmethod
+    def model_content_for_message(message_id: int, user_id: int, user_text: str):
+        from src.core.chat_attachments import build_model_user_content
+
+        db = get_session_db()
+        try:
+            rows = db.query(ChatAttachment).filter(
+                ChatAttachment.message_id == message_id,
+                ChatAttachment.user_id == user_id,
+                ChatAttachment.status == "ready",
+            ).order_by(ChatAttachment.created_at.asc(), ChatAttachment.id.asc()).all()
+            if not rows:
+                return user_text
+            attachments = [
+                {
+                    **ChatAttachmentRepo._public(row),
+                    "extracted_text": row.extracted_text or "",
+                }
+                for row in rows
+            ]
+            return build_model_user_content(user_id, user_text, attachments)
+        finally:
+            db.close()
+
+
 class ChatJobRepo:
     TERMINAL_STATUSES = {"completed", "interrupted", "failed", "cancelled"}
 
@@ -786,6 +892,7 @@ class ChatJobRepo:
         response_mode: str,
         reasoning_effort: str,
         use_rag: bool,
+        attachment_ids: list[str] | None = None,
     ) -> None:
         expected = (
             session_id,
@@ -793,6 +900,7 @@ class ChatJobRepo:
             response_mode,
             reasoning_effort,
             bool(use_rag),
+            tuple(attachment_ids or []),
         )
         actual = (
             snapshot.get("session_id"),
@@ -800,6 +908,7 @@ class ChatJobRepo:
             snapshot.get("response_mode"),
             snapshot.get("reasoning_effort"),
             bool(snapshot.get("use_rag")),
+            tuple(item.get("id") for item in snapshot.get("attachments") or []),
         )
         if actual != expected:
             raise ValueError("client_request_id ja foi usado por outro pedido")
@@ -815,9 +924,13 @@ class ChatJobRepo:
         reasoning_effort: str,
         use_rag: bool,
         client_request_id: str | None = None,
+        attachment_ids: list[str] | None = None,
     ) -> dict:
         db = get_session_db()
         try:
+            requested_attachment_ids = list(dict.fromkeys(attachment_ids or []))
+            if len(requested_attachment_ids) != len(attachment_ids or []):
+                raise ValueError("Anexo duplicado no mesmo pedido")
             if client_request_id:
                 existing = db.query(ChatJob).filter(
                     ChatJob.user_id == user_id,
@@ -832,8 +945,27 @@ class ChatJobRepo:
                         response_mode=response_mode,
                         reasoning_effort=reasoning_effort,
                         use_rag=use_rag,
+                        attachment_ids=requested_attachment_ids,
                     )
                     return snapshot
+
+            attachment_rows: list[ChatAttachment] = []
+            if requested_attachment_ids:
+                found = db.query(ChatAttachment).filter(
+                    ChatAttachment.id.in_(requested_attachment_ids),
+                    ChatAttachment.user_id == user_id,
+                ).all()
+                by_id = {row.id: row for row in found}
+                if len(by_id) != len(requested_attachment_ids):
+                    raise ValueError("Um ou mais anexos nao existem para este usuario")
+                attachment_rows = [by_id[attachment_id] for attachment_id in requested_attachment_ids]
+                for attachment in attachment_rows:
+                    if attachment.session_id != session_id:
+                        raise ValueError("Anexo pertence a outra conversa")
+                    if attachment.status != "ready":
+                        raise ValueError("Anexo ainda nao esta pronto")
+                    if attachment.message_id is not None:
+                        raise ValueError("Anexo ja foi enviado em outra mensagem")
 
             conv = db.query(Conversation).filter(
                 Conversation.session_id == session_id,
@@ -857,6 +989,10 @@ class ChatJobRepo:
                 user_id=user_id,
                 role="user",
                 content=message,
+                attachments_json=json.dumps(
+                    [ChatAttachmentRepo._public(row) for row in attachment_rows],
+                    ensure_ascii=False,
+                ),
                 status="completed",
             )
             assistant_message = Message(
@@ -875,6 +1011,10 @@ class ChatJobRepo:
             )
             db.add_all([user_message, assistant_message])
             db.flush()
+            for attachment in attachment_rows:
+                attachment.conversation_id = conv.id
+                attachment.message_id = user_message.id
+                attachment.attached_at = datetime.now(timezone.utc)
 
             job = ChatJob(
                 id=job_id,
@@ -896,7 +1036,8 @@ class ChatJobRepo:
             conv.messages_count = (conv.messages_count or 0) + 2
             conv.updated_at = datetime.now(timezone.utc)
             if (conv.messages_count <= 2):
-                conv.title = message[:60] + ("..." if len(message) > 60 else "")
+                title = message.strip() or ", ".join(row.filename for row in attachment_rows)
+                conv.title = title[:60] + ("..." if len(title) > 60 else "")
             db.commit()
             return ChatJobRepo.get(job_id, user_id) or {}
         except IntegrityError:
@@ -915,6 +1056,7 @@ class ChatJobRepo:
                         response_mode=response_mode,
                         reasoning_effort=reasoning_effort,
                         use_rag=use_rag,
+                        attachment_ids=requested_attachment_ids,
                     )
                     return snapshot
             raise
@@ -938,6 +1080,7 @@ class ChatJobRepo:
             "assistant_message_id": job.assistant_message_id,
             "session_id": conversation.session_id if conversation else "",
             "message": user_message.content if user_message else "",
+            "attachments": json.loads(user_message.attachments_json or "[]") if user_message else [],
             "provider_id": job.provider_id or "",
             "provider_name": job.provider_name or "",
             "model_id": job.model_id or "",

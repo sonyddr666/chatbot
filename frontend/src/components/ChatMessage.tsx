@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX } from 'lucide-react'
-import type { ChatMessage as ChatMessageType } from '../lib/api'
+import { Copy, Check, Download, FileText, Image as ImageIcon, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX } from 'lucide-react'
+import type { ChatAttachmentInfo, ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { ThinkingBlock } from './ThinkingBlock'
 import { WorkspacePlanCard } from './WorkspacePlanCard'
@@ -140,6 +140,69 @@ function ActionButton({
 }
 
 // ─── Componente principal ───
+function formatAttachmentSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachmentInfo[]; isUser: boolean }) {
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  const download = async (attachment: ChatAttachmentInfo) => {
+    setDownloading(attachment.id)
+    setDownloadError(null)
+    try {
+      const blob = await api.downloadChatAttachment(attachment.id)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = attachment.filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setDownloadError('O arquivo foi movido, apagado ou nao esta disponivel.')
+    } finally {
+      setDownloading(null)
+    }
+  }
+
+  return (
+    <div className="mb-2 grid gap-1.5">
+      {attachments.map(attachment => {
+        const Icon = attachment.kind === 'image' ? ImageIcon : FileText
+        return (
+          <button
+            key={attachment.id}
+            type="button"
+            onClick={() => void download(attachment)}
+            className="flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition-transform hover:-translate-y-0.5"
+            style={{
+              background: isUser ? 'rgba(255,255,255,0.12)' : 'var(--bg-tertiary)',
+              borderColor: isUser ? 'rgba(255,255,255,0.22)' : 'var(--border)',
+            }}
+            title={`Baixar ${attachment.filename}`}
+          >
+            <Icon size={17} className="shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-semibold">{attachment.filename}</span>
+              <span className="block truncate text-[10px] opacity-70">
+                {formatAttachmentSize(attachment.size)} · {attachment.relative_path}
+              </span>
+            </span>
+            <Download size={14} className={downloading === attachment.id ? 'animate-pulse' : ''} />
+          </button>
+        )
+      })}
+      <span className="text-[10px] font-medium opacity-70">Salvo no Workspace · direto ao modelo · fora do RAG</span>
+      {downloadError && <span className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>{downloadError}</span>}
+    </div>
+  )
+}
+
 export function ChatMessageBubble({ message, isLoading, status, onRegenerate, onSpeak, onStopSpeaking }: Props) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
@@ -188,8 +251,13 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
             color: isUser ? 'var(--user-text)' : 'var(--bot-text)',
           }}
         >
+          {!!message.attachments?.length && (
+            <MessageAttachments attachments={message.attachments} isUser={isUser} />
+          )}
           {isUser ? (
-            <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{message.content}</p>
+            message.content
+              ? <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{message.content}</p>
+              : null
           ) : (
             <>
               {message.jobId && message.jobStatus === 'completed' && !message.readAt && (

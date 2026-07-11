@@ -1,6 +1,6 @@
 """Gerenciamento de memória de curto prazo (histórico da conversa)."""
 
-from typing import Optional
+from typing import Any, Optional
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from src.core.prompts import build_system_prompt
@@ -14,7 +14,7 @@ class ConversationMemory:
         self.system_prompt = system_prompt or build_system_prompt()
         self.messages: list[BaseMessage] = [SystemMessage(content=self.system_prompt)]
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(self, content: str | list[dict[str, Any]]) -> None:
         self.messages.append(HumanMessage(content=content))
 
     def add_ai_message(self, content: str) -> None:
@@ -47,11 +47,15 @@ _sessions: dict[str, ConversationMemory] = {}
 def _load_history_from_db(session_id: str, memory: ConversationMemory) -> None:
     """Reidrata memória RAM com histórico persistido após restart do servidor."""
     try:
-        from src.db.repository import ConversationRepo
+        from src.db.repository import ChatAttachmentRepo, ConversationRepo
         history = ConversationRepo.get_history(session_id, limit=memory.max_turns * 2)
-        for msg in history:
+        attachment_window_start = max(0, len(history) - 6)
+        for index, msg in enumerate(history):
             if msg.role == "user":
-                memory.messages.append(HumanMessage(content=msg.content))
+                content = msg.content
+                if msg.user_id and index >= attachment_window_start and msg.attachments_json not in {None, "", "[]"}:
+                    content = ChatAttachmentRepo.model_content_for_message(msg.id, msg.user_id, msg.content)
+                memory.messages.append(HumanMessage(content=content))
             elif msg.role == "assistant":
                 memory.messages.append(AIMessage(content=msg.content))
     except Exception:

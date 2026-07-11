@@ -2,7 +2,7 @@
 Suporta streaming com separação de reasoning e content.
 """
 
-from typing import AsyncGenerator, Tuple
+from typing import Any, AsyncGenerator, Tuple
 
 from src.core.llm import generate_stream
 from src.core.memory import ConversationMemory
@@ -24,7 +24,7 @@ class ChatEngine:
         self.reasoning_effort = reasoning_effort
 
     async def chat_stream(
-        self, user_input: str
+        self, user_input: str | list[dict[str, Any]]
     ) -> AsyncGenerator[Tuple[str, str], None]:
         """Processa mensagem e retorna streaming com reasoning + content.
 
@@ -60,7 +60,7 @@ class ChatEngine:
         if full_content:
             self.memory.add_ai_message(full_content)
 
-    async def chat(self, user_input: str) -> str:
+    async def chat(self, user_input: str | list[dict[str, Any]]) -> str:
         """Processa uma mensagem e retorna a resposta completa."""
         full_content = ""
         async for typ, text in self.chat_stream(user_input):

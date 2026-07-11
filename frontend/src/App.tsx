@@ -25,7 +25,7 @@ export default function App() {
     sendMessage, regenerate, stopGeneration, loadConfig, loadProfiles,
     toggleSidebar, setError,
     responseMode, setResponseMode, reasoningEffort, setReasoningEffort,
-    setWsConnected, lastMetrics,
+    setWsConnected, lastMetrics, config,
   } = useChatStore()
 
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -230,9 +230,9 @@ export default function App() {
     setShowOnboarding(false)
   }, [user])
 
-  const handleSend = useCallback((content: string) => {
+  const handleSend = useCallback((content: string, files: File[] = []) => {
     const effectiveMode: ResponseMode = liveEnabledRef.current ? 'live' : responseMode
-    sendMessage(content, effectiveMode, reasoningEffort)
+    return sendMessage(content, effectiveMode, reasoningEffort, files)
   }, [reasoningEffort, responseMode, sendMessage])
 
   const handleStop = useCallback(() => {
@@ -515,7 +515,13 @@ export default function App() {
         </div>
 
         <LiveVoiceDock controller={liveVoice} />
-        <ChatInput onSend={handleSend} busy={isLoading} onStop={handleStop} />
+        <ChatInput
+          onSend={handleSend}
+          busy={isLoading}
+          onStop={handleStop}
+          maxUploadMb={config?.max_upload_mb || 10}
+          status={streamStatus}
+        />
       </div>
     </div>
   )

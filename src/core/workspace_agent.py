@@ -55,6 +55,13 @@ def _workspace_router_messages(
             content = str(item.content or "").strip().replace("\x00", "")
             if len(content) > 800:
                 content = content[:800] + " [truncado]"
+            try:
+                attachments = json.loads(item.attachments_json or "[]")
+            except (TypeError, json.JSONDecodeError):
+                attachments = []
+            if attachments:
+                paths = [str(attachment.get("relative_path") or "") for attachment in attachments]
+                content += "\nAnexos reais no Workspace: " + ", ".join(path for path in paths if path)
             recent_lines.append(f"{item.role}: {content}")
     recent_context = "\n".join(recent_lines) or "[sem mensagens anteriores]"
     latest_file = _latest_applied_workspace_file(user_id) or "[nenhum arquivo recente]"
@@ -260,6 +267,18 @@ def _conversation_export_markdown(
                     f"Modelo: {message.get('provider_name') or ''} / {message.get('model_name') or ''}"
                 )
             lines.extend(["", str(message.get("content") or ""), ""])
+            try:
+                attachments = json.loads(message.get("attachments_json") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                attachments = []
+            if attachments:
+                lines.extend(["#### Anexos do chat", ""])
+                for attachment in attachments:
+                    lines.append(
+                        f"- {attachment.get('filename') or 'arquivo'}: "
+                        f"`{attachment.get('relative_path') or attachment.get('path') or ''}`"
+                    )
+                lines.append("")
             reasoning = str(message.get("reasoning") or "").strip()
             if reasoning:
                 lines.extend(["#### Raciocinio salvo", "", reasoning, ""])

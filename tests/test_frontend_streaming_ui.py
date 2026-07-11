@@ -42,7 +42,26 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("busy={isLoading}", app)
         self.assertNotIn("disabled={busy}", chat_input)
         self.assertIn("Continue digitando", chat_input)
-        self.assertIn("disabled={busy || !input.trim()}", chat_input)
+        self.assertIn("value={input}", chat_input)
+        self.assertIn("if (!busy && !isSubmitting)", chat_input)
+
+    def test_sse_parser_preserves_model_spaces_and_multiline_data(self):
+        api = (ROOT / "frontend/src/lib/api.ts").read_text(encoding="utf-8")
+
+        self.assertIn("dataLines.join('\\n')", api)
+        self.assertIn("dataLines.push(line.slice(5).replace(/^ /, ''))", api)
+        self.assertIn("type: 'content', text: raw", api)
+        self.assertNotIn("const raw = line.slice(6).trim()", api)
+
+    def test_chat_input_supports_files_without_automatic_rag(self):
+        chat_input = (ROOT / "frontend/src/components/ChatInput.tsx").read_text(encoding="utf-8")
+        store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
+
+        self.assertIn("type=\"file\"", chat_input)
+        self.assertIn("window.addEventListener('drop'", chat_input)
+        self.assertIn("Workspace/chat/uploads", chat_input)
+        self.assertIn("api.uploadChatAttachments", store)
+        self.assertIn("attachments.map(attachment => attachment.id)", store)
 
     def test_saved_trace_is_restored_when_conversation_reopens(self):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")

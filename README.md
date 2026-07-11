@@ -19,6 +19,7 @@ O projeto hoje e uma base funcional de chatbot multiusuario. As funcionalidades 
 - RAG pessoal por usuario.
 - Upload de documentos separado do workspace.
 - Arquivos originais preservados em pasta propria.
+- Anexos no chat por botao ou drag-and-drop, salvos no Workspace e enviados diretamente ao LLM.
 - Parsing real de TXT, MD, JSON, CSV, PDF e DOCX.
 - Listagem e remocao de documentos RAG.
 - Limpeza de chunks vetoriais ao apagar documento.
@@ -150,6 +151,10 @@ data/
       profile/
         onboarding.md
       workspace/
+        chat/
+          uploads/
+            {attachment_id}/
+              arquivo.ext
       uploads/
         original/
           {upload_id}/
@@ -428,6 +433,30 @@ Formatos suportados:
 - `.csv`
 - `.pdf`
 - `.docx`
+
+### Anexos Diretos no Chat
+
+Os anexos da conversa sao independentes de Documents/RAG:
+
+- O usuario pode clicar no clipe ou arrastar arquivos para qualquer parte da tela.
+- Ate cinco arquivos podem ser enviados na mesma mensagem.
+- Cada original e salvo em `workspace/chat/uploads/{attachment_id}/{arquivo}` dentro do UserSpace autenticado.
+- O arquivo fica associado a mensagem e reaparece no historico depois de atualizar ou abrir em outro dispositivo.
+- Texto, codigo, PDF e DOCX sao extraidos e entregues diretamente ao contexto do LLM no turno.
+- Imagens sao enviadas como entrada multimodal; a leitura depende de o modelo ativo aceitar visao.
+- O caminho real do Workspace e informado ao planejador somente quando o usuario pede explicitamente uma operacao de arquivo.
+- Nenhum anexo do chat cria `knowledge_documents`, chunks, embeddings ou vetores automaticamente.
+- Para memoria vetorial duradoura, o usuario continua escolhendo separadamente o que deve entrar no RAG.
+
+Rotas:
+
+```txt
+POST   /api/v1/chat/attachments
+GET    /api/v1/chat/attachments/{attachment_id}/download
+DELETE /api/v1/chat/attachments/{attachment_id}
+```
+
+Formatos de texto incluem Markdown, formatos estruturados e linguagens comuns de programacao. Tambem sao aceitos `.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.webp` e `.gif`. O limite por arquivo usa `MAX_UPLOAD_SIZE_MB`.
 
 ### Workspace por Usuario
 
@@ -1040,6 +1069,8 @@ Antes do `POST`, o frontend salva no `localStorage` um pedido pendente com `clie
 
 Fechar o navegador encerra apenas o leitor SSE. O backend continua processando e persistindo `reasoning`, `text_delta`, skills e estado final. Ao trocar de conversa, eventos atrasados continuam vinculados ao `job_id` correto e nao escrevem na ultima bolha aberta. Se o servidor reiniciar, jobs ainda `queued` sao iniciados; jobs que ja estavam `running` ficam `interrupted` e preservam todo o texto gravado. O WebSocket antigo permanece temporariamente como fallback, mas nao e mais o dono das novas execucoes iniciadas pela interface.
 
+O parser SSE preserva espacos no inicio de cada delta e recompoe eventos `data:` multilinha com `\n`. Isso evita respostas exibidas como `palavrascoladas` durante o streaming de Codex ou providers OpenAI-compatible.
+
 ## Banco de Dados
 
 Modelos principais:
@@ -1051,6 +1082,7 @@ Modelos principais:
 - `user_provider_configs`
 - `conversations`
 - `messages`
+- `chat_attachments`
 - `knowledge_documents`
 - `skills`
 - `user_skills`

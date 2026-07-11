@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats, ReasoningEffort, ResponseMode } from '../lib/api'
+import type { ChatAttachmentInfo, ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats, ReasoningEffort, ResponseMode } from '../lib/api'
 import { api, getAuthToken, parseApiTimestamp } from '../lib/api'
 
 let activeStreamController: AbortController | null = null
@@ -16,6 +16,7 @@ interface PendingChatJob {
   useRag: boolean
   responseMode: ResponseMode
   reasoningEffort: ReasoningEffort
+  attachments: ChatAttachmentInfo[]
   createdAt: number
 }
 
@@ -37,7 +38,12 @@ function loadPendingJobs(): PendingChatJob[] {
     const parsed = JSON.parse(localStorage.getItem(PENDING_JOBS_KEY) || '[]')
     if (!Array.isArray(parsed)) return []
     const cutoff = Date.now() - PENDING_JOB_TTL_MS
-    return parsed.filter(item => item?.clientRequestId && item?.createdAt >= cutoff)
+    return parsed
+      .filter(item => item?.clientRequestId && item?.createdAt >= cutoff)
+      .map(item => ({
+        ...item,
+        attachments: Array.isArray(item.attachments) ? item.attachments : [],
+      }))
   } catch {
     return []
   }
@@ -73,6 +79,7 @@ async function recoverPendingJobs(sessionId: string) {
         pending.responseMode,
         pending.reasoningEffort,
         pending.clientRequestId,
+        (pending.attachments || []).map(attachment => attachment.id),
       )
       forgetPendingJob(pending.clientRequestId)
     } catch {
@@ -139,7 +146,8 @@ interface ChatState {
     content: string,
     responseModeOverride?: ResponseMode,
     reasoningEffortOverride?: ReasoningEffort,
-  ) => Promise<void>
+    files?: File[],
+  ) => Promise<boolean>
   regenerate: () => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
@@ -169,12 +177,13 @@ function createAssistantMsg(): ChatMessage {
   }
 }
 
-function createUserMsg(content: string): ChatMessage {
+function createUserMsg(content: string, attachments: ChatAttachmentInfo[] = []): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: 'user',
     content,
     timestamp: new Date(),
+    attachments,
   }
 }
 
@@ -235,11 +244,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
   setUseRag: (v) => set({ useRag: v }),
 
-  sendMessage: async (content: string, responseModeOverride?: ResponseMode, reasoningEffortOverride?: ReasoningEffort) => {
+  sendMessage: async (
+    content: string,
+    responseModeOverride?: ResponseMode,
+    reasoningEffortOverride?: ReasoningEffort,
+    files: File[] = [],
+  ) => {
     const { isLoading, sessionId, responseMode, reasoningEffort, useRag } = get()
-    if (!content.trim() || isLoading) return
+    if ((!content.trim() && files.length === 0) || isLoading) return false
 
-    const userMsg = createUserMsg(content)
+    let attachments: ChatAttachmentInfo[] = []
+    if (files.length) {
+      activeStreamController?.abort()
+      const uploadController = new AbortController()
+      activeStreamController = uploadController
+      set({ isLoading: true, error: null, streamStatus: `Enviando ${files.length} arquivo(s)...` })
+      try {
+        const uploaded = await api.uploadChatAttachments(files, sessionId, uploadController.signal)
+        attachments = uploaded.attachments
+      } catch (error) {
+        if (activeStreamController === uploadController) activeStreamController = null
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          set({ isLoading: false, streamStatus: null })
+          return false
+        }
+        const message = error instanceof Error ? error.message : 'Falha ao enviar anexos'
+        set({ isLoading: false, error: message, streamStatus: null })
+        return false
+      }
+      if (activeStreamController === uploadController) activeStreamController = null
+    }
+
+    const userMsg = createUserMsg(content.trim(), attachments)
     const assistantMsg = createAssistantMsg()
     const selectedMode = responseModeOverride || responseMode
     const selectedEffort = reasoningEffortOverride || reasoningEffort
@@ -252,6 +288,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       useRag,
       responseMode: selectedMode,
       reasoningEffort: selectedEffort,
+      attachments,
       createdAt: Date.now(),
     })
 
@@ -266,6 +303,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     let controller: AbortController | null = null
     let startedJobId: string | null = null
+    let jobAccepted = false
     try {
       activeStreamController?.abort()
       controller = new AbortController()
@@ -277,16 +315,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         selectedMode,
         selectedEffort,
         clientRequestId,
+        attachments.map(attachment => attachment.id),
       )
+      jobAccepted = true
       forgetPendingJob(clientRequestId)
       startedJobId = job.id
       if (get().sessionId !== sessionId) {
         void get().loadConversations()
-        return
+        return true
       }
       activeJobId = job.id
       set(state => {
         const next = [...state.messages]
+        const userIndex = next.length - 2
+        if (next[userIndex]?.role === 'user') {
+          next[userIndex] = {
+            ...next[userIndex],
+            messageId: job.user_message_id,
+            attachments: job.attachments || attachments,
+          }
+        }
         const last = next[next.length - 1]
         if (last?.role === 'assistant') {
           next[next.length - 1] = {
@@ -303,20 +351,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { messages: next }
       })
       await jobStream(job.id, 0, controller.signal)
+      return true
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      if (!(err instanceof TypeError)) forgetPendingJob(clientRequestId)
-      if (get().sessionId !== sessionId) return
+      if (err instanceof DOMException && err.name === 'AbortError') return jobAccepted
+      const recoverableNetworkError = err instanceof TypeError
+      if (!recoverableNetworkError) {
+        forgetPendingJob(clientRequestId)
+        if (!jobAccepted) {
+          void Promise.all(
+            attachments.map(attachment => api.deletePendingChatAttachment(attachment.id).catch(() => null)),
+          )
+        }
+      }
+      if (get().sessionId !== sessionId) return jobAccepted
       const msg = err instanceof Error ? err.message : 'Erro desconhecido'
       set(s => ({
-        messages: s.messages.map((m, i) =>
-          i === s.messages.length - 1 && m.role === 'assistant'
-            ? { ...m, content: m.content || `❌ **Erro:** ${msg}` }
-            : m,
-        ),
+        messages: !jobAccepted && !recoverableNetworkError
+          ? s.messages.slice(0, -2)
+          : s.messages.map((m, i) =>
+              i === s.messages.length - 1 && m.role === 'assistant'
+                ? {
+                    ...m,
+                    content: m.content || (recoverableNetworkError
+                      ? 'A conexao caiu. O pedido ficou salvo e sera retomado ao reabrir esta conversa.'
+                      : `❌ **Erro:** ${msg}`),
+                  }
+                : m,
+            ),
         error: msg,
         streamStatus: null,
       }))
+      return jobAccepted || recoverableNetworkError
     } finally {
       if (activeStreamController === controller) activeStreamController = null
       if (activeJobId === startedJobId) activeJobId = null
@@ -389,7 +454,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const pending = localPending[localPending.length - 1]
         set({
           messages: [
-            { ...createUserMsg(pending.message), id: `pending-user-${pending.clientRequestId}` },
+            { ...createUserMsg(pending.message, pending.attachments || []), id: `pending-user-${pending.clientRequestId}` },
             {
               ...createAssistantMsg(),
               id: `pending-assistant-${pending.clientRequestId}`,
@@ -418,6 +483,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           jobId: m.job_id,
           jobStatus: m.status || 'completed',
           readAt: m.read_at,
+          attachments: Array.isArray(m.attachments) ? m.attachments : [],
         }))
         const restored = await Promise.all(msgs.map(async message => {
           if (message.role !== 'assistant') return message

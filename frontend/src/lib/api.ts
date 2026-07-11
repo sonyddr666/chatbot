@@ -35,6 +35,20 @@ export interface SkillActivity {
 }
 export type ResponseMode = 'normal' | 'thinking' | 'live'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export interface ChatAttachmentInfo {
+  id: string
+  filename: string
+  path: string
+  relative_path: string
+  content_type: string
+  extension: string
+  kind: 'text' | 'image'
+  size: number
+  checksum: string
+  is_truncated: boolean
+  status: string
+  created_at: string
+}
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; content: string; timestamp: Date
   messageId?: number; feedbackScore?: number | null; tokens?: number
@@ -48,6 +62,7 @@ export interface ChatMessage {
   jobId?: string | null
   jobStatus?: 'queued' | 'running' | 'completed' | 'interrupted' | 'failed' | 'cancelled'
   readAt?: string | null
+  attachments?: ChatAttachmentInfo[]
 }
 export interface Conversation {
   id: number; session_id: string; title: string; language: string
@@ -330,6 +345,7 @@ export interface ChatJobInfo {
   content: string
   reasoning: string
   error: string
+  attachments: ChatAttachmentInfo[]
 }
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -342,6 +358,58 @@ async function req<T>(url: string, opts?: RequestInit): Promise<T> {
     throw new Error(err.detail || err.message || `Erro ${res.status}`)
   }
   return res.json()
+}
+
+interface ParsedSseEvent {
+  event: string
+  id?: number
+  data: string
+}
+
+async function* parseSseEvents(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<ParsedSseEvent> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventName = ''
+  let eventId: number | undefined
+  let dataLines: string[] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      buffer += decoder.decode()
+      if (buffer) buffer += '\n'
+    } else {
+      buffer += decoder.decode(value, { stream: true })
+    }
+
+    const lines = buffer.split('\n')
+    buffer = done ? '' : (lines.pop() || '')
+    for (const rawLine of lines) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+      if (line === '') {
+        if (dataLines.length || eventName) {
+          yield { event: eventName || 'message', id: eventId, data: dataLines.join('\n') }
+        }
+        eventName = ''
+        eventId = undefined
+        dataLines = []
+        continue
+      }
+      if (line.startsWith(':')) continue
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).replace(/^ /, '')
+      } else if (line.startsWith('id:')) {
+        const parsed = Number(line.slice(3).replace(/^ /, ''))
+        eventId = Number.isFinite(parsed) ? parsed : undefined
+      } else if (line.startsWith('data:')) {
+        // SSE removes at most one optional separator space. Any second space is payload.
+        dataLines.push(line.slice(5).replace(/^ /, ''))
+      }
+    }
+    if (done) return
+  }
 }
 
 export const api = {
@@ -437,6 +505,7 @@ export const api = {
     responseMode: ResponseMode,
     reasoningEffort: ReasoningEffort,
     clientRequestId?: string,
+    attachmentIds: string[] = [],
   ) => req<ChatJobInfo>('/chat/jobs', {
     method: 'POST',
     body: JSON.stringify({
@@ -446,8 +515,37 @@ export const api = {
       response_mode: responseMode,
       reasoning_effort: reasoningEffort,
       client_request_id: clientRequestId,
+      attachment_ids: attachmentIds,
     }),
   }),
+  uploadChatAttachments: async (files: File[], sessionId: string, signal?: AbortSignal) => {
+    const form = new FormData()
+    form.append('session_id', sessionId)
+    files.forEach(file => form.append('files', file, file.name))
+    const response = await fetch(`${API}/chat/attachments`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+      signal,
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+      throw new Error(error.detail || 'Falha ao enviar anexos')
+    }
+    return response.json() as Promise<{ attachments: ChatAttachmentInfo[]; rag_indexed: false }>
+  },
+  deletePendingChatAttachment: (attachmentId: string) => req<{ deleted: boolean; attachment_id: string }>(
+    `/chat/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: 'DELETE' },
+  ),
+  downloadChatAttachment: async (attachmentId: string) => {
+    const response = await fetch(
+      `${API}/chat/attachments/${encodeURIComponent(attachmentId)}/download`,
+      { headers: authHeaders() },
+    )
+    if (!response.ok) throw new Error('Falha ao baixar anexo')
+    return response.blob()
+  },
   getChatJob: (jobId: string) => req<ChatJobInfo>(`/chat/jobs/${encodeURIComponent(jobId)}`),
   cancelChatJob: (jobId: string) => req<{ status: string; job_id: string }>(
     `/chat/jobs/${encodeURIComponent(jobId)}`,
@@ -471,69 +569,49 @@ export const api = {
     const reader = res.body?.getReader()
     if (!reader) throw new Error('Stream do job indisponivel')
 
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let currentEvent = ''
-    let currentId: number | undefined
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) return
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('id: ')) {
-          const parsed = Number(line.slice(4).trim())
-          currentId = Number.isFinite(parsed) ? parsed : undefined
-          continue
+    for await (const event of parseSseEvents(reader)) {
+      const raw = event.data
+      const control = raw.trim()
+      const base = { eventId: event.id, jobId }
+      if (event.event === 'token') yield { ...base, type: 'content', text: raw }
+      else if (event.event === 'reasoning') yield { ...base, type: 'reasoning', text: raw }
+      else if (event.event === 'status') yield { ...base, type: 'status', text: raw }
+      else if (event.event === 'workspace_plan') {
+        yield { ...base, type: 'workspace_plan', workspacePlan: JSON.parse(control) }
+      } else if (event.event === 'skill_activity') {
+        yield { ...base, type: 'skill_activity', skillActivity: JSON.parse(control) }
+      } else if (event.event === 'start') {
+        const data = JSON.parse(control)
+        yield {
+          ...base,
+          type: 'start',
+          messageId: data.message_id,
+          responseMode: data.response_mode,
+          reasoningEffort: data.reasoning_effort,
+          providerId: data.provider_id,
+          providerName: data.provider_name,
+          modelId: data.model_id,
+          modelName: data.model_name,
         }
-        if (line.startsWith('event: ')) {
-          currentEvent = line.slice(7).trim()
-          continue
+      } else if (event.event === 'done') {
+        const data = JSON.parse(control)
+        yield {
+          ...base,
+          type: 'done',
+          messageId: data.message_id,
+          hasReasoning: data.has_reasoning,
+          responseMode: data.response_mode,
+          reasoningEffort: data.reasoning_effort,
+          providerId: data.provider_id,
+          providerName: data.provider_name,
+          modelId: data.model_id,
+          modelName: data.model_name,
         }
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trim()
-        const base = { eventId: currentId, jobId }
-        if (currentEvent === 'token') yield { ...base, type: 'content', text: raw }
-        else if (currentEvent === 'reasoning') yield { ...base, type: 'reasoning', text: raw }
-        else if (currentEvent === 'status') yield { ...base, type: 'status', text: raw }
-        else if (currentEvent === 'workspace_plan') {
-          yield { ...base, type: 'workspace_plan', workspacePlan: JSON.parse(raw) }
-        } else if (currentEvent === 'skill_activity') {
-          yield { ...base, type: 'skill_activity', skillActivity: JSON.parse(raw) }
-        } else if (currentEvent === 'start') {
-          const data = JSON.parse(raw)
-          yield {
-            ...base,
-            type: 'start',
-            messageId: data.message_id,
-            responseMode: data.response_mode,
-            reasoningEffort: data.reasoning_effort,
-            providerId: data.provider_id,
-            providerName: data.provider_name,
-            modelId: data.model_id,
-            modelName: data.model_name,
-          }
-        } else if (currentEvent === 'done') {
-          const data = JSON.parse(raw)
-          yield {
-            ...base,
-            type: 'done',
-            messageId: data.message_id,
-            hasReasoning: data.has_reasoning,
-            responseMode: data.response_mode,
-            reasoningEffort: data.reasoning_effort,
-            providerId: data.provider_id,
-            providerName: data.provider_name,
-            modelId: data.model_id,
-            modelName: data.model_name,
-          }
-          return
-        } else if (currentEvent === 'job_state') {
-          const data = JSON.parse(raw)
-          yield { ...base, type: 'job_state', jobStatus: data.status, text: data.error }
-          return
-        }
+        return
+      } else if (event.event === 'job_state') {
+        const data = JSON.parse(control)
+        yield { ...base, type: 'job_state', jobStatus: data.status, text: data.error }
+        return
       }
     }
   },
@@ -588,7 +666,8 @@ export const api = {
         }
 
         if (line.startsWith('data: ')) {
-          const raw = line.slice(6).trim()
+          // Remove only the SSE separator. Leading spaces belong to the model token.
+          const raw = line.slice(6).replace(/\r$/, '')
 
           if (raw === '[DONE]') {
             yield { type: 'done' }

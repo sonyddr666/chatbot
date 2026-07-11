@@ -120,6 +120,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     reasoning = Column(Text, nullable=False, default="")
     skill_activities_json = Column(Text, nullable=False, default="[]")
+    attachments_json = Column(Text, nullable=False, default="[]")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     feedback_score = Column(Integer, nullable=True)
     tokens_used = Column(Integer, default=0)
@@ -133,6 +134,28 @@ class Message(Base):
     read_at = Column(DateTime, nullable=True)
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class ChatAttachment(Base):
+    __tablename__ = "chat_attachments"
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    filename = Column(String(255), nullable=False)
+    relative_path = Column(String(1000), nullable=False)
+    content_type = Column(String(255), nullable=False, default="application/octet-stream")
+    extension = Column(String(32), nullable=False, default="")
+    kind = Column(String(30), nullable=False, default="text")
+    file_size = Column(Integer, nullable=False, default=0)
+    checksum = Column(String(128), nullable=False, default="")
+    extracted_text = Column(Text, nullable=False, default="")
+    is_truncated = Column(Boolean, nullable=False, default=False)
+    status = Column(String(30), nullable=False, default="ready", index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    attached_at = Column(DateTime, nullable=True)
 
 
 class ChatJob(Base):
@@ -274,6 +297,7 @@ def init_db():
                 "user_id": "ALTER TABLE messages ADD COLUMN user_id INTEGER",
                 "reasoning": "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''",
                 "skill_activities_json": "ALTER TABLE messages ADD COLUMN skill_activities_json TEXT NOT NULL DEFAULT '[]'",
+                "attachments_json": "ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'",
                 "job_id": "ALTER TABLE messages ADD COLUMN job_id VARCHAR(64)",
                 "status": "ALTER TABLE messages ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'completed'",
                 "read_at": "ALTER TABLE messages ADD COLUMN read_at DATETIME",

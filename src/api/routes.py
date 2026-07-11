@@ -8,8 +8,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query, Depends, Header
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Query, Depends, Header
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -43,7 +43,7 @@ from src.core.user_provider_manager import (
 )
 from src.rag.chunker import split_text, split_documents
 from src.rag.personal import add_user_documents, delete_user_documents, retrieve_user_context, user_rag_collection
-from src.db.repository import ChatJobRepo, ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
+from src.db.repository import ChatAttachmentRepo, ChatJobRepo, ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token
@@ -53,6 +53,12 @@ from src.core.userspace import safe_user_path, write_profile_text
 from src.core.time_utils import utc_isoformat
 from src.tools.perplexo_search import perplexo_health
 from src.core.chat_jobs import cancel_chat_job, start_chat_job
+from src.core.chat_attachments import (
+    MAX_CHAT_ATTACHMENTS,
+    SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS,
+    remove_chat_attachment_file,
+    save_chat_attachment,
+)
 
 router = APIRouter()
 _SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
@@ -108,6 +114,14 @@ def _public_session_id(user_id: int, session_id: str) -> str:
 
 
 def _stored_skill_activities(raw: str | None) -> list[dict]:
+    try:
+        value = json.loads(raw or "[]")
+        return value if isinstance(value, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def _stored_attachments(raw: str | None) -> list[dict]:
     try:
         value = json.loads(raw or "[]")
         return value if isinstance(value, list) else []
@@ -1326,11 +1340,106 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     return EventSourceResponse(event_generator())
 
 
+@router.post("/chat/attachments")
+@limiter.limit("30/minute")
+async def upload_chat_attachments(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    session_id: str = Form("default"),
+    user=Depends(get_current_user),
+):
+    """Save chat files in the real workspace; never index them in RAG automatically."""
+    ensure_db()
+    if not files or len(files) > MAX_CHAT_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Envie entre 1 e {MAX_CHAT_ATTACHMENTS} arquivos por mensagem",
+        )
+
+    artifacts = []
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    try:
+        for file in files:
+            if not file.filename:
+                raise ValueError("Nome de arquivo invalido")
+            extension = os.path.splitext(file.filename)[1].lower()
+            normalized_name = file.filename.lower()
+            if normalized_name == "dockerfile":
+                extension = ".dockerfile"
+            elif normalized_name == ".gitignore":
+                extension = ".gitignore"
+            elif normalized_name == ".env":
+                extension = ".env"
+            if extension not in SUPPORTED_CHAT_ATTACHMENT_EXTENSIONS:
+                raise ValueError(f"Extensao nao suportada no chat: {extension or '(sem extensao)'}")
+            content = await file.read()
+            if not content:
+                raise ValueError(f"Arquivo vazio: {file.filename}")
+            if len(content) > max_bytes:
+                raise ValueError(
+                    f"Arquivo muito grande: {file.filename} (max {settings.max_upload_size_mb}MB)"
+                )
+            artifact = await asyncio.to_thread(
+                save_chat_attachment,
+                user.id,
+                file.filename,
+                content,
+                file.content_type or "",
+            )
+            artifacts.append(artifact)
+
+        scoped_session_id = _scoped_session_id(user.id, session_id)
+        stored = await asyncio.to_thread(
+            ChatAttachmentRepo.create_many,
+            user.id,
+            scoped_session_id,
+            artifacts,
+        )
+        return {"attachments": stored, "rag_indexed": False}
+    except ValueError as exc:
+        for artifact in artifacts:
+            remove_chat_attachment_file(user.id, artifact.relative_path)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        for artifact in artifacts:
+            remove_chat_attachment_file(user.id, artifact.relative_path)
+        raise HTTPException(status_code=500, detail="Falha ao salvar anexos do chat") from exc
+
+
+@router.get("/chat/attachments/{attachment_id}/download")
+async def download_chat_attachment(attachment_id: str, user=Depends(get_current_user)):
+    attachment = await asyncio.to_thread(ChatAttachmentRepo.get_owned, attachment_id, user.id)
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Anexo nao encontrado")
+    path = safe_user_path(user.id, "workspace", attachment["relative_path"])
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo do anexo nao encontrado no Workspace")
+    return FileResponse(
+        path,
+        media_type=attachment["content_type"],
+        filename=attachment["filename"],
+    )
+
+
+@router.delete("/chat/attachments/{attachment_id}")
+async def delete_pending_chat_attachment(attachment_id: str, user=Depends(get_current_user)):
+    existing = await asyncio.to_thread(ChatAttachmentRepo.get_owned, attachment_id, user.id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Anexo nao encontrado")
+    deleted = await asyncio.to_thread(ChatAttachmentRepo.delete_pending, attachment_id, user.id)
+    if not deleted:
+        raise HTTPException(status_code=409, detail="Anexo ja pertence a uma mensagem")
+    remove_chat_attachment_file(user.id, deleted["relative_path"])
+    return {"deleted": True, "attachment_id": attachment_id}
+
+
 @router.post("/chat/jobs", status_code=202)
 @limiter.limit("30/minute")
 async def create_chat_job(body: ChatStreamRequest, request: Request, user=Depends(get_current_user)):
     """Persist both messages first, then start execution outside the request."""
-    if settings.enable_moderation:
+    if not body.message.strip() and not body.attachment_ids:
+        raise HTTPException(status_code=400, detail="Mensagem ou anexo obrigatorio")
+    if settings.enable_moderation and body.message.strip():
         blocked = moderate_text(body.message)
         if blocked:
             raise HTTPException(status_code=400, detail=blocked)
@@ -1354,6 +1463,7 @@ async def create_chat_job(body: ChatStreamRequest, request: Request, user=Depend
             reasoning_effort=reasoning_effort,
             use_rag=body.use_rag,
             client_request_id=body.client_request_id,
+            attachment_ids=body.attachment_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1543,6 +1653,7 @@ async def get_conversation(session_id: str, user=Depends(get_current_user)):
                 "content": m.content,
                 "reasoning": m.reasoning or "",
                 "skill_activities": _stored_skill_activities(m.skill_activities_json),
+                "attachments": _stored_attachments(m.attachments_json),
                 "feedback_score": m.feedback_score,
                 "tokens_used": m.tokens_used,
                 "created_at": utc_isoformat(m.created_at),
@@ -1965,6 +2076,7 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
                     "content": m.content,
                     "reasoning": m.reasoning or "",
                     "skill_activities": _stored_skill_activities(m.skill_activities_json),
+                    "attachments": _stored_attachments(m.attachments_json),
                     "created_at": utc_isoformat(m.created_at),
                     "provider_id": m.provider_id,
                     "provider_name": m.provider_name,
@@ -1994,6 +2106,15 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
                     + json.dumps(activities, ensure_ascii=False, indent=2)
                     + "\n"
                 )
+            attachments = _stored_attachments(m.attachments_json)
+            if attachments:
+                lines.append("[Anexos do chat]")
+                for attachment in attachments:
+                    lines.append(
+                        f"- {attachment.get('filename') or 'arquivo'}: "
+                        f"{attachment.get('relative_path') or attachment.get('path') or ''}"
+                    )
+                lines.append("")
             lines.append(f"{prefix}\n{m.content}\n")
         text = "\n".join(lines)
         return PlainTextResponse(text,
