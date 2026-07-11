@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats } from '../lib/api'
 import { api } from '../lib/api'
 
+let activeStreamController: AbortController | null = null
+
 // ─── Tipos locais ───
 export interface ChatMetrics {
   ttft_s?: number
@@ -124,17 +126,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamStatus: 'Preparando resposta...',
     }))
 
+    let controller: AbortController | null = null
     try {
+      activeStreamController?.abort()
+      controller = new AbortController()
+      activeStreamController = controller
       // Tenta via WebSocket primeiro
       if (wsConnected) {
         // O WebSocket vai chamar os handlers que atualizam o estado
         // Isso é gerenciado pelo App.tsx via WebSocketProvider
         // Por enquanto, fallback para HTTP SSE
-        await httpStream(content, sessionId, useRag, useThinking)
+        await httpStream(content, sessionId, useRag, useThinking, controller.signal)
       } else {
-        await httpStream(content, sessionId, useRag, useThinking)
+        await httpStream(content, sessionId, useRag, useThinking, controller.signal)
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
       const msg = err instanceof Error ? err.message : 'Erro desconhecido'
       set(s => ({
         messages: s.messages.map((m, i) =>
@@ -146,6 +153,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamStatus: null,
       }))
     } finally {
+      if (activeStreamController === controller) activeStreamController = null
       set({ isLoading: false, streamStatus: null })
     }
   },
@@ -167,16 +175,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamStatus: 'Preparando resposta...',
     })
 
+    let controller: AbortController | null = null
     try {
-      await httpStream(lastUser.content, sessionId)
-    } catch {
+      activeStreamController?.abort()
+      controller = new AbortController()
+      activeStreamController = controller
+      await httpStream(lastUser.content, sessionId, false, true, controller.signal)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
       set({ isLoading: false, error: 'Falha ao regenerar', streamStatus: null })
     } finally {
+      if (activeStreamController === controller) activeStreamController = null
       set({ isLoading: false, streamStatus: null })
     }
   },
 
   stopGeneration: () => {
+    activeStreamController?.abort()
+    activeStreamController = null
     set({ isLoading: false, streamStatus: null })
     // Se o usuário interrompeu, marca a última mensagem como interrompida
     const { messages } = get()
@@ -277,8 +293,9 @@ async function httpStream(
   sessionId: string,
   useRag = false,
   useThinking = true,
+  signal?: AbortSignal,
 ) {
-  for await (const chunk of api.stream(content, sessionId, useRag, useThinking)) {
+  for await (const chunk of api.stream(content, sessionId, useRag, useThinking, signal)) {
     if (chunk.type === 'reasoning') {
       const s = useChatStore.getState()
       const msgs = [...s.messages]

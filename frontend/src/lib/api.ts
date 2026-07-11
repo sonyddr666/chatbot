@@ -121,6 +121,33 @@ export interface PerplexoStatus {
   status_code?: number
 }
 
+export interface InworldVoice {
+  voice_id: string
+  display_name: string
+  language: string
+  description: string
+  source: string
+  is_cloned: boolean
+  is_custom: boolean
+  tags: string[]
+}
+
+export interface InworldVoicesResponse {
+  configured: boolean
+  provider: 'inworld'
+  model: string
+  default_voice: string
+  voices: InworldVoice[]
+  cloned_count: number
+}
+
+export interface InworldTtsStatus {
+  configured: boolean
+  provider: 'inworld'
+  model: string
+  default_voice: string
+}
+
 export interface UserPreferenceInfo {
   value: unknown
   source: string
@@ -341,10 +368,17 @@ export const api = {
    *   event: token\n data: <text>\n\n
    *   event: done\n data: {"message_id":..., "has_reasoning":...}\n\n
    */
-  async *stream(message: string, sessionId = 'default', useRag = false, useThinking = true): AsyncGenerator<StreamChunk> {
+  async *stream(
+    message: string,
+    sessionId = 'default',
+    useRag = false,
+    useThinking = true,
+    signal?: AbortSignal,
+  ): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat/stream`, {
       method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag, use_thinking: useThinking }),
+      signal,
     })
     if (!res.ok) throw new Error('Falha no streaming')
 
@@ -546,6 +580,36 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+
+  inworldTtsStatus: () => req<InworldTtsStatus>('/tts/inworld/status'),
+  listInworldVoices: (language = 'PT_BR', includeSystem = true) =>
+    req<InworldVoicesResponse>(
+      `/tts/inworld/voices?language=${encodeURIComponent(language)}&include_system=${includeSystem ? 'true' : 'false'}`,
+    ),
+  synthesizeInworldSpeech: async (
+    text: string,
+    voiceId: string,
+    language = 'pt-BR',
+    deliveryMode = 'BALANCED',
+    signal?: AbortSignal,
+  ) => {
+    const res = await fetch(`${API}/tts/inworld/synthesize`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        text,
+        voice_id: voiceId,
+        language,
+        delivery_mode: deliveryMode,
+      }),
+      signal,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
+      throw new Error(err.detail || `Falha no TTS Inworld (${res.status})`)
+    }
+    return res.blob()
+  },
 
   // Stats
   getStats: () => req<Stats>('/stats'),

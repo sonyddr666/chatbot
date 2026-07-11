@@ -12,9 +12,11 @@ import { OnboardingModal } from './components/OnboardingModal'
 import { SkillsPanel } from './components/SkillsPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
+import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
 import { useChatStore } from './hooks/useChatStore'
 import { api, getAuthToken, setAuthToken, type ChatMessage, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useLiveVoice } from './voice/useLiveVoice'
 
 export default function App() {
   const {
@@ -118,6 +120,7 @@ export default function App() {
     sendMessage: wsSend,
     reconnect: reconnectWs,
     disconnect: disconnectWs,
+    restart: restartWs,
   } = useWebSocket({
     enabled: !!user,
     onChunk: handleStreamChunk,
@@ -249,6 +252,21 @@ export default function App() {
     sendMessage(content)
   }, [sendMessage, sessionId, useRag, useThinking, wsConnected, wsSend])
 
+  const handleStop = useCallback(() => {
+    stopGeneration()
+    if (wsConnected) restartWs()
+  }, [restartWs, stopGeneration, wsConnected])
+
+  const lastAssistantMessage = [...messages].reverse().find(message => message.role === 'assistant')
+  const liveVoice = useLiveVoice({
+    userId: user?.id,
+    isGenerating: isLoading,
+    assistantMessageId: lastAssistantMessage?.id,
+    assistantText: lastAssistantMessage?.content || '',
+    onSend: handleSend,
+    onInterruptGeneration: handleStop,
+  })
+
   const isLastAssistant = messages.length > 0 && messages[messages.length - 1]?.role === 'assistant'
 
   if (!authChecked) {
@@ -342,6 +360,7 @@ export default function App() {
               )}
             </span>
             <ModelSelector />
+            <LiveVoiceButton controller={liveVoice} />
             <button
               onClick={() => setWorkspaceOpen(true)}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
@@ -448,6 +467,8 @@ export default function App() {
                           ? regenerate
                           : undefined
                       }
+                      onSpeak={liveVoice.speakText}
+                      onStopSpeaking={liveVoice.stopSpeaking}
                     />
                   ))}
                   <div className="h-2" />
@@ -474,7 +495,8 @@ export default function App() {
           )}
         </div>
 
-        <ChatInput onSend={handleSend} busy={isLoading} onStop={stopGeneration} />
+        <LiveVoiceDock controller={liveVoice} />
+        <ChatInput onSend={handleSend} busy={isLoading} onStop={handleStop} />
       </div>
     </div>
   )

@@ -126,6 +126,21 @@ export function useWebSocket(options: UseWebSocketOptions) {
     setReconnecting(false)
   }, [])
 
+  const restart = useCallback(() => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+    const current = wsRef.current
+    wsRef.current = null
+    if (current) {
+      current.onclose = null
+      current.onerror = null
+      current.onmessage = null
+      current.close()
+    }
+    setConnected(false)
+    setReconnecting(true)
+    reconnectTimerRef.current = setTimeout(connect, 120)
+  }, [connect])
+
   const send = useCallback(
     (data: Record<string, unknown>) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -178,5 +193,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
     send,
     disconnect,
     reconnect: connect,
+    restart,
   }
 }

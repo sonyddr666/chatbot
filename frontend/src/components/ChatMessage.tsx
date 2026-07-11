@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw } from 'lucide-react'
+import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX } from 'lucide-react'
 import type { ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -15,6 +15,8 @@ interface Props {
   isLoading?: boolean
   status?: string | null
   onRegenerate?: () => void
+  onSpeak?: (text: string) => void
+  onStopSpeaking?: () => void
 }
 
 function formatTime(d: Date) {
@@ -138,7 +140,7 @@ function ActionButton({
 }
 
 // ─── Componente principal ───
-export function ChatMessageBubble({ message, isLoading, status, onRegenerate }: Props) {
+export function ChatMessageBubble({ message, isLoading, status, onRegenerate, onSpeak, onStopSpeaking }: Props) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<number | null>(message.feedbackScore ?? null)
@@ -240,6 +242,12 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate }: 
               title="Copiar"
               onClick={handleCopy}
             />
+            {onSpeak && displayContent && (
+              <ActionButton icon={Volume2} title="Ouvir resposta" onClick={() => onSpeak(displayContent)} />
+            )}
+            {onStopSpeaking && (
+              <ActionButton icon={VolumeX} title="Parar voz" onClick={onStopSpeaking} />
+            )}
             <ActionButton
               icon={ThumbsUp}
               active={feedback === 1}

@@ -267,6 +267,9 @@ Implementado:
 - O campo de mensagem permanece editavel durante Thinking e streaming; apenas o envio espera a resposta atual terminar.
 - Thinking, Skills usadas e resultados completos de pesquisa sao persistidos; atualizar a pagina nao remove esses dados das novas mensagens.
 - Respostas que chegam em um bloco grande sao divididas visualmente para evitar que o texto apareca inteiro de uma vez.
+- Modo Live com STT continuo no navegador e TTS Inworld em trechos durante o streaming.
+- Lista autenticada de vozes clonadas do workspace Inworld, com selecao separada por usuario.
+- Interrupcao do modelo e do audio para voltar imediatamente ao microfone.
 - Regeneracao de resposta.
 - WebSocket autenticado.
 - Historico por sessao.
@@ -284,6 +287,35 @@ POST /api/v1/chat
 POST /api/v1/chat/stream
 POST /api/v1/chat/regenerate
 WS   /ws?token=<token>
+```
+
+### Voz ao Vivo com Inworld
+
+O modo Live usa o reconhecimento de fala do Chrome/Edge para STT e usa a API da
+Inworld para todo o TTS. O sintetizador nativo `speechSynthesis` nao e usado.
+
+Fluxo:
+
+```txt
+microfone -> STT continuo -> envio apos silencio -> resposta SSE/WebSocket
+          -> frases estaveis de 24 a 150 caracteres
+          -> ate 2 trechos Inworld preparados em paralelo
+          -> MP3 reproduzido em ordem enquanto o restante ainda chega
+```
+
+- As vozes com origem `IVC` aparecem primeiro em `Minhas vozes clonadas`.
+- Vozes de sistema podem ser mostradas ou ocultadas.
+- Idioma, voz, velocidade, silencio e estilo de entrega ficam salvos por usuario no frontend.
+- A chave Inworld permanece somente no backend; o navegador recebe a lista permitida e o MP3.
+- Pausar, parar e interromper cancelam o audio e as requisicoes pendentes.
+- O texto de raciocinio/Thinking nunca e enviado ao TTS; somente a resposta final e falada.
+
+Rotas autenticadas:
+
+```txt
+GET  /api/v1/tts/inworld/status
+GET  /api/v1/tts/inworld/voices
+POST /api/v1/tts/inworld/synthesize
 ```
 
 ### Conversas, Mensagens, Feedback e Export
@@ -777,6 +809,13 @@ PERPLEXO_BASE_URL=https://api.ghost1.cloud
 MCP_API_KEY=
 PERPLEXO_TIMEOUT_SECONDS=25
 
+INWORLD_API_KEY=
+INWORLD_TTS_BASE_URL=https://api.inworld.ai
+INWORLD_TTS_MODEL=inworld-tts-2
+INWORLD_TTS_DEFAULT_VOICE=
+INWORLD_TTS_TIMEOUT_SECONDS=20
+INWORLD_TTS_VOICE_CACHE_SECONDS=300
+
 EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 VECTOR_DB_TYPE=chroma
@@ -800,6 +839,9 @@ python -m src.main chat
 
 # Validacao rapida da Skill Perplexo
 python -m unittest tests.test_perplexo_search tests.test_skill_runtime
+
+# Validacao rapida do Live/Inworld TTS
+python -m unittest tests.test_inworld_tts tests.test_frontend_live_voice
 
 # Rodar frontend
 cd frontend
@@ -932,6 +974,9 @@ ALLOW_REGISTRATION=true
 
 As chaves de provider sao opcionais e tambem devem ser configuradas como secrets,
 por exemplo `OPENCODE_ZEN_API_KEY`, `OPENAI_API_KEY` ou `ANTHROPIC_API_KEY`.
+Para habilitar voz, configure `INWORLD_API_KEY` como secret. Essa chave define o
+workspace Inworld cuja lista de vozes clonadas sera exibida. Opcionalmente defina
+`INWORLD_TTS_DEFAULT_VOICE` com o `voiceId` preferido.
 O volume nomeado `chatbot-data` preserva SQLite, usuarios, uploads, Chroma e caches
 de embeddings entre rebuilds. Mantenha uma unica replica da API.
 

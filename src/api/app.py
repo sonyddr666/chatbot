@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse
 
 from src.api.routes import router
 from src.api.workspace_routes import router as workspace_router
+from src.api.tts_routes import router as tts_router
 from src.config import settings
 from src.core.auth_required import resolve_authorized_user
 
@@ -295,3 +296,4 @@ async def websocket_chat(websocket: WebSocket):
 
 app.include_router(router, prefix="/api/v1")
 app.include_router(workspace_router, prefix="/api/v1")
+app.include_router(tts_router, prefix="/api/v1")

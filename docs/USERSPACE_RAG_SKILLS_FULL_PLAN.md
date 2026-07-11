@@ -13,9 +13,8 @@ O projeto ja tem uma fundacao importante:
 - Skills basicas por usuario.
 - Frontend com `AuthPanel`, `OnboardingModal` e `SkillsPanel`.
 
-O que ainda falta para ficar realmente redondo:
+O que ainda falta antes de exposicao publica:
 
-- Executar smoke manual com backend e frontend antes de exposicao publica.
 - Revisar a disponibilidade do mecanismo externo de busca antes de producao.
 - Fazer hardening operacional de CORS, secrets, backup e observabilidade antes de exposicao publica.
 
@@ -33,9 +32,9 @@ O que ainda falta para ficar realmente redondo:
 - [x] `workspace_manager` com linguagem natural, plano persistido, diff, confirmacao, auditoria e gerenciamento de arquivos/pastas pela IA.
 - [x] Arvore visual recursiva, importacao e drag-and-drop com confirmacao no Workspace.
 - [x] RAG opt-in: uploads e arquivos do Workspace so entram quando selecionados; sugestoes da IA tambem exigem confirmacao.
-- [x] Bateria curta de UserSpace, Workspace Agent, ingestao opt-in, RAG, Skills, auth e frontend: 63 testes passaram em 6.499 segundos com corte de 45 segundos.
-- [x] Build de producao do frontend: TypeScript e Vite concluiram em 669ms.
-- [ ] Smoke manual completo com backend e frontend antes de exposicao publica.
+- [x] Bateria curta de UserSpace, Workspace Agent, ingestao opt-in, RAG, Skills, auth e frontend: 71 testes passaram em 15.141 segundos com corte de 45 segundos.
+- [x] Build de producao do frontend: TypeScript e Vite concluiram em 788ms.
+- [x] Smoke visual isolado confirmou cadastro, WebSocket, Workspace, upload opt-in, ingestao em 37 chunks e painel de Skills.
 
 ## Regra de ouro anti-travamento
 

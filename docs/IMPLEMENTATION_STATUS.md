@@ -100,6 +100,18 @@ O painel de Skills permite salvar por usuario o modelo, foco, periodo e uso de f
 
 No teste real com `deepseek-v4-flash-free`, o gateway enviou `reasoning_content` em SSE e o novo adaptador entregou o primeiro Thinking ao aplicativo antes do primeiro token da resposta final.
 
+## Live, STT e Inworld TTS
+
+- O modo Live mantem STT continuo via reconhecimento de fala do Chrome/Edge.
+- O TTS nativo do navegador foi removido; todo audio e solicitado ao backend Inworld autenticado.
+- O frontend transforma somente a resposta final em trechos estaveis de 24 a 150 caracteres enquanto o streaming ainda esta ativo.
+- Ate dois trechos MP3 sao preparados em paralelo e reproduzidos na ordem para reduzir o tempo ate a primeira fala.
+- Vozes clonadas `IVC` do workspace Inworld aparecem antes das vozes de sistema.
+- A voz e as preferencias ficam separadas por usuario do aplicativo.
+- Interromper cancela reconhecimento, audio, downloads pendentes e a resposta ativa antes de voltar a ouvir.
+- A chave `INWORLD_API_KEY` nunca e enviada ao frontend.
+- O codigo, os mocks e um smoke real com voz clonada do workspace Inworld foram validados.
+
 ## APIs principais
 
 ```txt
@@ -132,6 +144,10 @@ PUT /api/v1/skills/{skill_name}
 GET /api/v1/skills/runs
 GET /api/v1/skills/perplexo/status
 POST /api/v1/skills/perplexo/test
+
+GET  /api/v1/tts/inworld/status
+GET  /api/v1/tts/inworld/voices
+POST /api/v1/tts/inworld/synthesize
 ```
 
 ## Regras anti-travamento
@@ -150,7 +166,7 @@ Comando executado com corte automatico de 45 segundos:
 python -m unittest tests.test_userspace tests.test_workspace_agent tests.test_workspace_rag tests.test_workspace_service tests.test_workspace_routes tests.test_ingestion tests.test_rag_isolation tests.test_skill_permissions tests.test_skills_context tests.test_skill_runtime tests.test_skill_runs tests.test_auth_required tests.test_frontend_workspace_manager tests.test_frontend_workspace_patch_ui tests.test_frontend_workspace_patch_api tests.test_frontend_documents_panel
 ```
 
-Resultado consolidado: `63` testes passaram em `6.499s`.
+Resultado consolidado mais recente: `71` testes passaram em `15.141s`.
 
 Aviso nao bloqueante observado: `StarletteDeprecationWarning` para o adaptador atual de `TestClient` e `httpx`.
 
@@ -174,10 +190,37 @@ Comando executado com corte automatico de 45 segundos:
 npm run build
 ```
 
-Resultado mais recente: TypeScript e Vite concluiram o build de producao em `434ms`.
+Resultado mais recente: TypeScript e Vite concluiram o build de producao em `788ms`.
 
-Aviso nao bloqueante observado: o bundle JavaScript principal ficou em `1,157.86 kB` (`374.09 kB` gzip), acima do limite de aviso de `500 kB`. Isso nao impede a execucao; code splitting pode reduzir o tamanho em uma etapa futura.
+Aviso nao bloqueante observado: o bundle JavaScript principal ficou em `1,162.19 kB` (`375.03 kB` gzip), acima do limite de aviso de `500 kB`. Isso nao impede a execucao; code splitting pode reduzir o tamanho em uma etapa futura.
 
-## Fora desta validacao
+### Validacao do Live/Inworld TTS
 
-- O smoke manual anterior confirmou login, cadastro, onboarding e persistencia. O novo gerenciador da IA, arvore drag-and-drop e RAG opt-in ainda precisam do reteste visual final.
+```powershell
+python -m unittest tests.test_inworld_tts tests.test_frontend_live_voice
+```
+
+Resultado: `7` testes passaram em `0.036s`. Tambem passaram `python -m compileall -q src`
+e a build TypeScript/Vite. Foram validados autenticacao Basic somente no backend,
+ordem das vozes clonadas, filtro de idioma, payload MP3 de baixa latencia, limites,
+segmentacao progressiva e ausencia de `SpeechSynthesisUtterance`.
+
+No smoke real, a API retornou `28` vozes em portugues, incluindo `14` vozes clonadas
+`IVC`. Um trecho de `50` caracteres foi sintetizado com uma voz clonada usando
+`inworld-tts-2`; a resposta teve `68.781` bytes e assinatura MP3 valida. A chave ficou
+somente no `.env` local ignorado pelo Git e nao foi registrada nos logs do teste.
+
+## Smoke visual isolado
+
+Em 10 de julho de 2026, backend e frontend foram iniciados com banco, UserSpace e Chroma temporarios, sem usar nem alterar `data/` ou `.env` do usuario. O navegador real confirmou:
+
+- cadastro e login automatico da conta temporaria;
+- modal de onboarding e WebSocket conectado;
+- criacao de pasta e arquivo no Workspace, edicao e salvamento com confirmacao visual;
+- arquivo de Workspace permanecendo fora do RAG;
+- upload aparecendo imediatamente em Documentos como `Aguardando RAG`, com `0 chunks`;
+- ingestao somente apos clique explicito em `Ingerir no RAG`;
+- transicao do documento para `indexed`, com `37 chunks` e texto derivado em `rag/extracted`;
+- painel de Skills carregando as sete habilidades e seus estados por usuario.
+
+Os dois servidores e todo o armazenamento temporario foram encerrados e removidos ao final do smoke.

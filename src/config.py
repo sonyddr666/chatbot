@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     mcp_api_key: str = ""
     perplexo_timeout_seconds: float = 25.0
 
+    # Inworld TTS. The API key is infrastructure-only and is never returned to
+    # the browser. Audio is synthesized in short chunks produced from LLM SSE.
+    inworld_api_key: str = ""
+    inworld_tts_base_url: str = "https://api.inworld.ai"
+    inworld_tts_model: str = "inworld-tts-2"
+    inworld_tts_default_voice: str = ""
+    inworld_tts_timeout_seconds: float = 20.0
+    inworld_tts_voice_cache_seconds: int = 300
+
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"
     redis_port: int = 6379
