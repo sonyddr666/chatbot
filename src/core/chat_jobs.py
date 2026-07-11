@@ -10,7 +10,12 @@ from src.core.chat import ChatEngine
 from src.core.classifier import classify_route
 from src.core.memory import get_session
 from src.core.preference_suggestions import create_suggestion_from_message
-from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_activity, user_has_personal_rag
+from src.core.skill_runtime import (
+    requests_conversation_history,
+    run_enabled_skill_context,
+    runtime_skill_activity,
+    user_has_personal_rag,
+)
 from src.core.user_provider_manager import get_active_config_for_user
 from src.core.workspace_agent import (
     create_workspace_plan,
@@ -147,12 +152,17 @@ async def process_chat_job(job_id: str) -> None:
             await _add_event(job_id, "status", "Consultando base de conhecimento...")
             rag_context = await asyncio.to_thread(retrieve_user_context, user_id, message, 4, None)
 
-        simple_fast = route == "fast" and len(message.split()) <= 2 and not attachments
+        simple_fast = (
+            route == "fast"
+            and len(message.split()) <= 2
+            and not attachments
+            and not requests_conversation_history(message)
+        )
         if simple_fast:
             runtime_context = ""
         else:
             await _add_event(job_id, "status", "Verificando skills e contexto...")
-            runtime_context = await run_enabled_skill_context(user_id, message)
+            runtime_context = await run_enabled_skill_context(user_id, message, session_id=session_id)
             skill_activity = runtime_skill_activity(runtime_context)
             if skill_activity:
                 await _add_event(job_id, "skill", json.dumps(skill_activity, ensure_ascii=False))

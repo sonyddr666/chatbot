@@ -22,7 +22,9 @@ class SkillsContextTest(unittest.TestCase):
     def test_enabled_skills_become_prompt_context_for_the_user(self):
         user = UserRepo.create_user("skills-context@example.test", "skillctx", "secret123", "Skill Ctx")
 
-        self.assertEqual(SkillRepo.enabled_context_for_user(user.id), "")
+        default_context = SkillRepo.enabled_context_for_user(user.id)
+        self.assertIn("conversation_history", default_context)
+        self.assertIn("outras conversas privadas", default_context)
 
         self.assertTrue(SkillRepo.set_enabled(user.id, "personal_rag", True))
         self.assertTrue(SkillRepo.set_enabled(user.id, "search_and_answer", False))
@@ -30,6 +32,7 @@ class SkillsContextTest(unittest.TestCase):
         context = SkillRepo.enabled_context_for_user(user.id)
 
         self.assertIn("Skills habilitadas para este usuario", context)
+        self.assertIn("conversation_history", context)
         self.assertIn("personal_rag", context)
         self.assertIn("Consulta a base de conhecimento pessoal", context)
         self.assertNotIn("search_and_answer", context)

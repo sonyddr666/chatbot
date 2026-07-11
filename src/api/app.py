@@ -275,7 +275,7 @@ async def websocket_chat(websocket: WebSocket):
                 if rag_task:
                     await rag_task
                 await websocket.send_json({"type": "status", "text": "Verificando skills e contexto..."})
-                runtime_context = await run_enabled_skill_context(user.id, message)
+                runtime_context = await run_enabled_skill_context(user.id, message, session_id=session_id)
                 skill_activity = runtime_skill_activity(runtime_context)
                 if skill_activity:
                     await websocket.send_json({"type": "skill_activity", "activity": skill_activity})

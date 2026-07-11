@@ -1535,6 +1535,7 @@ class SkillRepo:
             "Skills habilitadas para este usuario:",
             "Pedidos explicitos como pesquise, busque ou procure autorizam as skills de pesquisa. "
             "Quando houver 'Resultado da skill' no contexto, a pesquisa ja foi executada: use o resultado, preserve as fontes e nao peca nova confirmacao. "
+            "Pedidos explicitos sobre chats anteriores autorizam a skill conversation_history, sempre limitada ao proprio usuario. "
             "Shell e escrita externa continuam proibidos sem o fluxo seguro correspondente.",
         ]
         for skill in enabled_skills:

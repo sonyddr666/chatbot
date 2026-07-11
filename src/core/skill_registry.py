@@ -91,6 +91,32 @@ DEFAULT_SKILLS: tuple[dict[str, Any], ...] = (
         "risk_level": 1,
     },
     {
+        "name": "conversation_history",
+        "description": "Consulta trechos relevantes das outras conversas privadas do proprio usuario.",
+        "kind": "internal_history",
+        "definition": {
+            "inputs": {"query": "string"},
+            "permissions": {
+                "network": False,
+                "history_read": True,
+                "workspace_read": False,
+                "workspace_write": False,
+                "shell": False,
+            },
+            "default_enabled": True,
+            "executor": "conversation_history",
+            "scope": "current_user_only",
+            "commands": ["@history assunto", "@historico assunto"],
+            "examples": [
+                "o que eu falei nos outros chats sobre meu projeto",
+                "voce lembra do que conversamos anteriormente",
+            ],
+        },
+        "requires_network": False,
+        "requires_shell": False,
+        "risk_level": 1,
+    },
+    {
         "name": "workspace_manager",
         "description": "Planeja e executa gerenciamento completo do workspace somente apos confirmacao do usuario.",
         "kind": "workspace_agent",

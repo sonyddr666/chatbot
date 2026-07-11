@@ -1103,7 +1103,7 @@ async def chat(body: ChatRequest, request: Request, user=Depends(get_current_use
     context = None
     if use_rag and settings.enable_rag:
         context = retrieve_user_context(user.id, body.message)
-    runtime_context = await run_enabled_skill_context(user.id, body.message)
+    runtime_context = await run_enabled_skill_context(user.id, body.message, session_id=session_id)
     skill_activity = runtime_skill_activity(runtime_context)
 
     memory = get_session(session_id)
@@ -1279,7 +1279,7 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
             yield {"event": "status", "data": "Consultando base de conhecimento..."}
             await rag_task
         yield {"event": "status", "data": "Verificando skills e contexto..."}
-        runtime_context = await run_enabled_skill_context(user.id, body.message)
+        runtime_context = await run_enabled_skill_context(user.id, body.message, session_id=session_id)
         skill_activity = runtime_skill_activity(runtime_context)
         if skill_activity:
             yield {
