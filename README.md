@@ -445,6 +445,7 @@ Os anexos da conversa sao independentes de Documents/RAG:
 - Qualquer extensao, inclusive arquivos sem extensao, pode ser anexada e preservada no Workspace.
 - Texto, codigo, SVG, PDF e DOCX sao extraidos e entregues diretamente ao contexto do LLM no turno.
 - Imagens sao enviadas como entrada multimodal; a leitura depende de o modelo ativo aceitar visao.
+- Imagens reaparecem no historico como miniaturas autenticadas e abrem em uma lightbox fechavel por botao, clique externo ou `Esc`.
 - Binarios sem leitor compativel, como ZIP ou executaveis, ficam salvos e associados a conversa; o modelo recebe metadados e o caminho, mas o conteudo nao e executado nem fingido como legivel.
 - O caminho real do Workspace e informado ao planejador somente quando o usuario pede explicitamente uma operacao de arquivo.
 - Nenhum anexo do chat cria `knowledge_documents`, chunks, embeddings ou vetores automaticamente.

@@ -1,9 +1,10 @@
-import { useState, useMemo, useEffect, type ComponentProps } from 'react'
+import { useState, useMemo, useEffect, useRef, type ComponentProps } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, Download, FileText, Image as ImageIcon, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX } from 'lucide-react'
+import { Copy, Check, Download, FileText, Image as ImageIcon, Maximize2, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX, X } from 'lucide-react'
 import type { ChatAttachmentInfo, ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -146,6 +147,204 @@ function formatAttachmentSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function ImageLightbox({
+  source,
+  attachment,
+  downloading,
+  onClose,
+  onDownload,
+}: {
+  source: string
+  attachment: ChatAttachmentInfo
+  downloading: boolean
+  onClose: () => void
+  onDownload: () => void
+}) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[140] flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Visualizacao de ${attachment.filename}`}
+      onMouseDown={event => {
+        if (event.currentTarget === event.target) onClose()
+      }}
+    >
+      <div
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-neutral-950 shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+        onMouseDown={event => event.stopPropagation()}
+      >
+        <div className="flex min-h-12 items-center gap-2 border-b border-white/10 px-3 py-2 text-white sm:px-4">
+          <ImageIcon size={17} className="shrink-0 text-blue-400" />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{attachment.filename}</span>
+          <button
+            type="button"
+            onClick={onDownload}
+            className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-semibold transition-colors hover:bg-white/10"
+            title="Baixar imagem"
+          >
+            <Download size={16} className={downloading ? 'animate-pulse' : ''} />
+            <span className="hidden sm:inline">Baixar</span>
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            autoFocus
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl transition-colors hover:bg-white/10"
+            title="Fechar imagem"
+            aria-label="Fechar imagem"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-2 sm:p-4">
+          <img
+            src={source}
+            alt={attachment.filename}
+            className="max-h-full max-w-full object-contain"
+          />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function AttachmentImagePreview({
+  attachment,
+  isUser,
+  downloading,
+  onDownload,
+  onUnavailable,
+}: {
+  attachment: ChatAttachmentInfo
+  isUser: boolean
+  downloading: boolean
+  onDownload: () => void
+  onUnavailable: (message: string) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [shouldLoad, setShouldLoad] = useState(false)
+  const [source, setSource] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const element = containerRef.current
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true)
+      return
+    }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        setShouldLoad(true)
+        observer.disconnect()
+      }
+    }, { rootMargin: '300px' })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!shouldLoad) return
+    let active = true
+    let objectUrl = ''
+    setPreviewError(false)
+    void api.downloadChatAttachment(attachment.id)
+      .then(blob => {
+        if (!active) return
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch(() => {
+        if (!active) return
+        setPreviewError(true)
+        onUnavailable('A previa nao esta disponivel; o arquivo pode ter sido movido ou apagado.')
+      })
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [attachment.id, onUnavailable, shouldLoad])
+
+  return (
+    <div
+      ref={containerRef}
+      className="min-w-0 overflow-hidden rounded-xl border"
+      style={{
+        background: isUser ? 'rgba(255,255,255,0.12)' : 'var(--bg-tertiary)',
+        borderColor: isUser ? 'rgba(255,255,255,0.22)' : 'var(--border)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => source && setOpen(true)}
+        disabled={!source}
+        className="group/image relative block aspect-square w-full overflow-hidden disabled:cursor-default"
+        title={source ? `Ampliar ${attachment.filename}` : 'Carregando miniatura'}
+      >
+        {source ? (
+          <img
+            src={source}
+            alt={attachment.filename}
+            loading="lazy"
+            className="h-full w-full object-cover transition-transform duration-300 group-hover/image:scale-[1.03]"
+          />
+        ) : (
+          <span className="grid h-full w-full place-items-center" style={{ background: 'rgba(0,0,0,0.12)' }}>
+            <span className="flex flex-col items-center gap-2 text-xs opacity-70">
+              <ImageIcon size={25} className={previewError ? '' : 'animate-pulse'} />
+              {previewError ? 'Previa indisponivel' : 'Carregando imagem...'}
+            </span>
+          </span>
+        )}
+        {source && (
+          <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-lg bg-black/65 px-2 py-1 text-[10px] font-bold text-white backdrop-blur-sm">
+            <Maximize2 size={12} /> Ampliar
+          </span>
+        )}
+      </button>
+      <div className="flex min-w-0 items-center gap-2 px-2.5 py-2">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-semibold">{attachment.filename}</span>
+          <span className="block truncate text-[10px] opacity-70">{formatAttachmentSize(attachment.size)}</span>
+        </span>
+        <button
+          type="button"
+          onClick={onDownload}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+          title={`Baixar ${attachment.filename}`}
+          aria-label={`Baixar ${attachment.filename}`}
+        >
+          <Download size={14} className={downloading ? 'animate-pulse' : ''} />
+        </button>
+      </div>
+      {open && source && (
+        <ImageLightbox
+          source={source}
+          attachment={attachment}
+          downloading={downloading}
+          onClose={() => setOpen(false)}
+          onDownload={onDownload}
+        />
+      )}
+    </div>
+  )
+}
+
 function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachmentInfo[]; isUser: boolean }) {
   const [downloading, setDownloading] = useState<string | null>(null)
   const [downloadError, setDownloadError] = useState<string | null>(null)
@@ -170,11 +369,26 @@ function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachme
     }
   }
 
+  const imageAttachments = attachments.filter(attachment => attachment.kind === 'image')
+  const fileAttachments = attachments.filter(attachment => attachment.kind !== 'image')
+
   return (
     <div className="mb-2 grid gap-1.5">
-      {attachments.map(attachment => {
-        const Icon = attachment.kind === 'image' ? ImageIcon : FileText
-        return (
+      {!!imageAttachments.length && (
+        <div className={`grid gap-2 ${imageAttachments.length === 1 ? 'max-w-72 grid-cols-1' : 'grid-cols-2'}`}>
+          {imageAttachments.map(attachment => (
+            <AttachmentImagePreview
+              key={attachment.id}
+              attachment={attachment}
+              isUser={isUser}
+              downloading={downloading === attachment.id}
+              onDownload={() => void download(attachment)}
+              onUnavailable={setDownloadError}
+            />
+          ))}
+        </div>
+      )}
+      {fileAttachments.map(attachment => (
           <button
             key={attachment.id}
             type="button"
@@ -186,7 +400,7 @@ function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachme
             }}
             title={`Baixar ${attachment.filename}`}
           >
-            <Icon size={17} className="shrink-0" />
+            <FileText size={17} className="shrink-0" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-semibold">{attachment.filename}</span>
               <span className="block truncate text-[10px] opacity-70">
@@ -195,8 +409,7 @@ function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachme
             </span>
             <Download size={14} className={downloading === attachment.id ? 'animate-pulse' : ''} />
           </button>
-        )
-      })}
+      ))}
       <span className="text-[10px] font-medium opacity-70">Salvo no Workspace · direto ao modelo · fora do RAG</span>
       {downloadError && <span className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>{downloadError}</span>}
     </div>

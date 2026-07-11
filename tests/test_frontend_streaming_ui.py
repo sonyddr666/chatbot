@@ -64,6 +64,17 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("api.uploadChatAttachments", store)
         self.assertIn("attachments.map(attachment => attachment.id)", store)
 
+    def test_chat_images_have_thumbnail_and_accessible_lightbox(self):
+        message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("URL.createObjectURL(blob)", message)
+        self.assertIn("createPortal(", message)
+        self.assertIn('role="dialog"', message)
+        self.assertIn("event.key === 'Escape'", message)
+        self.assertIn("event.currentTarget === event.target", message)
+        self.assertIn("Ampliar", message)
+        self.assertIn("URL.revokeObjectURL", message)
+
     def test_saved_trace_is_restored_when_conversation_reopens(self):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
 
