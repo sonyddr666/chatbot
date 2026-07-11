@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import json
 import re
+from uuid import uuid4
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +24,8 @@ from src.db.models import (
     Skill,
     UserSkill,
     SkillRun,
+    ChatJob,
+    ChatJobEvent,
 )
 
 
@@ -771,7 +774,342 @@ class ConversationRepo:
             db.close()
 
 
+class ChatJobRepo:
+    TERMINAL_STATUSES = {"completed", "interrupted", "failed", "cancelled"}
+
+    @staticmethod
+    def _validate_replayed_request(
+        snapshot: dict,
+        *,
+        session_id: str,
+        message: str,
+        response_mode: str,
+        reasoning_effort: str,
+        use_rag: bool,
+    ) -> None:
+        expected = (
+            session_id,
+            message,
+            response_mode,
+            reasoning_effort,
+            bool(use_rag),
+        )
+        actual = (
+            snapshot.get("session_id"),
+            snapshot.get("message"),
+            snapshot.get("response_mode"),
+            snapshot.get("reasoning_effort"),
+            bool(snapshot.get("use_rag")),
+        )
+        if actual != expected:
+            raise ValueError("client_request_id ja foi usado por outro pedido")
+
+    @staticmethod
+    def create_with_messages(
+        *,
+        user_id: int,
+        session_id: str,
+        message: str,
+        provider: dict,
+        response_mode: str,
+        reasoning_effort: str,
+        use_rag: bool,
+        client_request_id: str | None = None,
+    ) -> dict:
+        db = get_session_db()
+        try:
+            if client_request_id:
+                existing = db.query(ChatJob).filter(
+                    ChatJob.user_id == user_id,
+                    ChatJob.client_request_id == client_request_id,
+                ).first()
+                if existing:
+                    snapshot = ChatJobRepo._snapshot(db, existing)
+                    ChatJobRepo._validate_replayed_request(
+                        snapshot,
+                        session_id=session_id,
+                        message=message,
+                        response_mode=response_mode,
+                        reasoning_effort=reasoning_effort,
+                        use_rag=use_rag,
+                    )
+                    return snapshot
+
+            conv = db.query(Conversation).filter(
+                Conversation.session_id == session_id,
+                Conversation.user_id == user_id,
+            ).first()
+            if not conv:
+                conv = Conversation(session_id=session_id, user_id=user_id, title=f"Conversa {session_id[:8]}")
+                db.add(conv)
+                db.flush()
+
+            active = db.query(ChatJob).filter(
+                ChatJob.conversation_id == conv.id,
+                ChatJob.status.in_(["queued", "running"]),
+            ).first()
+            if active:
+                raise ValueError("Esta conversa ja possui uma resposta em andamento")
+
+            job_id = f"job_{uuid4().hex}"
+            user_message = Message(
+                conversation_id=conv.id,
+                user_id=user_id,
+                role="user",
+                content=message,
+                status="completed",
+            )
+            assistant_message = Message(
+                conversation_id=conv.id,
+                user_id=user_id,
+                role="assistant",
+                content="",
+                reasoning="",
+                skill_activities_json="[]",
+                provider_id=provider.get("provider_id"),
+                provider_name=provider.get("provider_name"),
+                model_id=provider.get("model_id"),
+                model_name=provider.get("model_name"),
+                job_id=job_id,
+                status="running",
+            )
+            db.add_all([user_message, assistant_message])
+            db.flush()
+
+            job = ChatJob(
+                id=job_id,
+                user_id=user_id,
+                client_request_id=client_request_id,
+                conversation_id=conv.id,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                provider_id=provider.get("provider_id") or "",
+                provider_name=provider.get("provider_name") or "",
+                model_id=provider.get("model_id") or "",
+                model_name=provider.get("model_name") or "",
+                response_mode=response_mode,
+                reasoning_effort=reasoning_effort,
+                use_rag=use_rag,
+                status="queued",
+            )
+            db.add(job)
+            conv.messages_count = (conv.messages_count or 0) + 2
+            conv.updated_at = datetime.now(timezone.utc)
+            if (conv.messages_count <= 2):
+                conv.title = message[:60] + ("..." if len(message) > 60 else "")
+            db.commit()
+            return ChatJobRepo.get(job_id, user_id) or {}
+        except IntegrityError:
+            db.rollback()
+            if client_request_id:
+                existing = db.query(ChatJob).filter(
+                    ChatJob.user_id == user_id,
+                    ChatJob.client_request_id == client_request_id,
+                ).first()
+                if existing:
+                    snapshot = ChatJobRepo._snapshot(db, existing)
+                    ChatJobRepo._validate_replayed_request(
+                        snapshot,
+                        session_id=session_id,
+                        message=message,
+                        response_mode=response_mode,
+                        reasoning_effort=reasoning_effort,
+                        use_rag=use_rag,
+                    )
+                    return snapshot
+            raise
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
+    def _snapshot(db, job: ChatJob) -> dict:
+        assistant = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+        user_message = db.query(Message).filter(Message.id == job.user_message_id).first()
+        conversation = db.query(Conversation).filter(Conversation.id == job.conversation_id).first()
+        return {
+            "id": job.id,
+            "user_id": job.user_id,
+            "client_request_id": job.client_request_id,
+            "conversation_id": job.conversation_id,
+            "user_message_id": job.user_message_id,
+            "assistant_message_id": job.assistant_message_id,
+            "session_id": conversation.session_id if conversation else "",
+            "message": user_message.content if user_message else "",
+            "provider_id": job.provider_id or "",
+            "provider_name": job.provider_name or "",
+            "model_id": job.model_id or "",
+            "model_name": job.model_name or "",
+            "response_mode": job.response_mode,
+            "reasoning_effort": job.reasoning_effort,
+            "use_rag": bool(job.use_rag),
+            "status": job.status,
+            "last_event_id": job.last_event_id or 0,
+            "content": assistant.content if assistant else "",
+            "reasoning": assistant.reasoning if assistant else "",
+            "error": job.error or "",
+            "created_at": utc_isoformat(job.created_at),
+            "started_at": utc_isoformat(job.started_at) if job.started_at else None,
+            "completed_at": utc_isoformat(job.completed_at) if job.completed_at else None,
+        }
+
+    @staticmethod
+    def get(job_id: str, user_id: int | None = None) -> dict | None:
+        db = get_session_db()
+        try:
+            query = db.query(ChatJob).filter(ChatJob.id == job_id)
+            if user_id is not None:
+                query = query.filter(ChatJob.user_id == user_id)
+            job = query.first()
+            return ChatJobRepo._snapshot(db, job) if job else None
+        finally:
+            db.close()
+
+    @staticmethod
+    def set_running(job_id: str) -> None:
+        db = get_session_db()
+        try:
+            job = db.query(ChatJob).filter(ChatJob.id == job_id).first()
+            if job:
+                job.status = "running"
+                job.started_at = datetime.now(timezone.utc)
+                db.commit()
+        finally:
+            db.close()
+
+    @staticmethod
+    def claim_queued(job_id: str) -> bool:
+        db = get_session_db()
+        try:
+            updated = db.query(ChatJob).filter(
+                ChatJob.id == job_id,
+                ChatJob.status == "queued",
+            ).update({
+                ChatJob.status: "running",
+                ChatJob.started_at: datetime.now(timezone.utc),
+            }, synchronize_session=False)
+            db.commit()
+            return updated == 1
+        finally:
+            db.close()
+
+    @staticmethod
+    def add_event(job_id: str, event_type: str, payload: str) -> int:
+        db = get_session_db()
+        try:
+            job = db.query(ChatJob).filter(ChatJob.id == job_id).first()
+            if not job:
+                raise ValueError("Job nao encontrado")
+            event = ChatJobEvent(job_id=job_id, type=event_type, payload=payload)
+            db.add(event)
+            db.flush()
+            job.last_event_id = event.id
+            message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+            if message and event_type == "text_delta":
+                message.content = (message.content or "") + payload
+            elif message and event_type == "reasoning":
+                message.reasoning = (message.reasoning or "") + payload
+            elif message and event_type == "skill":
+                try:
+                    activities = json.loads(message.skill_activities_json or "[]")
+                    activities.append(json.loads(payload))
+                    message.skill_activities_json = json.dumps(activities, ensure_ascii=False)
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            db.commit()
+            return int(event.id)
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_events(job_id: str, user_id: int, after_id: int = 0, limit: int = 200) -> list[dict]:
+        db = get_session_db()
+        try:
+            owned = db.query(ChatJob.id).filter(ChatJob.id == job_id, ChatJob.user_id == user_id).first()
+            if not owned:
+                return []
+            events = db.query(ChatJobEvent).filter(
+                ChatJobEvent.job_id == job_id,
+                ChatJobEvent.id > max(0, after_id),
+            ).order_by(ChatJobEvent.id.asc()).limit(limit).all()
+            return [{
+                "id": event.id,
+                "type": event.type,
+                "payload": event.payload,
+                "created_at": utc_isoformat(event.created_at),
+            } for event in events]
+        finally:
+            db.close()
+
+    @staticmethod
+    def finish(job_id: str, status: str, error: str = "") -> int:
+        db = get_session_db()
+        try:
+            job = db.query(ChatJob).filter(ChatJob.id == job_id).first()
+            if not job:
+                return 0
+            job.status = status
+            job.error = error
+            job.completed_at = datetime.now(timezone.utc)
+            message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+            if message:
+                message.status = status
+            event_type = "done" if status == "completed" else "error"
+            payload = json.dumps({"status": status, "error": error}, ensure_ascii=False)
+            event = ChatJobEvent(job_id=job_id, type=event_type, payload=payload)
+            db.add(event)
+            db.flush()
+            job.last_event_id = event.id
+            db.commit()
+            return int(event.id)
+        finally:
+            db.close()
+
+    @staticmethod
+    def interrupt_stale() -> int:
+        db = get_session_db()
+        try:
+            jobs = db.query(ChatJob).filter(ChatJob.status == "running").all()
+            for job in jobs:
+                job.status = "interrupted"
+                job.error = "Servidor reiniciado durante a resposta"
+                job.completed_at = datetime.now(timezone.utc)
+                message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+                if message:
+                    message.status = "interrupted"
+            db.commit()
+            return len(jobs)
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_queued_ids() -> list[str]:
+        db = get_session_db()
+        try:
+            return [job_id for (job_id,) in db.query(ChatJob.id).filter(ChatJob.status == "queued").all()]
+        finally:
+            db.close()
+
+
 class MessageRepo:
+    @staticmethod
+    def mark_read(message_id: int, user_id: int) -> bool:
+        db = get_session_db()
+        try:
+            message = db.query(Message).filter(
+                Message.id == message_id,
+                Message.user_id == user_id,
+            ).first()
+            if not message:
+                return False
+            message.read_at = datetime.now(timezone.utc)
+            db.commit()
+            return True
+        finally:
+            db.close()
+
     @staticmethod
     def update_content(message_id: int, content: str, user_id: int | None = None) -> Optional[Message]:
         db = get_session_db()

@@ -50,6 +50,16 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("reasoning: m.reasoning || ''", store)
         self.assertIn("skillActivities: Array.isArray(m.skill_activities)", store)
 
+    def test_chat_jobs_are_primary_and_reattachable(self):
+        api = (ROOT / "frontend/src/lib/api.ts").read_text(encoding="utf-8")
+        store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
+
+        self.assertIn("createChatJob", api)
+        self.assertIn("after_id=${Math.max(0, afterId)}", api)
+        self.assertIn("await api.createChatJob", store)
+        self.assertIn("resumePersistedJob", store)
+        self.assertIn("reasoningEffort: ReasoningEffort", api)
+
 
 if __name__ == "__main__":
     unittest.main()

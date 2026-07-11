@@ -1016,6 +1016,8 @@ O chat oferece tres modos selecionaveis na barra superior e nas configuracoes:
 - `Pensando`: solicita maior esforco e resumo detalhado de raciocinio ao Codex.
 - `Live`: prioriza primeiro token e alimenta o Inworld TTS enquanto o texto chega. Ao ligar o microfone Live, esse modo e usado automaticamente sem substituir a preferencia salva.
 
+Modo e esforco sao controles separados. O seletor de esforco oferece `Leve`, `Medio`, `Alto`, `Extra alto` e `Maximo`. No Codex, `Maximo` usa `xhigh`, que e o teto aceito no transporte. Selecionar `Pensando` escolhe `Alto` inicialmente; selecionar `Live` escolhe `Leve`. O usuario pode mudar o esforco depois.
+
 O parser Codex separa explicitamente texto final, resumo de raciocinio e erros. Deltas de argumentos de ferramentas nao sao enviados para a resposta nem para o TTS. Configure no Coolify:
 
 ```env
@@ -1024,6 +1026,19 @@ CODEX_RESPONSE_MODE_DEFAULT=normal
 ```
 
 Defina `CODEX_SSE_ENABLED=false` para voltar imediatamente ao parser legado. O raciocinio exibido e somente o resumo realmente enviado pelo provider; quando ele nao estiver disponivel, a interface mostra apenas o status de processamento.
+
+## Chat Jobs Persistentes
+
+Novas respostas sao executadas por jobs independentes da pagina:
+
+- `POST /api/v1/chat/jobs` cria pergunta, resposta vazia e job antes de chamar o modelo.
+- `GET /api/v1/chat/jobs/{job_id}` consulta texto parcial e estado.
+- `GET /api/v1/chat/jobs/{job_id}/stream?after_id=N` reanexa ao SSE sem repetir eventos anteriores.
+- `DELETE /api/v1/chat/jobs/{job_id}` cancela explicitamente a geracao.
+
+Antes do `POST`, o frontend salva no `localStorage` um pedido pendente com `client_request_id`. Se a pagina fechar antes de receber o `job_id`, a mesma chave e reenviada no retorno. O banco possui unicidade por usuario e devolve o job existente sem duplicar a pergunta ou a resposta; reutilizar a chave com outro pedido retorna conflito.
+
+Fechar o navegador encerra apenas o leitor SSE. O backend continua processando e persistindo `reasoning`, `text_delta`, skills e estado final. Ao trocar de conversa, eventos atrasados continuam vinculados ao `job_id` correto e nao escrevem na ultima bolha aberta. Se o servidor reiniciar, jobs ainda `queued` sao iniciados; jobs que ja estavam `running` ficam `interrupted` e preservam todo o texto gravado. O WebSocket antigo permanece temporariamente como fallback, mas nao e mais o dono das novas execucoes iniciadas pela interface.
 
 ## Banco de Dados
 

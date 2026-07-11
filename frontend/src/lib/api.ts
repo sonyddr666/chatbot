@@ -45,6 +45,9 @@ export interface ChatMessage {
   modelName?: string | null
   workspacePlan?: WorkspaceActionPlan
   skillActivities?: SkillActivity[]
+  jobId?: string | null
+  jobStatus?: 'queued' | 'running' | 'completed' | 'interrupted' | 'failed' | 'cancelled'
+  readAt?: string | null
 }
 export interface Conversation {
   id: number; session_id: string; title: string; language: string
@@ -284,8 +287,11 @@ export interface WorkspaceActionPlan {
 
 /** Chunk do streaming SSE */
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity'
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity' | 'job_state'
   text?: string
+  eventId?: number
+  jobId?: string
+  jobStatus?: string
   messageId?: number
   hasReasoning?: boolean
   route?: 'fast' | 'full'
@@ -305,6 +311,25 @@ export interface StreamChunk {
     classify_ms?: number
     moderation_ms?: number
   }
+}
+
+export interface ChatJobInfo {
+  id: string
+  client_request_id?: string | null
+  session_id: string
+  user_message_id: number
+  assistant_message_id: number
+  status: 'queued' | 'running' | 'completed' | 'interrupted' | 'failed' | 'cancelled'
+  last_event_id: number
+  response_mode: ResponseMode
+  reasoning_effort: ReasoningEffort
+  provider_id: string
+  provider_name: string
+  model_id: string
+  model_name: string
+  content: string
+  reasoning: string
+  error: string
 }
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -404,6 +429,114 @@ export const api = {
     req<{ response: string; reasoning?: string; skill_activities?: SkillActivity[]; session_id: string; message_id?: number; provider_id?: string; provider_name?: string; model_id?: string; model_name?: string; workspace_plan?: WorkspaceActionPlan }>('/chat', {
       method: 'POST', body: JSON.stringify({ message, session_id: sessionId, use_rag: useRag }),
     }),
+
+  createChatJob: (
+    message: string,
+    sessionId: string,
+    useRag: boolean,
+    responseMode: ResponseMode,
+    reasoningEffort: ReasoningEffort,
+    clientRequestId?: string,
+  ) => req<ChatJobInfo>('/chat/jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      message,
+      session_id: sessionId,
+      use_rag: useRag,
+      response_mode: responseMode,
+      reasoning_effort: reasoningEffort,
+      client_request_id: clientRequestId,
+    }),
+  }),
+  getChatJob: (jobId: string) => req<ChatJobInfo>(`/chat/jobs/${encodeURIComponent(jobId)}`),
+  cancelChatJob: (jobId: string) => req<{ status: string; job_id: string }>(
+    `/chat/jobs/${encodeURIComponent(jobId)}`,
+    { method: 'DELETE' },
+  ),
+  markMessageRead: (messageId: number) => req<{ status: string; message_id: number }>(
+    `/messages/${messageId}/read`,
+    { method: 'POST' },
+  ),
+
+  async *streamChatJob(
+    jobId: string,
+    afterId = 0,
+    signal?: AbortSignal,
+  ): AsyncGenerator<StreamChunk> {
+    const res = await fetch(
+      `${API}/chat/jobs/${encodeURIComponent(jobId)}/stream?after_id=${Math.max(0, afterId)}`,
+      { headers: authHeaders(), signal },
+    )
+    if (!res.ok) throw new Error('Falha ao acompanhar a resposta')
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('Stream do job indisponivel')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let currentEvent = ''
+    let currentId: number | undefined
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('id: ')) {
+          const parsed = Number(line.slice(4).trim())
+          currentId = Number.isFinite(parsed) ? parsed : undefined
+          continue
+        }
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+          continue
+        }
+        if (!line.startsWith('data: ')) continue
+        const raw = line.slice(6).trim()
+        const base = { eventId: currentId, jobId }
+        if (currentEvent === 'token') yield { ...base, type: 'content', text: raw }
+        else if (currentEvent === 'reasoning') yield { ...base, type: 'reasoning', text: raw }
+        else if (currentEvent === 'status') yield { ...base, type: 'status', text: raw }
+        else if (currentEvent === 'workspace_plan') {
+          yield { ...base, type: 'workspace_plan', workspacePlan: JSON.parse(raw) }
+        } else if (currentEvent === 'skill_activity') {
+          yield { ...base, type: 'skill_activity', skillActivity: JSON.parse(raw) }
+        } else if (currentEvent === 'start') {
+          const data = JSON.parse(raw)
+          yield {
+            ...base,
+            type: 'start',
+            messageId: data.message_id,
+            responseMode: data.response_mode,
+            reasoningEffort: data.reasoning_effort,
+            providerId: data.provider_id,
+            providerName: data.provider_name,
+            modelId: data.model_id,
+            modelName: data.model_name,
+          }
+        } else if (currentEvent === 'done') {
+          const data = JSON.parse(raw)
+          yield {
+            ...base,
+            type: 'done',
+            messageId: data.message_id,
+            hasReasoning: data.has_reasoning,
+            responseMode: data.response_mode,
+            reasoningEffort: data.reasoning_effort,
+            providerId: data.provider_id,
+            providerName: data.provider_name,
+            modelId: data.model_id,
+            modelName: data.model_name,
+          }
+          return
+        } else if (currentEvent === 'job_state') {
+          const data = JSON.parse(raw)
+          yield { ...base, type: 'job_state', jobStatus: data.status, text: data.error }
+          return
+        }
+      }
+    }
+  },
 
   /**
    * Streaming SSE — lê o stream do backend e yield chunks com tipo.

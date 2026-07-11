@@ -43,7 +43,7 @@ from src.core.user_provider_manager import (
 )
 from src.rag.chunker import split_text, split_documents
 from src.rag.personal import add_user_documents, delete_user_documents, retrieve_user_context, user_rag_collection
-from src.db.repository import ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
+from src.db.repository import ChatJobRepo, ConversationRepo, DocumentRepo, MessageRepo, PreferenceSuggestionRepo, UserRepo, SkillRepo, SkillRunRepo, UserPreferenceRepo
 from src.db.models import init_db as _init_db
 from src.config import settings
 from src.core.auth import create_access_token
@@ -52,6 +52,7 @@ from src.core.ingestion import SUPPORTED_EXTENSIONS, extract_text_for_ingestion,
 from src.core.userspace import safe_user_path, write_profile_text
 from src.core.time_utils import utc_isoformat
 from src.tools.perplexo_search import perplexo_health
+from src.core.chat_jobs import cancel_chat_job, start_chat_job
 
 router = APIRouter()
 _SLOWAPI_CONFIG = os.path.join(os.path.dirname(__file__), "slowapi.env")
@@ -1325,6 +1326,135 @@ async def chat_stream(body: ChatStreamRequest, request: Request, user=Depends(ge
     return EventSourceResponse(event_generator())
 
 
+@router.post("/chat/jobs", status_code=202)
+@limiter.limit("30/minute")
+async def create_chat_job(body: ChatStreamRequest, request: Request, user=Depends(get_current_user)):
+    """Persist both messages first, then start execution outside the request."""
+    if settings.enable_moderation:
+        blocked = moderate_text(body.message)
+        if blocked:
+            raise HTTPException(status_code=400, detail=blocked)
+
+    response_mode = normalize_response_mode(
+        body.response_mode,
+        legacy_use_thinking=body.use_thinking,
+        default=settings.codex_response_mode_default,
+    )
+    reasoning_effort = normalize_reasoning_effort(body.reasoning_effort, mode=response_mode)
+    provider_config = get_active_config_for_user(user.id)
+    model_meta = metadata_from_config(provider_config)
+    try:
+        job = await asyncio.to_thread(
+            ChatJobRepo.create_with_messages,
+            user_id=user.id,
+            session_id=_scoped_session_id(user.id, body.session_id),
+            message=body.message.strip(),
+            provider=model_meta,
+            response_mode=response_mode,
+            reasoning_effort=reasoning_effort,
+            use_rag=body.use_rag,
+            client_request_id=body.client_request_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    start_chat_job(job["id"])
+    job["session_id"] = _public_session_id(user.id, job["session_id"])
+    return job
+
+
+@router.get("/chat/jobs/{job_id}")
+async def get_chat_job(job_id: str, user=Depends(get_current_user)):
+    job = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nao encontrado")
+    job["session_id"] = _public_session_id(user.id, job["session_id"])
+    return job
+
+
+@router.delete("/chat/jobs/{job_id}")
+async def stop_chat_job(job_id: str, user=Depends(get_current_user)):
+    job = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nao encontrado")
+    cancelled = await cancel_chat_job(job_id)
+    return {"status": "cancelled" if cancelled else job["status"], "job_id": job_id}
+
+
+@router.post("/messages/{message_id}/read")
+async def mark_message_read(message_id: int, user=Depends(get_current_user)):
+    marked = await asyncio.to_thread(MessageRepo.mark_read, message_id, user.id)
+    if not marked:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    return {"status": "read", "message_id": message_id}
+
+
+@router.get("/chat/jobs/{job_id}/stream")
+async def stream_chat_job(
+    job_id: str,
+    request: Request,
+    after_id: int = Query(default=0, ge=0),
+    user=Depends(get_current_user),
+):
+    job = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nao encontrado")
+
+    async def job_events():
+        cursor = after_id
+        yield {
+            "event": "start",
+            "data": json.dumps({
+                "job_id": job_id,
+                "message_id": job["assistant_message_id"],
+                "response_mode": job["response_mode"],
+                "reasoning_effort": job["reasoning_effort"],
+                "provider_id": job["provider_id"],
+                "provider_name": job["provider_name"],
+                "model_id": job["model_id"],
+                "model_name": job["model_name"],
+            }, ensure_ascii=False),
+        }
+        while True:
+            events = await asyncio.to_thread(ChatJobRepo.list_events, job_id, user.id, cursor, 200)
+            for event in events:
+                cursor = int(event["id"])
+                event_type = event["type"]
+                payload = event["payload"]
+                if event_type == "text_delta":
+                    name = "token"
+                elif event_type == "skill":
+                    name = "skill_activity"
+                else:
+                    name = event_type
+
+                if event_type == "done":
+                    snapshot = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)
+                    payload = json.dumps({
+                        "job_id": job_id,
+                        "message_id": snapshot["assistant_message_id"],
+                        "has_reasoning": bool(snapshot["reasoning"]),
+                        "response_mode": snapshot["response_mode"],
+                        "reasoning_effort": snapshot["reasoning_effort"],
+                        "provider_id": snapshot["provider_id"],
+                        "provider_name": snapshot["provider_name"],
+                        "model_id": snapshot["model_id"],
+                        "model_name": snapshot["model_name"],
+                    }, ensure_ascii=False)
+                elif event_type == "error":
+                    name = "job_state"
+
+                yield {"id": str(cursor), "event": name, "data": payload}
+
+            snapshot = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)
+            if snapshot["status"] in ChatJobRepo.TERMINAL_STATUSES and cursor >= snapshot["last_event_id"]:
+                return
+            if await request.is_disconnected():
+                return
+            await asyncio.sleep(0.1)
+
+    return EventSourceResponse(job_events(), ping=15)
+
+
 @router.post("/chat/regenerate")
 async def regenerate(session_id: str = "default", user=Depends(get_current_user)):
     """Regera a ultima resposta do assistente."""
@@ -1420,6 +1550,9 @@ async def get_conversation(session_id: str, user=Depends(get_current_user)):
                 "provider_name": m.provider_name,
                 "model_id": m.model_id,
                 "model_name": m.model_name,
+                "job_id": m.job_id,
+                "status": m.status or "completed",
+                "read_at": utc_isoformat(m.read_at) if m.read_at else None,
             }
             for m in msgs
         ],

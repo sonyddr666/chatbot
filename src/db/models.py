@@ -1,7 +1,7 @@
 """SQLAlchemy models and lightweight SQLite migrations."""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, create_engine, text
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, relationship, Session
 
 from src.config import settings
@@ -128,8 +128,48 @@ class Message(Base):
     provider_name = Column(String(255), nullable=True)
     model_id = Column(String(150), nullable=True)
     model_name = Column(String(255), nullable=True)
+    job_id = Column(String(64), nullable=True, index=True)
+    status = Column(String(30), nullable=False, default="completed", index=True)
+    read_at = Column(DateTime, nullable=True)
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class ChatJob(Base):
+    __tablename__ = "chat_jobs"
+    __table_args__ = (
+        Index("uq_chat_jobs_user_client_request", "user_id", "client_request_id", unique=True),
+    )
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    client_request_id = Column(String(64), nullable=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
+    user_message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    assistant_message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    provider_id = Column(String(100), default="")
+    provider_name = Column(String(255), default="")
+    model_id = Column(String(150), default="")
+    model_name = Column(String(255), default="")
+    response_mode = Column(String(30), nullable=False, default="normal")
+    reasoning_effort = Column(String(30), nullable=False, default="low")
+    use_rag = Column(Boolean, nullable=False, default=False)
+    status = Column(String(30), nullable=False, default="queued", index=True)
+    last_event_id = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    error = Column(Text, default="")
+
+
+class ChatJobEvent(Base):
+    __tablename__ = "chat_job_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String(64), ForeignKey("chat_jobs.id"), nullable=False, index=True)
+    type = Column(String(40), nullable=False, index=True)
+    payload = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class KnowledgeDocument(Base):
@@ -234,6 +274,9 @@ def init_db():
                 "user_id": "ALTER TABLE messages ADD COLUMN user_id INTEGER",
                 "reasoning": "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''",
                 "skill_activities_json": "ALTER TABLE messages ADD COLUMN skill_activities_json TEXT NOT NULL DEFAULT '[]'",
+                "job_id": "ALTER TABLE messages ADD COLUMN job_id VARCHAR(64)",
+                "status": "ALTER TABLE messages ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'completed'",
+                "read_at": "ALTER TABLE messages ADD COLUMN read_at DATETIME",
             }.items():
                 if name not in message_cols:
                     conn.execute(text(ddl))
@@ -241,6 +284,14 @@ def init_db():
             conversation_cols = _sqlite_columns(conn, "conversations")
             if "user_id" not in conversation_cols:
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN user_id INTEGER"))
+
+            chat_job_cols = _sqlite_columns(conn, "chat_jobs")
+            if "client_request_id" not in chat_job_cols:
+                conn.execute(text("ALTER TABLE chat_jobs ADD COLUMN client_request_id VARCHAR(64)"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_jobs_user_client_request "
+                "ON chat_jobs (user_id, client_request_id)"
+            ))
 
             document_cols = _sqlite_columns(conn, "knowledge_documents")
             for name, ddl in {

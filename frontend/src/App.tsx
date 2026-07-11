@@ -15,7 +15,7 @@ import { DocumentsPanel } from './components/DocumentsPanel'
 import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { useChatStore } from './hooks/useChatStore'
-import { api, getAuthToken, setAuthToken, type ChatMessage, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
+import { api, getAuthToken, setAuthToken, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useLiveVoice } from './voice/useLiveVoice'
 
@@ -23,8 +23,8 @@ export default function App() {
   const {
     messages, isLoading, error, route, streamStatus,
     sendMessage, regenerate, stopGeneration, loadConfig, loadProfiles,
-    toggleSidebar, setError, sessionId,
-    responseMode, setResponseMode, reasoningEffort, setReasoningEffort, useRag,
+    toggleSidebar, setError,
+    responseMode, setResponseMode, reasoningEffort, setReasoningEffort,
     setWsConnected, lastMetrics,
   } = useChatStore()
 
@@ -120,7 +120,6 @@ export default function App() {
 
   const {
     connected: wsConnected,
-    sendMessage: wsSend,
     reconnect: reconnectWs,
     disconnect: disconnectWs,
     restart: restartWs,
@@ -233,28 +232,8 @@ export default function App() {
 
   const handleSend = useCallback((content: string) => {
     const effectiveMode: ResponseMode = liveEnabledRef.current ? 'live' : responseMode
-    if (wsConnected) {
-      useChatStore.setState({ isLoading: true, error: null, streamStatus: 'Preparando resposta...' })
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content,
-        timestamp: new Date(),
-      }
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-        reasoning: '',
-      }
-      useChatStore.setState(state => ({ messages: [...state.messages, userMsg, assistantMsg] }))
-      wsSend(content, sessionId, useRag, effectiveMode, reasoningEffort)
-      return
-    }
-
     sendMessage(content, effectiveMode, reasoningEffort)
-  }, [reasoningEffort, responseMode, sendMessage, sessionId, useRag, wsConnected, wsSend])
+  }, [reasoningEffort, responseMode, sendMessage])
 
   const handleStop = useCallback(() => {
     stopGeneration()

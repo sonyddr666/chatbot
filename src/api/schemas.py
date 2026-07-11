@@ -34,6 +34,7 @@ class ChatResponse(BaseModel):
 class ChatStreamRequest(BaseModel):
     message: str
     session_id: Optional[str] = "default"
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     use_rag: bool = False
     use_thinking: Optional[bool] = None
     response_mode: Optional[ResponseMode] = None

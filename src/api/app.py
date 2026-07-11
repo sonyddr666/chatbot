@@ -13,6 +13,9 @@ from src.api.workspace_routes import router as workspace_router
 from src.api.tts_routes import router as tts_router
 from src.config import settings
 from src.core.auth_required import resolve_authorized_user
+from src.db.models import init_db as initialize_database
+from src.db.repository import ChatJobRepo, UserRepo
+from src.core.chat_jobs import start_chat_job
 
 app = FastAPI(
     title="Chatbot API",
@@ -28,6 +31,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def initialize_persistent_runtime():
+    initialize_database()
+    UserRepo.ensure_initial_admin()
+    await asyncio.to_thread(ChatJobRepo.interrupt_stale)
+    queued_job_ids = await asyncio.to_thread(ChatJobRepo.list_queued_ids)
+    for job_id in queued_job_ids:
+        start_chat_job(job_id)
 
 
 @app.get("/")

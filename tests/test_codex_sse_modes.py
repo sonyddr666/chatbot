@@ -1,7 +1,12 @@
 import unittest
 
 from src.core.codex_client import parse_codex_sse_event
-from src.core.response_modes import CODEX_MODE_PROFILES, normalize_response_mode
+from src.core.response_modes import (
+    CODEX_MODE_PROFILES,
+    codex_wire_reasoning_effort,
+    normalize_reasoning_effort,
+    normalize_response_mode,
+)
 
 
 class CodexSseModeTests(unittest.TestCase):
@@ -36,6 +41,8 @@ class CodexSseModeTests(unittest.TestCase):
         self.assertEqual(normalize_response_mode("live"), "live")
         self.assertEqual(CODEX_MODE_PROFILES["live"]["reasoning_effort"], "low")
         self.assertEqual(CODEX_MODE_PROFILES["thinking"]["reasoning_summary"], "detailed")
+        self.assertEqual(normalize_reasoning_effort("max", mode="thinking"), "max")
+        self.assertEqual(codex_wire_reasoning_effort("max"), "xhigh")
 
 
 if __name__ == "__main__":

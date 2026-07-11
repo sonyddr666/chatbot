@@ -192,6 +192,30 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{message.content}</p>
           ) : (
             <>
+              {message.jobId && message.jobStatus === 'completed' && !message.readAt && (
+                <div
+                  className="mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold"
+                  style={{ background: '#f0fdf4', borderColor: '#86efac', color: '#15803d' }}
+                >
+                  Nao lida
+                </div>
+              )}
+              {message.jobStatus && message.jobStatus !== 'completed' && (
+                <div
+                  className="mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold"
+                  style={{
+                    background: message.jobStatus === 'running' || message.jobStatus === 'queued' ? '#eff6ff' : '#fff7ed',
+                    borderColor: message.jobStatus === 'running' || message.jobStatus === 'queued' ? '#93c5fd' : '#fdba74',
+                    color: message.jobStatus === 'running' || message.jobStatus === 'queued' ? '#1d4ed8' : '#c2410c',
+                  }}
+                >
+                  {message.jobStatus === 'queued' && 'Na fila'}
+                  {message.jobStatus === 'running' && 'Respondendo...'}
+                  {message.jobStatus === 'interrupted' && 'Interrompida'}
+                  {message.jobStatus === 'failed' && 'Erro na resposta'}
+                  {message.jobStatus === 'cancelled' && 'Cancelada'}
+                </div>
+              )}
               {!!message.skillActivities?.length && (
                 <SkillActivityBlock activities={message.skillActivities} />
               )}
