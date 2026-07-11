@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { FileText, Image as ImageIcon, Paperclip, Send, StopCircle, UploadCloud, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react'
+import { FileText, Paperclip, Send, StopCircle, UploadCloud, X } from 'lucide-react'
 
 const MAX_FILES = 5
+const CLIPBOARD_IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/avif': 'avif',
+  'image/bmp': 'bmp',
+  'image/gif': 'gif',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/svg+xml': 'svg',
+  'image/webp': 'webp',
+}
 interface Props {
   onSend: (message: string, files: File[]) => Promise<boolean | void> | boolean | void
   busy?: boolean
@@ -14,6 +23,34 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function clipboardImageFile(file: File, index: number) {
+  const extension = CLIPBOARD_IMAGE_EXTENSIONS[file.type] || 'png'
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '')
+  return new File(
+    [file],
+    `clipboard-${timestamp}${index ? `-${index + 1}` : ''}.${extension}`,
+    { type: file.type || `image/${extension}`, lastModified: Date.now() + index },
+  )
+}
+
+function PendingImageThumbnail({ file }: { file: File }) {
+  const [source, setSource] = useState('')
+
+  useEffect(() => {
+    const nextSource = URL.createObjectURL(file)
+    setSource(nextSource)
+    return () => URL.revokeObjectURL(nextSource)
+  }, [file])
+
+  return (
+    <img
+      src={source}
+      alt={`Preview de ${file.name}`}
+      className="h-10 w-10 shrink-0 rounded-lg object-cover"
+    />
+  )
 }
 
 export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, status }: Props) {
@@ -92,6 +129,19 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
     event.target.value = ''
   }
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedImages: File[] = []
+    for (const item of Array.from(event.clipboardData.items || [])) {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+      const file = item.getAsFile()
+      if (file) pastedImages.push(clipboardImageFile(file, pastedImages.length))
+    }
+    if (!pastedImages.length) return
+
+    event.preventDefault()
+    addFiles(pastedImages)
+  }
+
   const handleSend = async () => {
     if ((!input.trim() && files.length === 0) || busy || isSubmitting) return
     const submittedText = input.trim()
@@ -162,14 +212,15 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
           <div className="mb-2 flex flex-wrap gap-2">
             {files.map((file, index) => {
               const isImage = file.type.startsWith('image/')
-              const Icon = isImage ? ImageIcon : FileText
               return (
                 <div
                   key={`${file.name}-${file.size}-${file.lastModified}`}
                   className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border px-3 py-2"
                   style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
                 >
-                  <Icon size={16} style={{ color: 'var(--accent)' }} />
+                  {isImage
+                    ? <PendingImageThumbnail file={file} />
+                    : <FileText size={16} style={{ color: 'var(--accent)' }} />}
                   <div className="min-w-0">
                     <p className="max-w-48 truncate text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{file.name}</p>
                     <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{formatFileSize(file.size)}</p>
@@ -216,11 +267,12 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
             value={input}
             onChange={event => setInput(event.target.value)}
             onKeyDown={handleKey}
+            onPaste={handlePaste}
             placeholder={busy
               ? 'Continue digitando... o envio libera quando a resposta terminar'
               : files.length
                 ? 'Escreva o que o modelo deve fazer com os arquivos...'
-                : 'Digite sua mensagem ou arraste arquivos...'}
+                : 'Digite, cole uma imagem ou arraste arquivos...'}
             rows={1}
             className="flex-1 resize-none rounded-lg bg-transparent px-2 py-2.5 text-[15px] outline-none sm:px-3"
             style={{ color: 'var(--text-primary)', maxHeight: '200px' }}
@@ -251,7 +303,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
           </div>
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] sm:text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          <span>Qualquer arquivo vai ao Workspace; o modelo le texto/imagens compativeis. RAG so quando voce escolher.</span>
+          <span>Cole imagens com Ctrl+V. Arquivos vao ao Workspace; RAG so quando voce escolher.</span>
           <span className="shrink-0">{files.length}/{MAX_FILES}</span>
         </div>
       </div>

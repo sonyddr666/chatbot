@@ -65,6 +65,13 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("attachments.map(attachment => attachment.id)", store)
         self.assertIn("filesRef.current = next", chat_input)
         self.assertNotIn("setFiles(current => {", chat_input)
+        self.assertIn("onPaste={handlePaste}", chat_input)
+        self.assertIn("event.clipboardData.items", chat_input)
+        self.assertIn("item.getAsFile()", chat_input)
+        self.assertIn("clipboardImageFile", chat_input)
+        self.assertIn("PendingImageThumbnail", chat_input)
+        self.assertIn("URL.revokeObjectURL", chat_input)
+        self.assertIn("if (!pastedImages.length) return", chat_input)
 
     def test_chat_images_have_thumbnail_and_accessible_lightbox(self):
         message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
