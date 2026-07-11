@@ -1,4 +1,5 @@
 import inspect
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,19 @@ class RouteSecurityTest(unittest.TestCase):
 
     def test_legacy_unauthenticated_websocket_file_is_removed(self):
         self.assertFalse(Path("src/api/ws_routes.py").exists())
+
+    def test_websocket_authenticates_without_token_in_url(self):
+        user = UserRepo.create_user("socket@example.test", "socket", "secret123", "Socket")
+        token = create_access_token(user.id, user.username)
+        encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
+        client = TestClient(app)
+
+        with client.websocket_connect(
+            "/ws",
+            subprotocols=["chatbot", f"auth.{encoded}"],
+        ) as websocket:
+            websocket.send_json({"type": "ping"})
+            self.assertEqual(websocket.receive_json(), {"type": "pong"})
 
     def test_sensitive_routes_require_current_user_dependency(self):
         sensitive_prefixes = (

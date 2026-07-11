@@ -14,6 +14,13 @@ interface UseWebSocketOptions {
 // Usa caminho relativo (proxy do Vite em dev, ou mesmo domínio em prod)
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
 
+function websocketAuthProtocol(token: string) {
+  const bytes = new TextEncoder().encode(token)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return `auth.${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
+}
+
 export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -24,15 +31,23 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
   const connect = useCallback(() => {
     if (handlersRef.current.enabled === false) return
-    if (wsRef.current?.readyState === WebSocket.OPEN) return
+    if (
+      wsRef.current?.readyState === WebSocket.CONNECTING
+      || wsRef.current?.readyState === WebSocket.OPEN
+    ) return
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+    reconnectTimerRef.current = null
 
     const token = getAuthToken()
     if (!token) return
-    const url = `${WS_BASE}?token=${encodeURIComponent(token)}`
-    const ws = new WebSocket(url)
+    const ws = new WebSocket(WS_BASE, ['chatbot', websocketAuthProtocol(token)])
     wsRef.current = ws
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) {
+        ws.close()
+        return
+      }
       setConnected(true)
       setReconnecting(false)
     }
@@ -106,6 +121,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return
+      wsRef.current = null
       setConnected(false)
       if (handlersRef.current.enabled === false) return
       // Reconecta automaticamente após 3s
@@ -124,8 +141,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
     }
-    wsRef.current?.close()
+    const current = wsRef.current
     wsRef.current = null
+    if (current) {
+      current.onclose = null
+      current.onerror = null
+      current.onmessage = null
+      current.close()
+    }
     setConnected(false)
     setReconnecting(false)
   }, [])

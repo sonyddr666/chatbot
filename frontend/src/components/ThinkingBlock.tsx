@@ -13,23 +13,27 @@ interface Props {
 export function ThinkingBlock({ text, isStreaming = false, startCollapsed = true }: Props) {
   const [collapsed, setCollapsed] = useState(startCollapsed)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const hasText = text.length > 0
 
   // Auto-expandir enquanto está streaming, recolher quando terminar
   useEffect(() => {
     if (isStreaming) {
       setCollapsed(false)
-    } else if (text && !isStreaming) {
+    } else if (hasText) {
       // Só recolhe automático se tiver texto e não estiver mais streaming
       // Pequeno delay pra dar tempo de ver o resultado
       const timer = setTimeout(() => setCollapsed(true), 800)
       return () => clearTimeout(timer)
     }
-  }, [isStreaming, text])
+  }, [hasText, isStreaming])
 
   // Scroll automático para acompanhar o pensamento
   useEffect(() => {
     if (bodyRef.current && !collapsed && isStreaming) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+      const frame = requestAnimationFrame(() => {
+        if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+      })
+      return () => cancelAnimationFrame(frame)
     }
   }, [text, collapsed, isStreaming])
 

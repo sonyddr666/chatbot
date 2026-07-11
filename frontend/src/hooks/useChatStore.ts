@@ -4,9 +4,21 @@ import { api, getAuthToken, parseApiTimestamp } from '../lib/api'
 
 let activeStreamController: AbortController | null = null
 let activeJobId: string | null = null
+let sessionLoadSequence = 0
+const resumeJobRuns = new Map<string, Promise<void>>()
 
 const PENDING_JOBS_KEY = 'chatbot_pending_jobs_v1'
 const PENDING_JOB_TTL_MS = 24 * 60 * 60 * 1000
+const STREAM_RENDER_INTERVAL_MS = 40
+const STREAM_RENDER_MAX_CHARS = 2048
+
+export function detachActiveChatStreams() {
+  sessionLoadSequence += 1
+  activeStreamController?.abort()
+  activeStreamController = null
+  activeJobId = null
+  resumeJobRuns.clear()
+}
 
 interface PendingChatJob {
   clientRequestId: string
@@ -201,6 +213,36 @@ function updateAssistantForJob(jobId: string, updater: (message: ChatMessage) =>
     messages[index] = updater(messages[index])
     return { messages }
   })
+}
+
+function createStreamRenderBuffer(onFlush: (reasoning: string, content: string) => void) {
+  let pendingReasoning = ''
+  let pendingContent = ''
+  let renderTimer: ReturnType<typeof setTimeout> | null = null
+
+  const flush = () => {
+    if (renderTimer) clearTimeout(renderTimer)
+    renderTimer = null
+    if (!pendingReasoning && !pendingContent) return
+    const reasoning = pendingReasoning
+    const content = pendingContent
+    pendingReasoning = ''
+    pendingContent = ''
+    onFlush(reasoning, content)
+  }
+
+  const queue = (type: 'reasoning' | 'content', text: string) => {
+    if (!text) return
+    if (type === 'reasoning') pendingReasoning += text
+    else pendingContent += text
+    if (pendingReasoning.length + pendingContent.length >= STREAM_RENDER_MAX_CHARS) {
+      flush()
+    } else if (!renderTimer) {
+      renderTimer = setTimeout(flush, STREAM_RENDER_INTERVAL_MS)
+    }
+  }
+
+  return { flush, queue }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -443,6 +485,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearMessages: () => set({ messages: [], error: null, streamStatus: null }),
 
   setSession: async (id: string) => {
+    const loadOwner = pendingOwner()
+    const loadSequence = ++sessionLoadSequence
+    const isCurrentLoad = () => (
+      get().sessionId === id
+      && sessionLoadSequence === loadSequence
+      && pendingOwner() === loadOwner
+    )
     activeStreamController?.abort()
     activeStreamController = null
     activeJobId = null
@@ -465,7 +514,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
       }
       await recoverPendingJobs(id)
+      if (!isCurrentLoad()) return
       const conv = await api.getConversation(id)
+      if (!isCurrentLoad()) return
       if (conv?.messages) {
         const msgs: ChatMessage[] = conv.messages.map((m: any) => ({
           id: `msg-${m.id}`,
@@ -496,6 +547,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return message
           }
         }))
+        if (!isCurrentLoad()) return
         set({ messages: restored })
         const unreadIds = restored
           .filter(message => message.role === 'assistant' && message.jobId && message.jobStatus === 'completed' && !message.readAt && message.messageId)
@@ -525,7 +577,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch {
       // ok
     } finally {
-      if (!isResuming) set({ isLoading: false })
+      if (isCurrentLoad() && !isResuming) set({ isLoading: false })
     }
   },
 
@@ -569,7 +621,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSelectedProfile: id => set({ selectedProfile: id }),
 }))
 
-async function resumePersistedJob(jobId: string) {
+function resumePersistedJob(jobId: string): Promise<void> {
+  const existing = resumeJobRuns.get(jobId)
+  if (existing) return existing
+  const run = runPersistedJobResume(jobId)
+  resumeJobRuns.set(jobId, run)
+  void run.finally(() => {
+    if (resumeJobRuns.get(jobId) === run) resumeJobRuns.delete(jobId)
+  })
+  return run
+}
+
+async function runPersistedJobResume(jobId: string) {
   let controller: AbortController | null = null
   try {
     const job = await api.getChatJob(jobId)
@@ -597,60 +660,81 @@ async function resumePersistedJob(jobId: string) {
       isLoading: false,
     })
   } finally {
-    if (activeJobId === jobId) activeJobId = null
-    if (activeStreamController === controller) activeStreamController = null
+    if (activeStreamController === controller) {
+      activeStreamController = null
+      if (activeJobId === jobId) activeJobId = null
+    }
   }
 }
 
 async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
-  for await (const chunk of api.streamChatJob(jobId, afterId, signal)) {
-    if (chunk.type === 'reasoning' || chunk.type === 'content') {
-      updateAssistantForJob(jobId, message => chunk.type === 'reasoning'
-        ? { ...message, reasoning: `${message.reasoning || ''}${chunk.text || ''}`, jobStatus: 'running' }
-        : { ...message, content: `${message.content || ''}${chunk.text || ''}`, jobStatus: 'running' })
-      if (activeJobId === jobId) useChatStore.setState({ streamStatus: null })
-    } else if (chunk.type === 'status') {
-      if (activeJobId === jobId) useChatStore.setState({ streamStatus: chunk.text || 'Processando...' })
-    } else if (chunk.type === 'skill_activity' && chunk.skillActivity) {
-      updateAssistantForJob(jobId, message => ({
-        ...message,
-        skillActivities: [...(message.skillActivities || []), chunk.skillActivity!],
-      }))
-    } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
-      updateAssistantForJob(jobId, message => ({ ...message, workspacePlan: chunk.workspacePlan }))
-    } else if (chunk.type === 'start') {
-      updateAssistantForJob(jobId, message => ({
-        ...message,
-        messageId: chunk.messageId || message.messageId,
-        providerId: chunk.providerId,
-        providerName: chunk.providerName,
-        modelId: chunk.modelId,
-        modelName: chunk.modelName,
-        jobId,
-        jobStatus: 'running',
-      }))
-      if (activeJobId === jobId) useChatStore.setState({ streamStatus: 'Conectando ao job...' })
-    } else if (chunk.type === 'done') {
-      const readAt = new Date().toISOString()
-      updateAssistantForJob(jobId, message => ({
-        ...message,
-        messageId: chunk.messageId || message.messageId,
-        jobStatus: 'completed',
-        readAt,
-      }))
-      if (activeJobId === jobId) useChatStore.setState({ isLoading: false, streamStatus: null })
-      const messageId = chunk.messageId
-      if (messageId) void api.markMessageRead(messageId).catch(() => undefined)
-      void useChatStore.getState().loadConversations()
-    } else if (chunk.type === 'job_state') {
-      updateAssistantForJob(jobId, message => ({
-        ...message,
-        jobStatus: (chunk.jobStatus as ChatMessage['jobStatus']) || 'failed',
-      }))
-      if (activeJobId === jobId) {
-        useChatStore.setState({ error: chunk.text || null, isLoading: false, streamStatus: null })
+  const deltaBuffer = createStreamRenderBuffer((reasoning, content) => {
+    updateAssistantForJob(jobId, message => ({
+      ...message,
+      reasoning: `${message.reasoning || ''}${reasoning}`,
+      content: `${message.content || ''}${content}`,
+      jobStatus: 'running',
+    }))
+    if (activeJobId === jobId && useChatStore.getState().streamStatus !== null) {
+      useChatStore.setState({ streamStatus: null })
+    }
+  })
+
+  try {
+    for await (const chunk of api.streamChatJob(jobId, afterId, signal)) {
+      if (chunk.type === 'reasoning' || chunk.type === 'content') {
+        deltaBuffer.queue(chunk.type, chunk.text || '')
+      } else if (chunk.type === 'status') {
+        deltaBuffer.flush()
+        if (activeJobId === jobId) useChatStore.setState({ streamStatus: chunk.text || 'Processando...' })
+      } else if (chunk.type === 'skill_activity' && chunk.skillActivity) {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          skillActivities: [...(message.skillActivities || []), chunk.skillActivity!],
+        }))
+      } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({ ...message, workspacePlan: chunk.workspacePlan }))
+      } else if (chunk.type === 'start') {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          messageId: chunk.messageId || message.messageId,
+          providerId: chunk.providerId,
+          providerName: chunk.providerName,
+          modelId: chunk.modelId,
+          modelName: chunk.modelName,
+          jobId,
+          jobStatus: 'running',
+        }))
+        if (activeJobId === jobId) useChatStore.setState({ streamStatus: 'Conectando ao job...' })
+      } else if (chunk.type === 'done') {
+        deltaBuffer.flush()
+        const readAt = new Date().toISOString()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          messageId: chunk.messageId || message.messageId,
+          jobStatus: 'completed',
+          readAt,
+        }))
+        if (activeJobId === jobId) useChatStore.setState({ isLoading: false, streamStatus: null })
+        const messageId = chunk.messageId
+        if (messageId) void api.markMessageRead(messageId).catch(() => undefined)
+        void useChatStore.getState().loadConversations()
+      } else if (chunk.type === 'job_state') {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          jobStatus: (chunk.jobStatus as ChatMessage['jobStatus']) || 'failed',
+        }))
+        if (activeJobId === jobId) {
+          useChatStore.setState({ error: chunk.text || null, isLoading: false, streamStatus: null })
+        }
       }
     }
+  } finally {
+    deltaBuffer.flush()
   }
 }
 
@@ -663,74 +747,82 @@ async function httpStream(
   reasoningEffort: ReasoningEffort = 'low',
   signal?: AbortSignal,
 ) {
-  for await (const chunk of api.stream(content, sessionId, useRag, responseMode, reasoningEffort, signal)) {
-    if (chunk.type === 'reasoning') {
-      const s = useChatStore.getState()
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, reasoning: (last.reasoning || '') + (chunk.text || '') }
-        useChatStore.setState({ messages: msgs, streamStatus: null })
-      }
-    } else if (chunk.type === 'content') {
-      const s = useChatStore.getState()
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, content: last.content + (chunk.text || '') }
-        useChatStore.setState({ messages: msgs, streamStatus: null })
-      }
-    } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
-      const s = useChatStore.getState()
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, workspacePlan: chunk.workspacePlan }
-        useChatStore.setState({ messages: msgs })
-      }
-    } else if (chunk.type === 'skill_activity' && chunk.skillActivity) {
-      const s = useChatStore.getState()
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = {
-          ...last,
-          skillActivities: [...(last.skillActivities || []), chunk.skillActivity],
-        }
-        useChatStore.setState({ messages: msgs })
-      }
-    } else if (chunk.type === 'done') {
-      const s = useChatStore.getState()
-      const msgs = [...s.messages]
-      const last = msgs[msgs.length - 1]
-      if (last?.role === 'assistant') {
-        msgs[msgs.length - 1] = {
-          ...last,
-          messageId: chunk.messageId,
-          providerId: chunk.providerId,
-          providerName: chunk.providerName,
-          modelId: chunk.modelId,
-          modelName: chunk.modelName,
-        }
-        useChatStore.setState({ messages: msgs })
-      }
-      useChatStore.setState({ streamStatus: null })
-      useChatStore.getState().loadConversations()
-      if (chunk.hasReasoning !== undefined) {
-        useChatStore.setState({ route: chunk.hasReasoning ? 'full' : 'fast' })
-      }
-      if ((chunk as any).metrics) {
-        useChatStore.setState({ lastMetrics: (chunk as any).metrics })
-      }
-      break
-    } else if (chunk.type === 'start') {
-      const route = (chunk as any).route
-      useChatStore.setState({
-        ...(route ? { route } : {}),
-        streamStatus: 'Conectando ao modelo...',
-      })
-    } else if (chunk.type === 'status') {
-      useChatStore.setState({ streamStatus: chunk.text || 'Processando...' })
+  const deltaBuffer = createStreamRenderBuffer((reasoning, contentDelta) => {
+    if (!reasoning && !contentDelta) return
+    const state = useChatStore.getState()
+    const messages = [...state.messages]
+    const last = messages[messages.length - 1]
+    if (last?.role !== 'assistant') return
+    messages[messages.length - 1] = {
+      ...last,
+      reasoning: `${last.reasoning || ''}${reasoning}`,
+      content: `${last.content || ''}${contentDelta}`,
     }
+    useChatStore.setState({ messages, streamStatus: null })
+  })
+
+  try {
+    for await (const chunk of api.stream(content, sessionId, useRag, responseMode, reasoningEffort, signal)) {
+      if (chunk.type === 'reasoning' || chunk.type === 'content') {
+        deltaBuffer.queue(chunk.type, chunk.text || '')
+        continue
+      }
+      deltaBuffer.flush()
+
+      if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
+        const s = useChatStore.getState()
+        const msgs = [...s.messages]
+        const last = msgs[msgs.length - 1]
+        if (last?.role === 'assistant') {
+          msgs[msgs.length - 1] = { ...last, workspacePlan: chunk.workspacePlan }
+          useChatStore.setState({ messages: msgs })
+        }
+      } else if (chunk.type === 'skill_activity' && chunk.skillActivity) {
+        const s = useChatStore.getState()
+        const msgs = [...s.messages]
+        const last = msgs[msgs.length - 1]
+        if (last?.role === 'assistant') {
+          msgs[msgs.length - 1] = {
+            ...last,
+            skillActivities: [...(last.skillActivities || []), chunk.skillActivity],
+          }
+          useChatStore.setState({ messages: msgs })
+        }
+      } else if (chunk.type === 'done') {
+        const s = useChatStore.getState()
+        const msgs = [...s.messages]
+        const last = msgs[msgs.length - 1]
+        if (last?.role === 'assistant') {
+          msgs[msgs.length - 1] = {
+            ...last,
+            messageId: chunk.messageId,
+            providerId: chunk.providerId,
+            providerName: chunk.providerName,
+            modelId: chunk.modelId,
+            modelName: chunk.modelName,
+          }
+          useChatStore.setState({ messages: msgs })
+        }
+        useChatStore.setState({ streamStatus: null })
+        useChatStore.getState().loadConversations()
+        if (chunk.hasReasoning !== undefined) {
+          useChatStore.setState({ route: chunk.hasReasoning ? 'full' : 'fast' })
+        }
+        if ((chunk as any).metrics) {
+          useChatStore.setState({ lastMetrics: (chunk as any).metrics })
+        }
+        break
+      } else if (chunk.type === 'start') {
+        const route = (chunk as any).route
+        useChatStore.setState({
+          ...(route ? { route } : {}),
+          streamStatus: 'Conectando ao modelo...',
+        })
+      } else if (chunk.type === 'status') {
+        useChatStore.setState({ streamStatus: chunk.text || 'Processando...' })
+      }
+    }
+  } finally {
+    deltaBuffer.flush()
   }
 }

@@ -1,5 +1,7 @@
 """Aplicação FastAPI com suporte WebSocket para chat persistente."""
 
+import base64
+import binascii
 import json
 import asyncio
 import time
@@ -31,6 +33,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _websocket_auth_token(websocket: WebSocket) -> tuple[str, str | None]:
+    offered_protocols = [
+        protocol.strip()
+        for protocol in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if protocol.strip()
+    ]
+    accepted_protocol = "chatbot" if "chatbot" in offered_protocols else None
+    for protocol in offered_protocols:
+        if not protocol.startswith("auth."):
+            continue
+        encoded = protocol.removeprefix("auth.")
+        try:
+            padding = "=" * (-len(encoded) % 4)
+            token = base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
+            if token:
+                return token, accepted_protocol
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            continue
+    # Temporary compatibility for clients deployed before subprotocol auth.
+    return websocket.query_params.get("token", ""), accepted_protocol
 
 
 @app.on_event("startup")
@@ -122,20 +146,21 @@ async def websocket_chat(websocket: WebSocket):
             sections.append(skills_context)
         return "\n\n".join(sections) if sections else None
 
+    token, accepted_protocol = _websocket_auth_token(websocket)
+
     def _current_user():
-        token = websocket.query_params.get("token", "")
         return resolve_authorized_user(f"Bearer {token}") if token else None
 
     init_db()
     SkillRepo.ensure_defaults()
     user = _current_user()
     if not user:
-        await websocket.accept()
+        await websocket.accept(subprotocol=accepted_protocol)
         await websocket.send_json({"type": "error", "text": "Nao autenticado"})
         await websocket.close(code=1008)
         return
 
-    await websocket.accept()
+    await websocket.accept(subprotocol=accepted_protocol)
     session_id = _scoped_session_id(user.id, "default")
 
     try:

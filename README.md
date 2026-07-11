@@ -212,7 +212,7 @@ Implementado:
 - Token assinado.
 - `GET /api/v1/auth/me` para recuperar o usuario logado.
 - Protecao de rotas sensiveis com `Authorization: Bearer <token>`.
-- WebSocket protegido com `?token=...`.
+- WebSocket protegido por subprotocolo autenticado, sem colocar o JWT na URL nem nos logs comuns do proxy.
 
 Rotas:
 
@@ -301,7 +301,7 @@ Rotas:
 POST /api/v1/chat
 POST /api/v1/chat/stream
 POST /api/v1/chat/regenerate
-WS   /ws?token=<token>
+WS   /ws
 ```
 
 ### Voz ao Vivo com Inworld
@@ -1073,6 +1073,10 @@ Antes do `POST`, o frontend salva no `localStorage` um pedido pendente com `clie
 Fechar o navegador encerra apenas o leitor SSE. O backend continua processando e persistindo `reasoning`, `text_delta`, skills e estado final. Ao trocar de conversa, eventos atrasados continuam vinculados ao `job_id` correto e nao escrevem na ultima bolha aberta. Se o servidor reiniciar, jobs ainda `queued` sao iniciados; jobs que ja estavam `running` ficam `interrupted` e preservam todo o texto gravado. O WebSocket antigo permanece temporariamente como fallback, mas nao e mais o dono das novas execucoes iniciadas pela interface.
 
 O parser SSE preserva espacos no inicio de cada delta e recompoe eventos `data:` multilinha com `\n`. Isso evita respostas exibidas como `palavrascoladas` durante o streaming de Codex ou providers OpenAI-compatible.
+
+Para impedir cascatas de renderizacao, deltas de texto e raciocinio sao acumulados por no maximo 40 ms antes de atualizar React/Zustand. A retomada de um job e single-flight, e carregamentos antigos de conversa nao podem sobrescrever a sessao atual. Se a arvore React ainda falhar, uma barreira de recuperacao informa que o job continua no servidor, preserva o diagnostico local e oferece recarregar o historico. O build de producao inclui source maps para localizar a linha original de futuras excecoes.
+
+O cliente WebSocket envia a autenticacao no header `Sec-WebSocket-Protocol` usando os protocolos `chatbot` e `auth.<token-base64url>`. O backend ainda aceita temporariamente `?token=` apenas para compatibilidade com clientes antigos; a interface atual nao grava mais o JWT na URL.
 
 ## Banco de Dados
 

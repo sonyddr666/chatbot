@@ -24,6 +24,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
   const [fileError, setFileError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const filesRef = useRef<File[]>([])
 
   useEffect(() => {
     if (!busy && !isSubmitting && textareaRef.current) textareaRef.current.focus()
@@ -33,27 +34,31 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
     if (busy) setIsSubmitting(false)
   }, [busy])
 
+  const replaceFiles = useCallback((next: File[]) => {
+    filesRef.current = next
+    setFiles(next)
+  }, [])
+
   const addFiles = useCallback((incoming: File[]) => {
-    setFileError(null)
-    setFiles(current => {
-      const next = [...current]
-      for (const file of incoming) {
-        if (next.length >= MAX_FILES) {
-          setFileError(`Maximo de ${MAX_FILES} arquivos por mensagem.`)
-          break
-        }
-        if (file.size > maxUploadMb * 1024 * 1024) {
-          setFileError(`${file.name} ultrapassa o limite de ${maxUploadMb}MB.`)
-          continue
-        }
-        const duplicate = next.some(item => (
-          item.name === file.name && item.size === file.size && item.lastModified === file.lastModified
-        ))
-        if (!duplicate) next.push(file)
+    const next = [...filesRef.current]
+    let nextError: string | null = null
+    for (const file of incoming) {
+      if (next.length >= MAX_FILES) {
+        nextError = `Maximo de ${MAX_FILES} arquivos por mensagem.`
+        break
       }
-      return next
-    })
-  }, [maxUploadMb])
+      if (file.size > maxUploadMb * 1024 * 1024) {
+        nextError = `${file.name} ultrapassa o limite de ${maxUploadMb}MB.`
+        continue
+      }
+      const duplicate = next.some(item => (
+        item.name === file.name && item.size === file.size && item.lastModified === file.lastModified
+      ))
+      if (!duplicate) next.push(file)
+    }
+    replaceFiles(next)
+    setFileError(nextError)
+  }, [maxUploadMb, replaceFiles])
 
   useEffect(() => {
     const containsFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes('Files')
@@ -92,14 +97,14 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
     const submittedText = input.trim()
     const submittedFiles = files
     setInput('')
-    setFiles([])
+    replaceFiles([])
     setFileError(null)
     setIsSubmitting(true)
     try {
       const sent = await onSend(submittedText, submittedFiles)
       if (sent === false) {
         setInput(current => current || submittedText)
-        setFiles(current => current.length ? current : submittedFiles)
+        if (filesRef.current.length === 0) replaceFiles(submittedFiles)
       }
     } finally {
       setIsSubmitting(false)
@@ -171,7 +176,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
                   </div>
                   <button
                     type="button"
-                    onClick={() => setFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}
+                    onClick={() => replaceFiles(files.filter((_, currentIndex) => currentIndex !== index))}
                     className="rounded-md p-1 transition-colors hover:bg-black/10 dark:hover:bg-white/10"
                     title="Remover anexo"
                   >

@@ -14,7 +14,7 @@ import { WorkspacePanel } from './components/WorkspacePanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
 import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
-import { useChatStore } from './hooks/useChatStore'
+import { detachActiveChatStreams, useChatStore } from './hooks/useChatStore'
 import { api, getAuthToken, setAuthToken, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useLiveVoice } from './voice/useLiveVoice'
@@ -210,6 +210,7 @@ export default function App() {
 
   const handleLogout = useCallback(() => {
     disconnectWs()
+    detachActiveChatStreams()
     api.logout()
     setUser(null)
     setShowOnboarding(false)

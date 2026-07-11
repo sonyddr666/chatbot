@@ -63,6 +63,8 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("Workspace/chat/uploads", chat_input)
         self.assertIn("api.uploadChatAttachments", store)
         self.assertIn("attachments.map(attachment => attachment.id)", store)
+        self.assertIn("filesRef.current = next", chat_input)
+        self.assertNotIn("setFiles(current => {", chat_input)
 
     def test_chat_images_have_thumbnail_and_accessible_lightbox(self):
         message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
@@ -90,6 +92,24 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("await api.createChatJob", store)
         self.assertIn("resumePersistedJob", store)
         self.assertIn("reasoningEffort: ReasoningEffort", api)
+
+    def test_stream_rendering_is_batched_and_frontend_errors_are_recoverable(self):
+        store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
+        main = (ROOT / "frontend/src/main.tsx").read_text(encoding="utf-8")
+        boundary = (ROOT / "frontend/src/components/FrontendErrorBoundary.tsx").read_text(encoding="utf-8")
+        vite = (ROOT / "frontend/vite.config.ts").read_text(encoding="utf-8")
+
+        self.assertIn("STREAM_RENDER_INTERVAL_MS = 40", store)
+        self.assertIn("createStreamRenderBuffer", store)
+        self.assertIn("deltaBuffer.flush()", store)
+        self.assertIn("resumeJobRuns", store)
+        self.assertIn("sessionLoadSequence", store)
+        self.assertIn("pendingOwner() === loadOwner", store)
+        self.assertIn("detachActiveChatStreams()", boundary)
+        self.assertIn("<FrontendErrorBoundary>", main)
+        self.assertIn("chatbot_last_frontend_error_v1", boundary)
+        self.assertIn("A resposta continua salva no servidor", boundary)
+        self.assertIn("sourcemap: true", vite)
 
 
 if __name__ == "__main__":

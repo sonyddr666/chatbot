@@ -65,6 +65,10 @@ class FrontendLiveVoiceTest(unittest.TestCase):
         self.assertIn("signal?: AbortSignal", api)
         self.assertIn("activeStreamController?.abort()", store)
         self.assertIn("restart", websocket)
+        self.assertIn("new WebSocket(WS_BASE, ['chatbot', websocketAuthProtocol(token)])", websocket)
+        self.assertNotIn("?token=", websocket)
+        self.assertIn("readyState === WebSocket.CONNECTING", websocket)
+        self.assertIn("if (wsRef.current !== ws) return", websocket)
         self.assertIn("onInterruptGeneration: handleStop", app)
         self.assertIn("if (wsConnected) restartWs()", app)
 

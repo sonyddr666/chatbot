@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles/tailwind.css'
 import App from './App'
+import { FrontendErrorBoundary } from './components/FrontendErrorBoundary'
 
 // Aplica preferência antes do React renderizar, evitando flash/tema perdido no refresh.
 const savedTheme = localStorage.getItem('theme')
@@ -11,6 +12,8 @@ document.documentElement.classList.toggle('dark', shouldUseDark)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <FrontendErrorBoundary>
+      <App />
+    </FrontendErrorBoundary>
   </StrictMode>,
 )
