@@ -47,6 +47,11 @@ export function SkillActivityBlock({ activities }: Props) {
                 Skill: {activity.name}
                 {activity.source_count > 0 ? ` · ${activity.source_count} fontes verificadas` : ''}
               </p>
+              {activity.query ? (
+                <p className="mt-1 break-words rounded-md bg-black/10 px-2 py-1 font-mono text-[10px] dark:bg-black/20" style={{ color: 'var(--text-secondary)' }}>
+                  Consulta usada: {activity.query}
+                </p>
+              ) : null}
               {activity.sources.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {activity.sources.map(source => (

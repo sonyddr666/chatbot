@@ -353,6 +353,10 @@ class ChatAttachmentTest(unittest.TestCase):
         self.assertTrue(requests_file_delivery("@arquivo relatorio.pdf"))
         self.assertFalse(requests_file_delivery("vamos conversar sobre um arquivo"))
         self.assertFalse(requests_file_delivery("crie um arquivo e me envie"))
+        self.assertFalse(requests_file_delivery(
+            "me responde oq verity na porra da pesquisa seu merrda inutil"
+        ))
+        self.assertFalse(requests_file_delivery("pesquisa e me envie o arquivo"))
 
         other = UserRepo.create_user(
             f"delivery-other-{uuid.uuid4().hex[:8]}@example.test",

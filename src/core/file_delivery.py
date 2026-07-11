@@ -50,6 +50,10 @@ WORKSPACE_HINTS = ("criado", "criou", "gerado", "gerou", "workspace", "work")
 CREATE_ACTIONS = ("cria", "criar", "crie", "gera", "gerar", "gere")
 EXPLICIT_FILE_COMMAND = re.compile(r"^\s*@(arquivo|file)(?::send)?(?:\s+(.+))?\s*$", re.IGNORECASE)
 FILE_EXTENSION = re.compile(r"\b[^\s/\\]+\.[a-z0-9]{1,12}\b", re.IGNORECASE)
+RESEARCH_WORD = re.compile(
+    r"\b(?:pesquisa|pesquise|pesquisar|busca|busque|buscar|procure|procurar|google|internet|web)\b",
+    re.IGNORECASE,
+)
 IGNORED_WORKSPACE_PARTS = frozenset({".git", ".codex", "node_modules", "__pycache__"})
 
 
@@ -71,10 +75,26 @@ def requests_file_delivery(message: str) -> bool:
     normalized = _normalize(message)
     if EXPLICIT_FILE_COMMAND.match(message or ""):
         return True
-    has_action = any(re.search(rf"\b{re.escape(action)}\b", normalized) for action in DELIVERY_ACTIONS)
-    has_target = any(re.search(rf"\b{re.escape(target)}s?\b", normalized) for target in FILE_TARGETS)
-    has_target = has_target or bool(FILE_EXTENSION.search(normalized))
-    if not (has_action and has_target):
+    if RESEARCH_WORD.search(normalized):
+        return False
+
+    action_matches = [
+        match
+        for action in DELIVERY_ACTIONS
+        for match in re.finditer(rf"\b{re.escape(action)}\b", normalized)
+    ]
+    target_matches = [
+        match
+        for target in FILE_TARGETS
+        for match in re.finditer(rf"\b{re.escape(target)}s?\b", normalized)
+    ]
+    target_matches.extend(FILE_EXTENSION.finditer(normalized))
+    explicit_pair = any(
+        abs(action.start() - target.start()) <= 80
+        for action in action_matches
+        for target in target_matches
+    )
+    if not explicit_pair:
         return False
 
     # "Crie/Gere e envie" still belongs to the confirmed Workspace creation flow.

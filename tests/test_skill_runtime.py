@@ -1,8 +1,11 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src.core.skill_runtime import (
+    build_search_query,
     build_runtime_context,
+    requests_web_search,
     run_enabled_skill_context,
     runtime_skill_activity,
     should_force_rag,
@@ -18,8 +21,31 @@ class SkillRuntimeTest(unittest.TestCase):
     def test_web_search_requires_enabled_search_skill_and_search_intent(self):
         skills = [{"name": "simple_search", "enabled": True}]
         self.assertTrue(should_run_web_search("pesquise novidades de IA", skills))
+        self.assertTrue(should_run_web_search("pesquisa meme", skills))
         self.assertFalse(should_run_web_search("me explique meu perfil", skills))
+        self.assertFalse(should_run_web_search("me explique o resultado da pesquisa", skills))
         self.assertFalse(should_run_web_search("pesquise novidades de IA", [{"name": "simple_search", "enabled": False}]))
+        self.assertTrue(requests_web_search("pode pesquisar sobre Veryti"))
+        self.assertFalse(requests_web_search("o que apareceu na pesquisa?"))
+
+    def test_search_query_deduplicates_quotes_and_resolves_recent_reference(self):
+        repeated = build_search_query(
+            7,
+            'entao pesquisa sobre “Veryti” “Verity”“Veryti”“Verity”',
+            "u7:test",
+        )
+        self.assertEqual(repeated, '"Veryti" "Verity"')
+
+        current = "pesquise o nome dessa merda entao porrrrrrrrrraaaaaaaaa"
+        history = [
+            SimpleNamespace(role="user", content="Hi my name is veryti"),
+            SimpleNamespace(role="assistant", content="Veryti parece um nome."),
+            SimpleNamespace(role="user", content="pesquisa sobre oq isso se refere essa frase"),
+            SimpleNamespace(role="user", content=current),
+        ]
+        with patch("src.core.skill_runtime.ConversationRepo.get_history", return_value=history):
+            resolved = build_search_query(7, current, "u7:test")
+        self.assertEqual(resolved, "veryti")
 
     def test_runtime_context_formats_web_search_result(self):
         context = build_runtime_context("web_search", "Resultados mockados")
@@ -42,8 +68,31 @@ class SkillRuntimeTest(unittest.TestCase):
         self.assertIn("Pesquisa Perplexo concluida", activity["label"])
         self.assertIn("JA foi executada", context)
 
+        searched = runtime_skill_activity(build_runtime_context(
+            "perplexo_search",
+            "Consulta executada: meme\n\n[Meme](https://example.test/meme)",
+        ))
+        self.assertEqual(searched["query"], "meme")
+
 
 class SkillRuntimeAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_two_word_search_still_executes_enabled_skill(self):
+        with (
+            patch(
+                "src.core.skill_runtime.SkillRepo.list_for_user",
+                return_value=[{"name": "simple_search", "enabled": True, "requires_shell": False}],
+            ),
+            patch(
+                "src.core.skill_runtime.web_search",
+                new=AsyncMock(return_value="[Meme](https://example.test/meme)"),
+            ) as search,
+            patch("src.core.skill_runtime.SkillRunRepo.create"),
+        ):
+            context = await run_enabled_skill_context(7, "pesquisa meme", session_id="u7:test")
+
+        search.assert_awaited_once_with("meme", max_results=3)
+        self.assertIn("Consulta executada: meme", context)
+
     async def test_web_search_failure_is_logged_without_breaking_chat_context(self):
         with (
             patch(

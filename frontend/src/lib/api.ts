@@ -32,6 +32,7 @@ export interface SkillActivity {
   label: string
   source_count: number
   sources: SkillSource[]
+  query?: string | null
 }
 export type ResponseMode = 'normal' | 'thinking' | 'live'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

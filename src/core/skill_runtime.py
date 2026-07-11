@@ -7,7 +7,7 @@ from collections.abc import Iterable
 import re
 import unicodedata
 
-from src.db.repository import SkillRepo, SkillRunRepo
+from src.db.repository import ConversationRepo, SkillRepo, SkillRunRepo
 from src.core.patcher import preview_workspace_patch
 from src.core.skill_permissions import can_execute_skill, executable_skill_names
 from src.core.workspace import read_text_file
@@ -18,21 +18,28 @@ from src.tools.web_search import web_search
 
 SEARCH_SKILLS = {"perplexo_search", "simple_search", "search_and_answer"}
 ACTIVITY_SKILLS = SEARCH_SKILLS | {"conversation_history"}
-SEARCH_TRIGGERS = (
-    "pesquise",
-    "pesquisa",
-    "pesquisar",
-    "busque",
-    "buscar",
-    "procure",
-    "procurar",
-    "google",
-    "web",
-    "internet",
-    "noticias",
-    "news",
-    "search",
+SEARCH_REQUEST = re.compile(
+    r"(?:\b(?:pesquise|pesquisar|busque|buscar|procure|procurar)\b"
+    r"|^\s*(?:pesquisa|google|search)\b"
+    r"|\bpesquisa\s+(?:sobre|por)\b"
+    r"|\b(?:faz|faca|fazer|quero)\s+(?:uma\s+)?pesquisa\b"
+    r"|^\s*(?:noticias|news)\s+(?:sobre|de)\b)",
+    re.IGNORECASE,
 )
+SEARCH_FRAGMENT = re.compile(
+    r"\b(?:pesquise|pesquisar|pesquisa|busque|buscar|procure|procurar|google|search)\b",
+    re.IGNORECASE,
+)
+QUOTED_SEARCH_TERM = re.compile(r"[\"“]([^\"”\r\n]{1,160})[\"”]")
+SEARCH_QUERY_STOPWORDS = {
+    "a", "agora", "ai", "as", "buscar", "busque", "coisa", "coisas", "como",
+    "da", "das", "de", "dessa", "desse", "do", "dos", "e", "ela", "ele", "em",
+    "entao", "essa", "esse", "esta", "este", "eu", "faca", "faz", "frase", "hi",
+    "inutil", "internet", "is", "isso", "it", "merda", "meu", "minha", "my", "na",
+    "name", "no", "nome", "nos", "o", "online", "oq", "ou", "para", "pela", "pelo",
+    "pesquisa", "pesquisar", "pesquise", "por", "porra", "procure", "procurar", "que",
+    "quero", "refere", "se", "seu", "sobre", "um", "uma", "web", "you",
+}
 HISTORY_TRIGGERS = (
     "@history",
     "@historico",
@@ -64,6 +71,7 @@ WORKSPACE_PREVIEW_COMMAND = re.compile(
     re.IGNORECASE,
 )
 SKILL_RESULT_NAME = re.compile(r"Resultado da skill ([a-zA-Z0-9_-]+):")
+SKILL_EXECUTED_QUERY = re.compile(r"^Consulta executada:\s*(.+)$", re.MULTILINE)
 MARKDOWN_SOURCE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 BARE_SOURCE = re.compile(r"https?://[^\s)>]+")
 
@@ -94,10 +102,94 @@ def requests_conversation_history(message: str) -> bool:
     return any(trigger in normalized for trigger in HISTORY_TRIGGERS)
 
 
+def requests_web_search(message: str) -> bool:
+    """Recognize commands to search, not ordinary mentions of a previous search."""
+    return bool(SEARCH_REQUEST.search(_normalized_message(message)))
+
+
+def _quoted_terms(value: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in QUOTED_SEARCH_TERM.findall(value or ""):
+        term = re.sub(r"\s+", " ", raw).strip(" .,;:!?")
+        folded = _normalized_message(term)
+        if not term or folded in seen:
+            continue
+        seen.add(folded)
+        terms.append(term)
+        if len(terms) >= 8:
+            break
+    return terms
+
+
+def _search_parts(message: str) -> tuple[str, str]:
+    match = SEARCH_FRAGMENT.search(message or "")
+    if not match:
+        return "", re.sub(r"\s+", " ", message or "").strip()
+    prefix = re.sub(r"\s+", " ", message[:match.start()]).strip(" ,.;:!?-")
+    remainder = re.sub(r"^\s*(?:sobre|por|de)\b", "", message[match.end():], flags=re.IGNORECASE)
+    return prefix, re.sub(r"\s+", " ", remainder).strip(" ,.;:!?-")
+
+
+def _topic_candidate(value: str) -> str:
+    clean = re.sub(r"\s+", " ", value or "").strip(" ,.;:!?-")
+    if not clean:
+        return ""
+    name_match = re.search(r"\b(?:my name is|meu nome (?:e|eh))\s+(.+)$", clean, re.IGNORECASE)
+    if name_match:
+        clean = name_match.group(1).strip(" ,.;:!?-")
+    meaningful = []
+    for word in re.findall(r"[a-z0-9_.-]+", _normalized_message(clean)):
+        if word in SEARCH_QUERY_STOPWORDS or len(word) <= 1:
+            continue
+        if re.search(r"(.)\1{2,}", word):
+            continue
+        if re.fullmatch(r"m+e+r+d+a+|p+o+r+a+|i+n+u+t+i+l+", word):
+            continue
+        meaningful.append(word)
+    return clean[:300] if meaningful else ""
+
+
+def build_search_query(user_id: int, message: str, session_id: str | None = None) -> str:
+    """Resolve a compact query from the request and recent same-chat user context."""
+    quoted = _quoted_terms(message)
+    if quoted:
+        return " ".join(f'"{term}"' for term in quoted)
+
+    prefix, remainder = _search_parts(message)
+    direct = _topic_candidate(remainder)
+    if direct:
+        return direct
+    contextual_prefix = _topic_candidate(prefix)
+    if contextual_prefix:
+        return contextual_prefix
+
+    if session_id:
+        skipped_current = False
+        history = ConversationRepo.get_history(session_id, limit=12, user_id=user_id)
+        for item in reversed(history):
+            if item.role != "user":
+                continue
+            previous = str(item.content or "").strip()
+            if not skipped_current and _normalized_message(previous) == _normalized_message(message):
+                skipped_current = True
+                continue
+            previous_quoted = _quoted_terms(previous)
+            if previous_quoted:
+                return " ".join(f'"{term}"' for term in previous_quoted)
+            previous_prefix, previous_remainder = _search_parts(previous)
+            for candidate in (previous_remainder, previous_prefix, previous):
+                topic = _topic_candidate(candidate)
+                if topic:
+                    return topic
+
+    fallback = _topic_candidate(remainder) or _topic_candidate(prefix) or re.sub(r"\s+", " ", message).strip()
+    return fallback[:300]
+
+
 def _search_skill_for_message(message: str, skills: Iterable[dict]) -> dict | None:
     """Prefer the richer workflow without ever executing duplicate searches."""
-    msg = _normalized_message(message)
-    if not any(trigger in msg for trigger in SEARCH_TRIGGERS):
+    if not requests_web_search(message):
         return None
     return (
         _enabled_skill(skills, "perplexo_search", "network")
@@ -158,6 +250,7 @@ def runtime_skill_activity(runtime_context: str) -> dict | None:
         sources.append({"label": f"Fonte {len(sources) + 1}", "url": clean_url})
 
     used_fallback = "Fallback de pesquisa simples" in runtime_context
+    query_match = SKILL_EXECUTED_QUERY.search(runtime_context)
     if skill_name == "conversation_history":
         label = "Historico pessoal consultado"
     elif skill_name == "perplexo_search" and not used_fallback:
@@ -172,6 +265,7 @@ def runtime_skill_activity(runtime_context: str) -> dict | None:
         "label": label,
         "source_count": len(sources),
         "sources": sources[:8],
+        "query": query_match.group(1).strip()[:300] if query_match else None,
     }
 
 
@@ -235,7 +329,12 @@ def _fallback_enabled(config: dict) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
-async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
+async def _run_search_skill(
+    user_id: int,
+    skill: dict,
+    message: str,
+    session_id: str | None = None,
+) -> str:
     skill_name = str(skill["name"])
     audit_skill_name = skill_name if skill.get("definition") else "web_search"
     config = skill.get("config") or {}
@@ -246,18 +345,19 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
     except (TypeError, ValueError):
         max_results = 3
     max_results = min(max(max_results, 1), 5)
-    input_data = {"query": message, "executor": executor}
+    query = build_search_query(user_id, message, session_id)
+    input_data = {"query": query, "original_request": message, "executor": executor}
 
     try:
         if executor == "perplexo_search" or skill_name == "perplexo_search":
             options = _perplexo_options(message, config)
             input_data.update(options)
             try:
-                result = await perplexo_search(message, user_id, **options)
+                result = await perplexo_search(query, user_id, **options)
             except Exception as primary_error:
                 if not _fallback_enabled(config):
                     raise
-                result = await web_search(message, max_results=max_results)
+                result = await web_search(query, max_results=max_results)
                 if not result or result.startswith("Erro na busca"):
                     raise RuntimeError(
                         f"Perplexo falhou ({primary_error}) e o fallback tambem falhou"
@@ -269,7 +369,7 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
                 )
         else:
             input_data["max_results"] = max_results
-            result = await web_search(message, max_results=max_results)
+            result = await web_search(query, max_results=max_results)
         if not result or result.startswith("Erro na busca"):
             raise RuntimeError(result or "Busca nao retornou resultados")
         SkillRunRepo.create(
@@ -279,7 +379,7 @@ async def _run_search_skill(user_id: int, skill: dict, message: str) -> str:
             input_data,
             output_summary=result,
         )
-        return build_runtime_context(skill_name, result)
+        return build_runtime_context(skill_name, f"Consulta executada: {query}\n\n{result}")
     except Exception as exc:
         SkillRunRepo.create(
             user_id,
@@ -408,7 +508,7 @@ async def run_enabled_skill_context(
     search_skill = _search_skill_for_message(message, skills)
     explicit_web = any(scope in _normalized_message(message) for scope in EXPLICIT_WEB_SCOPE)
     if search_skill and (not history_skill or explicit_web):
-        sections.append(await _run_search_skill(user_id, search_skill, message))
+        sections.append(await _run_search_skill(user_id, search_skill, message, session_id))
 
     read_match = WORKSPACE_READ_COMMAND.match(message)
     read_skill = _enabled_skill(skills, "workspace_read", "workspace_read")

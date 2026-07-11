@@ -1,8 +1,12 @@
+import asyncio
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from src.config import settings
+from src.core.chat import ChatEngine
+from src.core.chat_jobs import process_chat_job
 from src.core.workspace_agent import workspace_request_candidate
 from src.db.models import init_db
 from src.db.repository import ChatJobRepo, ConversationRepo, MessageRepo, UserRepo
@@ -94,6 +98,36 @@ class ChatJobPersistenceTest(unittest.TestCase):
         )
         self.assertTrue(ChatJobRepo.claim_queued(job["id"]))
         self.assertFalse(ChatJobRepo.claim_queued(job["id"]))
+
+    def test_fast_two_word_search_does_not_bypass_skills(self):
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:short-search",
+            message="pesquisa meme",
+            provider={"provider_id": "test", "model_id": "test"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+
+        async def fake_stream(_engine, _message):
+            yield ("content", "resultado")
+
+        runtime = AsyncMock(return_value="contexto da pesquisa")
+        with (
+            patch("src.core.chat_jobs.get_active_config_for_user", return_value={"provider_id": "test"}),
+            patch("src.core.chat_jobs.model_requests_workspace", new=AsyncMock(return_value=False)),
+            patch("src.core.chat_jobs.user_has_personal_rag", return_value=False),
+            patch("src.core.chat_jobs.run_enabled_skill_context", new=runtime),
+            patch.object(ChatEngine, "chat_stream", new=fake_stream),
+        ):
+            asyncio.run(process_chat_job(job["id"]))
+
+        runtime.assert_awaited_once_with(
+            self.user.id,
+            "pesquisa meme",
+            session_id=f"u{self.user.id}:short-search",
+        )
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("chunk.type === 'skill_activity'", app)
         self.assertIn("Ferramentas e Skills", block)
         self.assertIn("fontes verificadas", block)
+        self.assertIn("Consulta usada:", block)
         self.assertIn('target="_blank"', block)
 
     def test_input_remains_editable_while_model_is_busy(self):

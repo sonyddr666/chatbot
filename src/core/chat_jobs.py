@@ -14,6 +14,7 @@ from src.core.memory import get_session
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.skill_runtime import (
     requests_conversation_history,
+    requests_web_search,
     run_enabled_skill_context,
     runtime_skill_activity,
     user_has_personal_rag,
@@ -247,6 +248,7 @@ async def process_chat_job(job_id: str) -> None:
             and len(message.split()) <= 2
             and not attachments
             and not requests_conversation_history(message)
+            and not requests_web_search(message)
         )
         if simple_fast:
             runtime_context = ""
