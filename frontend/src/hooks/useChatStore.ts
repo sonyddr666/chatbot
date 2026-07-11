@@ -361,6 +361,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       )
       jobAccepted = true
       forgetPendingJob(clientRequestId)
+      void get().loadStats()
       startedJobId = job.id
       if (get().sessionId !== sessionId) {
         void get().loadConversations()
@@ -721,7 +722,8 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
         if (activeJobId === jobId) useChatStore.setState({ isLoading: false, streamStatus: null })
         const messageId = chunk.messageId
         if (messageId) void api.markMessageRead(messageId).catch(() => undefined)
-        void useChatStore.getState().loadConversations()
+        const store = useChatStore.getState()
+        void Promise.all([store.loadConversations(), store.loadStats()])
       } else if (chunk.type === 'job_state') {
         deltaBuffer.flush()
         updateAssistantForJob(jobId, message => ({
@@ -804,7 +806,8 @@ async function httpStream(
           useChatStore.setState({ messages: msgs })
         }
         useChatStore.setState({ streamStatus: null })
-        useChatStore.getState().loadConversations()
+        const store = useChatStore.getState()
+        void Promise.all([store.loadConversations(), store.loadStats()])
         if (chunk.hasReasoning !== undefined) {
           useChatStore.setState({ route: chunk.hasReasoning ? 'full' : 'fast' })
         }

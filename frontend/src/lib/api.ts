@@ -880,7 +880,7 @@ export const api = {
   },
 
   // Stats
-  getStats: () => req<Stats>('/stats'),
+  getStats: () => req<Stats>('/stats', { cache: 'no-store' }),
 
   // Export
   exportConversation: async (sessionId: string, format = 'txt') => {

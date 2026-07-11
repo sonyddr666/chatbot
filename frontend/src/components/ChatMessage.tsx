@@ -7,6 +7,7 @@ import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/pris
 import { Copy, Check, Download, FileText, Image as ImageIcon, Maximize2, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX, X } from 'lucide-react'
 import type { ChatAttachmentInfo, ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
+import { useChatStore } from '../hooks/useChatStore'
 import { ThinkingBlock } from './ThinkingBlock'
 import { WorkspacePlanCard } from './WorkspacePlanCard'
 import { SkillActivityBlock } from './SkillActivityBlock'
@@ -432,6 +433,7 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
     const newScore = score === feedback ? null : score
     setFeedback(newScore)
     await api.feedback(message.messageId, newScore ?? 0)
+    void useChatStore.getState().loadStats()
   }
 
   // Reasoning ativo (está chegando agora)

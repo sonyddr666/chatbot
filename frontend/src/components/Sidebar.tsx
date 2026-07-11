@@ -35,6 +35,15 @@ export function Sidebar() {
     if (tab === 'docs') void loadDocuments()
   }, [loadDocuments, tab])
 
+  useEffect(() => {
+    if (tab !== 'stats') return
+    void loadStats()
+    const refresh = window.setInterval(() => {
+      if (!document.hidden) void loadStats()
+    }, 5000)
+    return () => window.clearInterval(refresh)
+  }, [loadStats, tab])
+
   const filteredConvs = conversations.filter(c =>
     c.title.toLowerCase().includes(search.toLowerCase()),
   )
@@ -71,7 +80,7 @@ export function Sidebar() {
   const handleDelete = async (id: string) => {
     try {
       await api.deleteConversation(id)
-      loadConversations()
+      await Promise.all([loadConversations(), loadStats()])
       if (sessionId === id) {
         await setSession('default')
         clearMessages()

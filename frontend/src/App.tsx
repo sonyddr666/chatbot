@@ -114,7 +114,8 @@ export default function App() {
           lastMetrics: chunk.metrics || state.lastMetrics,
         }
       })
-      useChatStore.getState().loadConversations()
+      const store = useChatStore.getState()
+      void Promise.all([store.loadConversations(), store.loadStats()])
     }
   }, [])
 
