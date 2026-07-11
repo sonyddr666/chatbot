@@ -838,6 +838,102 @@ class ChatAttachmentRepo:
             db.close()
 
     @staticmethod
+    def list_owned_for_delivery(user_id: int, session_id: str, limit: int = 100) -> list[dict]:
+        """List ready files with current-conversation uploads first."""
+        db = get_session_db()
+        try:
+            base = db.query(ChatAttachment).filter(
+                ChatAttachment.user_id == user_id,
+                ChatAttachment.status == "ready",
+            )
+            current = (
+                base.filter(ChatAttachment.session_id == session_id)
+                .order_by(ChatAttachment.created_at.desc(), ChatAttachment.id.desc())
+                .limit(limit)
+                .all()
+            )
+            remaining = max(0, limit - len(current))
+            previous = []
+            if remaining:
+                previous = (
+                    base.filter(ChatAttachment.session_id != session_id)
+                    .order_by(ChatAttachment.created_at.desc(), ChatAttachment.id.desc())
+                    .limit(remaining)
+                    .all()
+                )
+            return [ChatAttachmentRepo._public(row) for row in [*current, *previous]]
+        finally:
+            db.close()
+
+    @staticmethod
+    def prepare_delivery(
+        job_id: str,
+        user_id: int,
+        *,
+        attachment_id: str | None = None,
+        artifact=None,
+    ) -> dict:
+        """Resolve or register one attachment that an assistant message will deliver."""
+        if bool(attachment_id) == bool(artifact):
+            raise ValueError("Informe exatamente um arquivo para entrega")
+
+        db = get_session_db()
+        try:
+            job = db.query(ChatJob).filter(ChatJob.id == job_id, ChatJob.user_id == user_id).first()
+            if not job:
+                raise ValueError("Job nao encontrado")
+
+            row = None
+            if attachment_id:
+                row = db.query(ChatAttachment).filter(
+                    ChatAttachment.id == attachment_id,
+                    ChatAttachment.user_id == user_id,
+                    ChatAttachment.status == "ready",
+                ).first()
+                if not row:
+                    raise ValueError("Arquivo nao encontrado para este usuario")
+            else:
+                if int(artifact.user_id) != user_id:
+                    raise ValueError("Arquivo pertence a outro usuario")
+                row = db.query(ChatAttachment).filter(
+                    ChatAttachment.user_id == user_id,
+                    ChatAttachment.relative_path == artifact.relative_path,
+                    ChatAttachment.checksum == artifact.checksum,
+                    ChatAttachment.status == "ready",
+                ).order_by(ChatAttachment.created_at.desc()).first()
+                if not row:
+                    conversation = db.query(Conversation).filter(Conversation.id == job.conversation_id).first()
+                    row = ChatAttachment(
+                        id=artifact.id,
+                        user_id=user_id,
+                        session_id=conversation.session_id if conversation else "",
+                        conversation_id=job.conversation_id,
+                        message_id=job.assistant_message_id,
+                        filename=artifact.filename,
+                        relative_path=artifact.relative_path,
+                        content_type=artifact.content_type,
+                        extension=artifact.extension,
+                        kind=artifact.kind,
+                        file_size=artifact.file_size,
+                        checksum=artifact.checksum,
+                        extracted_text=artifact.extracted_text,
+                        is_truncated=artifact.is_truncated,
+                        status="ready",
+                        attached_at=datetime.now(timezone.utc),
+                    )
+                    db.add(row)
+                    db.flush()
+
+            payload = ChatAttachmentRepo._public(row)
+            db.commit()
+            return payload
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
     def delete_pending(attachment_id: str, user_id: int) -> dict | None:
         db = get_session_db()
         try:
@@ -1081,6 +1177,7 @@ class ChatJobRepo:
             "session_id": conversation.session_id if conversation else "",
             "message": user_message.content if user_message else "",
             "attachments": json.loads(user_message.attachments_json or "[]") if user_message else [],
+            "assistant_attachments": json.loads(assistant.attachments_json or "[]") if assistant else [],
             "provider_id": job.provider_id or "",
             "provider_name": job.provider_name or "",
             "model_id": job.model_id or "",
@@ -1160,6 +1257,15 @@ class ChatJobRepo:
                     activities.append(json.loads(payload))
                     message.skill_activities_json = json.dumps(activities, ensure_ascii=False)
                 except (TypeError, json.JSONDecodeError):
+                    pass
+            elif message and event_type == "attachment":
+                try:
+                    attachment = json.loads(payload)
+                    attachments = json.loads(message.attachments_json or "[]")
+                    if not any(item.get("id") == attachment.get("id") for item in attachments):
+                        attachments.append(attachment)
+                        message.attachments_json = json.dumps(attachments, ensure_ascii=False)
+                except (AttributeError, TypeError, json.JSONDecodeError):
                     pass
             db.commit()
             return int(event.id)

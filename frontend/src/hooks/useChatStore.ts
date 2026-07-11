@@ -642,6 +642,7 @@ async function runPersistedJobResume(jobId: string) {
         ...message,
         content: job.content,
         reasoning: job.reasoning,
+        attachments: job.assistant_attachments || message.attachments || [],
         jobStatus: job.status,
         messageId: job.assistant_message_id,
       } : message),
@@ -693,6 +694,14 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
         updateAssistantForJob(jobId, message => ({
           ...message,
           skillActivities: [...(message.skillActivities || []), chunk.skillActivity!],
+        }))
+      } else if (chunk.type === 'attachment' && chunk.attachment) {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          attachments: (message.attachments || []).some(item => item.id === chunk.attachment!.id)
+            ? message.attachments
+            : [...(message.attachments || []), chunk.attachment!],
         }))
       } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
         deltaBuffer.flush()
@@ -787,6 +796,19 @@ async function httpStream(
           msgs[msgs.length - 1] = {
             ...last,
             skillActivities: [...(last.skillActivities || []), chunk.skillActivity],
+          }
+          useChatStore.setState({ messages: msgs })
+        }
+      } else if (chunk.type === 'attachment' && chunk.attachment) {
+        const s = useChatStore.getState()
+        const msgs = [...s.messages]
+        const last = msgs[msgs.length - 1]
+        if (last?.role === 'assistant') {
+          msgs[msgs.length - 1] = {
+            ...last,
+            attachments: (last.attachments || []).some(item => item.id === chunk.attachment!.id)
+              ? last.attachments
+              : [...(last.attachments || []), chunk.attachment],
           }
           useChatStore.setState({ messages: msgs })
         }

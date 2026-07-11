@@ -14,9 +14,11 @@ from src.core.auth import create_access_token
 from src.core.chat_attachments import build_model_user_content, save_chat_attachment
 from src.core.chat import ChatEngine
 from src.core.chat_jobs import process_chat_job
+from src.core.file_delivery import requests_file_delivery, resolve_file_delivery
 from src.core.llm import _convert_messages_to_codex
+from src.core.workspace import write_text_file
 from src.db.models import init_db
-from src.db.repository import ChatAttachmentRepo, ConversationRepo, UserRepo
+from src.db.repository import ChatAttachmentRepo, ChatJobRepo, ConversationRepo, UserRepo
 
 
 class ChatAttachmentTest(unittest.TestCase):
@@ -263,6 +265,108 @@ class ChatAttachmentTest(unittest.TestCase):
         self.assertEqual(converted[0]["content"][0]["type"], "input_text")
         self.assertEqual(converted[0]["content"][1]["type"], "input_image")
         self.assertEqual(converted[0]["content"][1]["image_url"], "data:image/png;base64,AA==")
+
+    def test_assistant_returns_previous_upload_as_downloadable_attachment(self):
+        upload = self.client.post(
+            "/api/v1/chat/attachments",
+            headers=self.headers,
+            data={"session_id": "return-file"},
+            files=[("files", ("resultado.json", b'{"ok": true}', "application/json"))],
+        )
+        attachment = upload.json()["attachments"][0]
+        with patch("src.api.routes.start_chat_job"):
+            original = self.client.post(
+                "/api/v1/chat/jobs",
+                headers=self.headers,
+                json={
+                    "message": "guarde este arquivo",
+                    "session_id": "return-file",
+                    "attachment_ids": [attachment["id"]],
+                    "response_mode": "normal",
+                    "reasoning_effort": "low",
+                },
+            )
+        ChatJobRepo.finish(original.json()["id"], "completed")
+
+        with patch("src.api.routes.start_chat_job"):
+            delivery = self.client.post(
+                "/api/v1/chat/jobs",
+                headers=self.headers,
+                json={
+                    "message": "me envie o arquivo de volta",
+                    "session_id": "return-file",
+                    "response_mode": "normal",
+                    "reasoning_effort": "low",
+                },
+            )
+
+        self.assertEqual(delivery.status_code, 202, delivery.text)
+        with patch(
+            "src.core.chat_jobs.get_active_config_for_user",
+            side_effect=AssertionError("file delivery must not call a model provider"),
+        ):
+            asyncio.run(process_chat_job(delivery.json()["id"]))
+
+        snapshot = ChatJobRepo.get(delivery.json()["id"], self.user.id)
+        self.assertEqual(snapshot["status"], "completed")
+        self.assertEqual(snapshot["assistant_attachments"][0]["id"], attachment["id"])
+        self.assertIn("resultado.json", snapshot["content"])
+        events = ChatJobRepo.list_events(delivery.json()["id"], self.user.id)
+        self.assertIn("attachment", [event["type"] for event in events])
+
+        conversation = self.client.get("/api/v1/conversations/return-file", headers=self.headers).json()
+        assistant = conversation["messages"][-1]
+        self.assertEqual(assistant["attachments"][0]["filename"], "resultado.json")
+        download = self.client.get(
+            f'/api/v1/chat/attachments/{attachment["id"]}/download',
+            headers=self.headers,
+        )
+        self.assertEqual(download.content, b'{"ok": true}')
+
+    def test_assistant_can_deliver_file_created_in_workspace(self):
+        write_text_file(self.user.id, "relatorios/relatorio.md", "# Resultado final")
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:workspace-delivery",
+            message="me envie o arquivo relatorio.md que voce criou",
+            provider={"provider_id": "unused", "model_id": "unused"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+
+        asyncio.run(process_chat_job(job["id"]))
+
+        snapshot = ChatJobRepo.get(job["id"], self.user.id)
+        delivered = snapshot["assistant_attachments"][0]
+        self.assertEqual(delivered["relative_path"], "relatorios/relatorio.md")
+        self.assertEqual(delivered["filename"], "relatorio.md")
+        download = self.client.get(
+            f'/api/v1/chat/attachments/{delivered["id"]}/download',
+            headers=self.headers,
+        )
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.content, b"# Resultado final")
+
+    def test_file_delivery_is_explicit_and_never_crosses_users(self):
+        self.assertTrue(requests_file_delivery("me envie o arquivo de volta"))
+        self.assertTrue(requests_file_delivery("@arquivo relatorio.pdf"))
+        self.assertFalse(requests_file_delivery("vamos conversar sobre um arquivo"))
+        self.assertFalse(requests_file_delivery("crie um arquivo e me envie"))
+
+        other = UserRepo.create_user(
+            f"delivery-other-{uuid.uuid4().hex[:8]}@example.test",
+            f"delivery_other_{uuid.uuid4().hex[:8]}",
+            "secret123",
+            "Other",
+        )
+        write_text_file(other.id, "segredo.txt", "somente do outro usuario")
+        selected = resolve_file_delivery(
+            self.user.id,
+            f"u{self.user.id}:private",
+            "me envie o arquivo segredo.txt",
+        )
+        self.assertIsNone(selected)
 
 
 if __name__ == "__main__":

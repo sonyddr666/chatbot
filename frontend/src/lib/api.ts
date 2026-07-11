@@ -42,7 +42,7 @@ export interface ChatAttachmentInfo {
   relative_path: string
   content_type: string
   extension: string
-  kind: 'text' | 'image'
+  kind: 'text' | 'image' | 'binary'
   size: number
   checksum: string
   is_truncated: boolean
@@ -302,7 +302,7 @@ export interface WorkspaceActionPlan {
 
 /** Chunk do streaming SSE */
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity' | 'job_state'
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity' | 'attachment' | 'job_state'
   text?: string
   eventId?: number
   jobId?: string
@@ -319,6 +319,7 @@ export interface StreamChunk {
   modelName?: string
   workspacePlan?: WorkspaceActionPlan
   skillActivity?: SkillActivity
+  attachment?: ChatAttachmentInfo
   metrics?: {
     ttft_s?: number
     total_s?: number
@@ -346,6 +347,7 @@ export interface ChatJobInfo {
   reasoning: string
   error: string
   attachments: ChatAttachmentInfo[]
+  assistant_attachments: ChatAttachmentInfo[]
 }
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -580,6 +582,8 @@ export const api = {
         yield { ...base, type: 'workspace_plan', workspacePlan: JSON.parse(control) }
       } else if (event.event === 'skill_activity') {
         yield { ...base, type: 'skill_activity', skillActivity: JSON.parse(control) }
+      } else if (event.event === 'attachment') {
+        yield { ...base, type: 'attachment', attachment: JSON.parse(control) }
       } else if (event.event === 'start') {
         const data = JSON.parse(control)
         yield {
@@ -698,6 +702,15 @@ export const api = {
               yield { type: 'skill_activity', skillActivity: JSON.parse(raw) }
             } catch {
               throw new Error('Atividade de Skill invalida')
+            }
+            continue
+          }
+
+          if (currentEvent === 'attachment') {
+            try {
+              yield { type: 'attachment', attachment: JSON.parse(raw) }
+            } catch {
+              throw new Error('Anexo da resposta invalido')
             }
             continue
           }

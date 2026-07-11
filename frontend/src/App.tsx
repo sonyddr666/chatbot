@@ -92,6 +92,23 @@ export default function App() {
       return
     }
 
+    if (chunk.type === 'attachment' && chunk.attachment) {
+      useChatStore.setState(state => {
+        const nextMessages = [...state.messages]
+        const last = nextMessages[nextMessages.length - 1]
+        if (last?.role === 'assistant') {
+          nextMessages[nextMessages.length - 1] = {
+            ...last,
+            attachments: (last.attachments || []).some(item => item.id === chunk.attachment!.id)
+              ? last.attachments
+              : [...(last.attachments || []), chunk.attachment!],
+          }
+        }
+        return { messages: nextMessages }
+      })
+      return
+    }
+
     if (chunk.type === 'done') {
       useChatStore.setState(state => {
         const nextMessages = [...state.messages]

@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 from uuid import uuid4
 
+from src.config import settings
 from src.core.ingestion import extract_text_for_ingestion, sanitize_upload_filename
 from src.core.userspace import safe_user_path
 
@@ -163,6 +164,40 @@ def save_chat_attachment(
         filename=safe_name,
         relative_path=relative_path,
         content_type=detected_type or content_type or "application/octet-stream",
+        extension=extension,
+        kind=kind,
+        file_size=len(content),
+        checksum=hashlib.sha256(content).hexdigest(),
+        extracted_text=extracted_text,
+        is_truncated=is_truncated,
+    )
+
+
+def inspect_workspace_attachment(user_id: int, relative_path: str) -> ChatAttachmentArtifact:
+    """Create attachment metadata for an existing file without copying it."""
+    storage_path = safe_user_path(user_id, "workspace", relative_path)
+    if not storage_path.exists() or not storage_path.is_file():
+        raise FileNotFoundError(relative_path)
+    if storage_path.stat().st_size > settings.max_upload_size_mb * 1024 * 1024:
+        raise ValueError(f"Arquivo muito grande para envio (max {settings.max_upload_size_mb}MB)")
+
+    content = storage_path.read_bytes()
+    safe_name = sanitize_upload_filename(storage_path.name)
+    extension = _attachment_extension(safe_name)
+    kind, extracted_text, is_truncated = _classify_attachment(
+        safe_name,
+        extension,
+        content,
+        mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+    )
+    workspace_root = safe_user_path(user_id, "workspace").resolve()
+    normalized_path = storage_path.resolve().relative_to(workspace_root).as_posix()
+    return ChatAttachmentArtifact(
+        id=f"att_{uuid4().hex}",
+        user_id=user_id,
+        filename=safe_name,
+        relative_path=normalized_path,
+        content_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
         extension=extension,
         kind=kind,
         file_size=len(content),

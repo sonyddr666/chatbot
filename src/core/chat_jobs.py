@@ -7,7 +7,9 @@ import json
 
 from src.config import settings
 from src.core.chat import ChatEngine
+from src.core.chat_attachments import inspect_workspace_attachment
 from src.core.classifier import classify_route
+from src.core.file_delivery import requests_file_delivery, resolve_file_delivery
 from src.core.memory import get_session
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.skill_runtime import (
@@ -23,7 +25,13 @@ from src.core.workspace_agent import (
     workspace_plan_message,
     workspace_plan_status_context,
 )
-from src.db.repository import ChatAttachmentRepo, ChatJobRepo, SkillRepo, UserPreferenceRepo
+from src.db.repository import (
+    ChatAttachmentRepo,
+    ChatJobRepo,
+    SkillRepo,
+    SkillRunRepo,
+    UserPreferenceRepo,
+)
 from src.rag.personal import retrieve_user_context
 
 
@@ -95,9 +103,91 @@ async def process_chat_job(job_id: str) -> None:
         user_id = int(job["user_id"])
         message = str(job["message"])
         session_id = str(job["session_id"])
+        await _add_event(job_id, "status", "Preparando resposta...")
+
+        if requests_file_delivery(message):
+            await _add_event(job_id, "status", "Localizando arquivo do usuario...")
+            selection = await asyncio.to_thread(resolve_file_delivery, user_id, session_id, message)
+            memory = _prepare_memory(session_id, message)
+            if selection:
+                try:
+                    if selection.attachment_id:
+                        delivered = await _repo_call(
+                            ChatAttachmentRepo.prepare_delivery,
+                            job_id,
+                            user_id,
+                            attachment_id=selection.attachment_id,
+                        )
+                    else:
+                        artifact = await asyncio.to_thread(
+                            inspect_workspace_attachment,
+                            user_id,
+                            selection.relative_path,
+                        )
+                        delivered = await _repo_call(
+                            ChatAttachmentRepo.prepare_delivery,
+                            job_id,
+                            user_id,
+                            artifact=artifact,
+                        )
+
+                    filename = str(delivered["filename"]).replace("`", "")
+                    response = f"Aqui esta o arquivo solicitado: `{filename}`."
+                    activity = {
+                        "name": "file_delivery",
+                        "status": "completed",
+                        "label": f"Arquivo enviado: {filename}",
+                        "source_count": 0,
+                        "sources": [],
+                    }
+                    await _repo_call(
+                        SkillRunRepo.create,
+                        user_id,
+                        "file_delivery",
+                        "completed",
+                        {"message": message, "path": delivered["relative_path"]},
+                        output_summary=f"Arquivo {filename} enviado no chat.",
+                    )
+                    await _add_event(job_id, "skill", json.dumps(activity, ensure_ascii=False))
+                    await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
+                    await _add_event(job_id, "text_delta", response)
+                    memory.add_user_message(message)
+                    memory.add_ai_message(response)
+                    await _repo_call(ChatJobRepo.finish, job_id, "completed")
+                    return
+                except (FileNotFoundError, OSError, ValueError) as exc:
+                    error_message = str(exc)
+            else:
+                error_message = "Nenhum arquivo disponivel foi encontrado"
+
+            response = (
+                "Nao encontrei esse arquivo no seu Workspace ou nos anexos das suas conversas. "
+                "Informe o nome exato, por exemplo: `@arquivo pasta/arquivo.pdf`."
+            )
+            activity = {
+                "name": "file_delivery",
+                "status": "failed",
+                "label": "Arquivo nao encontrado",
+                "source_count": 0,
+                "sources": [],
+            }
+            await _repo_call(
+                SkillRunRepo.create,
+                user_id,
+                "file_delivery",
+                "failed",
+                {"message": message},
+                error_message=error_message,
+            )
+            await _add_event(job_id, "skill", json.dumps(activity, ensure_ascii=False))
+            await _add_event(job_id, "text_delta", response)
+            memory.add_user_message(message)
+            memory.add_ai_message(response)
+            await _repo_call(ChatJobRepo.finish, job_id, "completed")
+            return
+
         provider_config = get_active_config_for_user(user_id)
         route = classify_route(message or "analisar arquivos anexados")
-        await _add_event(job_id, "status", "Preparando resposta...")
 
         attachments = job.get("attachments") or []
         if attachments:

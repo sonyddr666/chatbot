@@ -117,6 +117,31 @@ DEFAULT_SKILLS: tuple[dict[str, Any], ...] = (
         "risk_level": 1,
     },
     {
+        "name": "file_delivery",
+        "description": "Envia no chat um arquivo ja enviado ou criado no Workspace do proprio usuario.",
+        "kind": "internal_file_delivery",
+        "definition": {
+            "inputs": {"request": "string"},
+            "permissions": {
+                "network": False,
+                "workspace_read": True,
+                "workspace_write": False,
+                "shell": False,
+            },
+            "default_enabled": True,
+            "executor": "file_delivery",
+            "scope": "current_user_only",
+            "commands": ["@arquivo caminho/do/arquivo", "@file caminho/do/arquivo"],
+            "examples": [
+                "me envie o arquivo de volta",
+                "mande o documento relatorio.pdf que voce criou",
+            ],
+        },
+        "requires_network": False,
+        "requires_shell": False,
+        "risk_level": 1,
+    },
+    {
         "name": "workspace_manager",
         "description": "Planeja e executa gerenciamento completo do workspace somente apos confirmacao do usuario.",
         "kind": "workspace_agent",

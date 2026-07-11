@@ -411,7 +411,11 @@ function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachme
             <Download size={14} className={downloading === attachment.id ? 'animate-pulse' : ''} />
           </button>
       ))}
-      <span className="text-[10px] font-medium opacity-70">Salvo no Workspace · direto ao modelo · fora do RAG</span>
+      <span className="text-[10px] font-medium opacity-70">
+        {isUser
+          ? 'Salvo no Workspace - direto ao modelo - fora do RAG'
+          : 'Arquivo enviado pelo assistente - disponivel para abrir ou baixar'}
+      </span>
       {downloadError && <span className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>{downloadError}</span>}
     </div>
   )

@@ -92,6 +92,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
             onChunk?.({ type: 'skill_activity', skillActivity: data.activity })
             break
 
+          case 'attachment':
+            onChunk?.({ type: 'attachment', attachment: data.attachment })
+            break
+
           case 'done':
             onChunk?.({
               type: 'done',
