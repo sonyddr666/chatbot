@@ -309,6 +309,9 @@ microfone -> STT continuo -> envio apos silencio -> resposta SSE/WebSocket
 - A chave Inworld permanece somente no backend; o navegador recebe a lista permitida e o MP3.
 - Pausar, parar e interromper cancelam o audio e as requisicoes pendentes.
 - O texto de raciocinio/Thinking nunca e enviado ao TTS; somente a resposta final e falada.
+- O cursor acompanha o texto bruto do streaming, portanto links Markdown incompletos nao reiniciam a leitura.
+- Trechos repetidos sao descartados antes da sintese; a fila tem limite de 18 itens e cada resposta aceita no maximo 40 trechos ou 6.000 caracteres falados.
+- O backend guarda MP3s identicos por cinco minutos. Uma repeticao com o mesmo texto, voz e modelo reutiliza o audio sem uma segunda chamada paga.
 
 Rotas autenticadas:
 
@@ -815,6 +818,8 @@ INWORLD_TTS_MODEL=inworld-tts-2
 INWORLD_TTS_DEFAULT_VOICE=
 INWORLD_TTS_TIMEOUT_SECONDS=20
 INWORLD_TTS_VOICE_CACHE_SECONDS=300
+INWORLD_TTS_AUDIO_CACHE_SECONDS=300
+INWORLD_TTS_AUDIO_CACHE_MAX_ITEMS=256
 
 EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=all-MiniLM-L6-v2

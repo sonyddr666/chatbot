@@ -45,6 +45,7 @@ class InworldTtsTest(unittest.IsolatedAsyncioTestCase):
         settings.inworld_api_key = "workspace-secret"
         settings.inworld_tts_model = "inworld-tts-2"
         inworld_tts._voice_cache.clear()
+        inworld_tts._audio_cache.clear()
         FakeAsyncClient.responses = []
         FakeAsyncClient.requests = []
 
@@ -52,6 +53,7 @@ class InworldTtsTest(unittest.IsolatedAsyncioTestCase):
         settings.inworld_api_key = self.old_key
         settings.inworld_tts_model = self.old_model
         inworld_tts._voice_cache.clear()
+        inworld_tts._audio_cache.clear()
 
     async def test_lists_cloned_voices_before_system_voices(self):
         FakeAsyncClient.responses = [
@@ -119,6 +121,22 @@ class InworldTtsTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(inworld_tts.InworldTtsError) as oversized:
             await inworld_tts.synthesize_inworld_audio("x" * 501, "voice")
         self.assertEqual(oversized.exception.status_code, 400)
+
+    async def test_reuses_identical_audio_without_second_paid_request(self):
+        audio_bytes = b"ID3-cached-inworld-audio"
+        FakeAsyncClient.responses = [FakeResponse(payload={
+            "audioContent": base64.b64encode(audio_bytes).decode("ascii"),
+            "usage": {"processedCharactersCount": 13, "modelId": "inworld-tts-2"},
+        })]
+
+        with patch("src.core.inworld_tts.httpx.AsyncClient", FakeAsyncClient):
+            first = await inworld_tts.synthesize_inworld_audio("Mesmo trecho.", "workspace__clone")
+            second = await inworld_tts.synthesize_inworld_audio("Mesmo trecho.", "workspace__clone")
+
+        self.assertFalse(first.cache_hit)
+        self.assertTrue(second.cache_hit)
+        self.assertEqual(first.content, second.content)
+        self.assertEqual(len(FakeAsyncClient.requests), 1)
 
 
 if __name__ == "__main__":

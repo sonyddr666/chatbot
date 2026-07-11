@@ -111,6 +111,9 @@ No teste real com `deepseek-v4-flash-free`, o gateway enviou `reasoning_content`
 - Interromper cancela reconhecimento, audio, downloads pendentes e a resposta ativa antes de voltar a ouvir.
 - A chave `INWORLD_API_KEY` nunca e enviada ao frontend.
 - O codigo, os mocks e um smoke real com voz clonada do workspace Inworld foram validados.
+- Links Markdown que se completam durante o streaming preservam o cursor bruto e nao reiniciam trechos ja falados.
+- A fila elimina segmentos identicos e aplica limites de 18 pendentes, 40 por resposta e 6.000 caracteres por resposta.
+- O cache MP3 do backend evita uma segunda chamada paga para texto, voz, idioma, estilo e modelo identicos durante cinco minutos.
 
 ## APIs principais
 

@@ -84,5 +84,6 @@ async def inworld_synthesize(body: InworldSynthesisRequest, user=Depends(get_cur
             "Cache-Control": "no-store",
             "X-Inworld-Model": audio.model_id,
             "X-Inworld-Processed-Characters": str(audio.processed_characters),
+            "X-Inworld-Cache": "HIT" if audio.cache_hit else "MISS",
         },
     )

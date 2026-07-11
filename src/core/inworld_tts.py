@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections import OrderedDict
 from dataclasses import dataclass
+import hashlib
 import time
 from typing import Any
 
@@ -19,6 +21,8 @@ MAX_AUDIO_BYTES = 8 * 1024 * 1024
 _synthesis_slots = asyncio.Semaphore(6)
 _voice_cache: dict[tuple[str, bool], tuple[float, list[dict[str, Any]]]] = {}
 _voice_cache_lock = asyncio.Lock()
+_audio_cache: OrderedDict[str, tuple[float, "SynthesizedAudio"]] = OrderedDict()
+_audio_cache_lock = asyncio.Lock()
 
 
 class InworldTtsError(RuntimeError):
@@ -33,6 +37,44 @@ class SynthesizedAudio:
     media_type: str
     processed_characters: int
     model_id: str
+    cache_hit: bool = False
+
+
+def _audio_cache_key(text: str, voice_id: str, language: str, delivery_mode: str) -> str:
+    material = "\x00".join((settings.inworld_tts_model, voice_id, language, delivery_mode, text))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+async def _get_cached_audio(cache_key: str) -> SynthesizedAudio | None:
+    now = time.monotonic()
+    async with _audio_cache_lock:
+        cached = _audio_cache.get(cache_key)
+        if not cached:
+            return None
+        if cached[0] <= now:
+            _audio_cache.pop(cache_key, None)
+            return None
+        _audio_cache.move_to_end(cache_key)
+        audio = cached[1]
+        return SynthesizedAudio(
+            content=audio.content,
+            media_type=audio.media_type,
+            processed_characters=audio.processed_characters,
+            model_id=audio.model_id,
+            cache_hit=True,
+        )
+
+
+async def _cache_audio(cache_key: str, audio: SynthesizedAudio) -> None:
+    ttl = max(0, settings.inworld_tts_audio_cache_seconds)
+    max_items = max(0, settings.inworld_tts_audio_cache_max_items)
+    if ttl == 0 or max_items == 0:
+        return
+    async with _audio_cache_lock:
+        _audio_cache[cache_key] = (time.monotonic() + ttl, audio)
+        _audio_cache.move_to_end(cache_key)
+        while len(_audio_cache) > max_items:
+            _audio_cache.popitem(last=False)
 
 
 def inworld_tts_configured() -> bool:
@@ -180,6 +222,11 @@ async def synthesize_inworld_audio(
     if mode not in {"STABLE", "BALANCED", "CREATIVE"}:
         raise InworldTtsError("delivery_mode invalido", status_code=400)
 
+    cache_key = _audio_cache_key(clean_text, clean_voice_id, language, mode)
+    cached_audio = await _get_cached_audio(cache_key)
+    if cached_audio:
+        return cached_audio
+
     payload = {
         "text": clean_text,
         "voiceId": clean_voice_id,
@@ -220,9 +267,11 @@ async def synthesize_inworld_audio(
         raise InworldTtsError("Audio Inworld excedeu o limite permitido")
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    return SynthesizedAudio(
+    synthesized = SynthesizedAudio(
         content=audio,
         media_type="audio/mpeg",
         processed_characters=int(usage.get("processedCharactersCount") or len(clean_text)),
         model_id=str(usage.get("modelId") or settings.inworld_tts_model),
     )
+    await _cache_audio(cache_key, synthesized)
+    return synthesized

@@ -120,6 +120,8 @@ class Settings(BaseSettings):
     inworld_tts_default_voice: str = ""
     inworld_tts_timeout_seconds: float = 20.0
     inworld_tts_voice_cache_seconds: int = 300
+    inworld_tts_audio_cache_seconds: int = 300
+    inworld_tts_audio_cache_max_items: int = 256
 
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"
