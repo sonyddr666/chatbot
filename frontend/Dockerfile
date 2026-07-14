@@ -1,8 +1,17 @@
 # Build
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+        rm -rf node_modules; \
+        if npm ci --include=dev --no-audit --no-fund && test -x node_modules/.bin/tsc; then \
+            exit 0; \
+        fi; \
+        echo "npm ci attempt ${attempt} failed or did not install tsc"; \
+        sleep $((attempt * 5)); \
+    done; \
+    exit 1
 COPY . .
 RUN npm run build
 

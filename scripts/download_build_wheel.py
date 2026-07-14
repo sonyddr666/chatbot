@@ -89,10 +89,16 @@ def download(url: str, output: Path, expected_sha256: str) -> None:
                 raise RuntimeError(f"HTTP {response.status} {response.reason}")
 
             digest = hashlib.sha256()
+            downloaded = 0
+            next_progress = 32 * 1024 * 1024
             with temporary.open("wb") as handle:
                 while chunk := response.read(1024 * 1024):
                     digest.update(chunk)
                     handle.write(chunk)
+                    downloaded += len(chunk)
+                    if downloaded >= next_progress:
+                        print(f"Downloaded {downloaded // (1024 * 1024)} MiB", flush=True)
+                        next_progress += 32 * 1024 * 1024
             actual_sha256 = digest.hexdigest()
             if actual_sha256.lower() != expected_sha256.lower():
                 raise RuntimeError(
