@@ -3,8 +3,10 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 COPY requirements.txt .
+COPY scripts/resolve_build_host.py /tmp/resolve_build_host.py
 ARG PYTORCH_VERSION=2.6.0
-RUN pip install --user --no-cache-dir \
+RUN python /tmp/resolve_build_host.py download.pytorch.org && \
+    pip install --user --no-cache-dir --retries 8 --timeout 60 \
     "torch==${PYTORCH_VERSION}" \
     --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --user --no-cache-dir -r requirements.txt
