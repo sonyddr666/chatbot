@@ -891,7 +891,7 @@ def get_active_config() -> dict:
                 "name": cp.get("name", active_id),
                 "base_url": cp.get("base_url", ""),
                 "endpoint": cp.get("endpoint", ""),
-                "api_key": cp.get("api_key", ""),
+                "api_key": get_provider_api_key(active_id),
                 "api_format": cp.get("api_format", "chat_completions"),
                 "model_id": model_info["id"] if model_info else "",
                 "model_name": model_info["name"] if model_info else "",

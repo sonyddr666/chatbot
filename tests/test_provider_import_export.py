@@ -64,6 +64,14 @@ class ProviderImportExportTest(unittest.TestCase):
         self.assertNotIn("nested-secret", str(sensitive))
         self.assertEqual(sensitive[0]["api_key"], "effective-secret")
 
+    def test_active_custom_provider_uses_key_saved_by_ui(self):
+        self._seed()
+
+        active = provider_manager.get_active_config()
+
+        self.assertEqual(active["provider_id"], "morph")
+        self.assertEqual(active["api_key"], "effective-secret")
+
     def test_import_merges_by_id_and_does_not_disable_active_provider(self):
         self._seed()
 
