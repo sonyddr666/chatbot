@@ -499,7 +499,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
         models = cp.get("models", [])
         marked_models = _mark_active_model(models, active_model_id, cp["id"] == active_id)
         effective_model_id = next((m["id"] for m in marked_models if m.get("active")), None)
-        cp_key = cp.get("api_key", "")
+        cp_key = get_provider_api_key(cp["id"])
         entry = {
             "id": cp["id"],
             "name": cp.get("name", cp["id"]),
@@ -513,7 +513,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "active": cp["id"] == active_id,
             "active_model_id": effective_model_id if cp["id"] == active_id else None,
             "has_key": bool(cp_key),
-            "key_source": "custom_provider" if cp_key else "none",
+            "key_source": _get_key_source(cp["id"], cp_key),
         }
         result.append(entry)
 

@@ -21,6 +21,8 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertIn("Importar JSON", provider_manager)
         self.assertIn("/providers/export", provider_manager)
         self.assertIn("/providers/import", provider_manager)
+        self.assertIn("setLocalApiKey('')", provider_manager)
+        self.assertNotIn("setLocalApiKey(selected.has_key ? (selected.api_key || '') : '')", provider_manager)
 
 
 if __name__ == "__main__":

@@ -268,7 +268,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         body: JSON.stringify({ api_key: localApiKey.trim() }),
       })
       setProviders(prev => prev.map(p =>
-        p.id === selectedId ? { ...p, api_key: localApiKey.trim() } : p
+        p.id === selectedId ? { ...p, api_key: 'sk-...', has_key: true, key_source: 'ui' } : p
       ))
       toast.success('Chave de API salva!')
       setShowApiKey(false)
@@ -1222,7 +1222,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   icon={<Eye size={16} />}
                   className="cursor-pointer hover:opacity-80"
                   onClick={() => {
-                    setLocalApiKey(selected.has_key ? (selected.api_key || '') : '')
+                    setLocalApiKey('')
                     setShowApiKey(true)
                   }}
                 />
@@ -1251,7 +1251,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                       type="password"
                       value={localApiKey}
                       onChange={e => setLocalApiKey(e.target.value)}
-                      placeholder="sk-..."
+                      placeholder={selected?.has_key ? 'Digite uma nova chave para substituir' : 'sk-...'}
                       className="w-full px-3 py-2 rounded-xl text-sm mb-4 outline-none transition-all border"
                       style={{
                         background: 'var(--bg-primary)',

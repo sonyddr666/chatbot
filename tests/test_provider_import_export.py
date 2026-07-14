@@ -31,7 +31,7 @@ class ProviderImportExportTest(unittest.TestCase):
                     "name": "Morph",
                     "base_url": "https://api.morphllm.com/v1",
                     "endpoint": "",
-                    "api_key": "provider-copy",
+                    "api_key": "",
                     "api_format": "chat_completions",
                     "enabled": True,
                     "models": [
@@ -71,6 +71,16 @@ class ProviderImportExportTest(unittest.TestCase):
 
         self.assertEqual(active["provider_id"], "morph")
         self.assertEqual(active["api_key"], "effective-secret")
+
+    def test_custom_provider_list_reports_effective_saved_key_without_exposing_it(self):
+        self._seed()
+
+        provider = next(item for item in provider_manager.list_providers() if item["id"] == "morph")
+
+        self.assertTrue(provider["has_key"])
+        self.assertEqual(provider["api_key"], "sk-...")
+        self.assertEqual(provider["key_source"], "ui")
+        self.assertNotIn("effective-secret", str(provider))
 
     def test_import_merges_by_id_and_does_not_disable_active_provider(self):
         self._seed()
