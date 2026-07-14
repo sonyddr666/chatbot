@@ -16,6 +16,11 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertIn("Providers pessoais", provider_manager)
         self.assertIn("Criar provider pessoal", provider_manager)
         self.assertIn("Ativar pessoal", provider_manager)
+        self.assertIn("Exportar sem API keys", provider_manager)
+        self.assertIn("Exportar com API keys", provider_manager)
+        self.assertIn("Importar JSON", provider_manager)
+        self.assertIn("/providers/export", provider_manager)
+        self.assertIn("/providers/import", provider_manager)
 
 
 if __name__ == "__main__":

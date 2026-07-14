@@ -135,6 +135,127 @@ def list_user_providers(user_id: int) -> list[dict]:
         db.close()
 
 
+def export_user_providers(user_id: int, include_api_keys: bool = False) -> list[dict]:
+    """Exporta somente as configuracoes pertencentes ao usuario atual."""
+    db = get_session_db()
+    try:
+        rows = (
+            db.query(UserProviderConfig)
+            .filter(UserProviderConfig.user_id == user_id)
+            .order_by(UserProviderConfig.is_default.desc(), UserProviderConfig.created_at.asc())
+            .all()
+        )
+        exported = []
+        for row in rows:
+            item = {
+                "provider_id": row.provider_id,
+                "display_name": row.display_name or row.provider_id,
+                "base_url": row.base_url,
+                "model": row.model,
+                "api_format": row.api_format or "chat_completions",
+                "is_enabled": bool(row.is_enabled),
+                "is_default": bool(row.is_default),
+            }
+            if include_api_keys:
+                item["api_key"] = _decrypt_api_key(row.api_key_encrypted or "")
+            exported.append(item)
+        return exported
+    finally:
+        db.close()
+
+
+def _normalize_user_provider_import(items: list[dict]) -> list[dict]:
+    if not isinstance(items, list):
+        raise ValueError("personal_providers deve ser uma lista")
+    if len(items) > 100:
+        raise ValueError("O arquivo pode importar no maximo 100 providers pessoais")
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Cada provider pessoal deve ser um objeto JSON")
+        provider_id = str(item.get("provider_id", "")).strip()
+        model = str(item.get("model", "")).strip()
+        if not provider_id or not model:
+            raise ValueError("Provider pessoal importado precisa de provider_id e model")
+        normalized.append({
+            "provider_id": provider_id,
+            "display_name": str(item.get("display_name", provider_id)).strip() or provider_id,
+            "base_url": str(item.get("base_url", "")).strip(),
+            "model": model,
+            "api_format": str(item.get("api_format", "chat_completions")).strip() or "chat_completions",
+            "is_enabled": bool(item.get("is_enabled", True)),
+            "is_default": bool(item.get("is_default", False)),
+            "has_api_key_field": "api_key" in item,
+            "api_key": str(item.get("api_key", "")),
+        })
+    return normalized
+
+
+def import_user_providers(user_id: int, items: list[dict]) -> dict:
+    """Restaura providers pessoais do usuario sem tocar em configuracoes de outras contas."""
+    normalized = _normalize_user_provider_import(items)
+    db = get_session_db()
+    created = []
+    updated = []
+    keys_imported = 0
+    default_row = None
+    try:
+        for item in normalized:
+            row = (
+                db.query(UserProviderConfig)
+                .filter(
+                    UserProviderConfig.user_id == user_id,
+                    UserProviderConfig.provider_id == item["provider_id"],
+                    UserProviderConfig.model == item["model"],
+                    UserProviderConfig.base_url == item["base_url"],
+                )
+                .order_by(UserProviderConfig.id.desc())
+                .first()
+            )
+            if row:
+                updated.append(item["provider_id"])
+            else:
+                row = UserProviderConfig(
+                    user_id=user_id,
+                    provider_id=item["provider_id"],
+                    model=item["model"],
+                    base_url=item["base_url"],
+                )
+                db.add(row)
+                created.append(item["provider_id"])
+
+            row.display_name = item["display_name"]
+            row.api_format = item["api_format"]
+            row.is_enabled = item["is_enabled"]
+            row.updated_at = datetime.now(timezone.utc)
+            if item["has_api_key_field"]:
+                row.api_key_encrypted = _encrypt_api_key(item["api_key"])
+                if item["api_key"]:
+                    keys_imported += 1
+            if item["is_default"] and item["is_enabled"]:
+                default_row = row
+
+        if default_row is not None:
+            (
+                db.query(UserProviderConfig)
+                .filter(UserProviderConfig.user_id == user_id)
+                .update({"is_default": False})
+            )
+            default_row.is_default = True
+        db.commit()
+        return {
+            "created": created,
+            "updated": updated,
+            "keys_imported": keys_imported,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def activate_user_provider(user_id: int, config_id: int) -> bool:
     db = get_session_db()
     try:

@@ -111,6 +111,62 @@ class UserProviderConfigTest(unittest.TestCase):
         self.assertEqual(active_response.json()["provider_id"], "personal-local")
         self.assertTrue(active_response.json()["has_key"])
 
+    def test_non_admin_can_export_and_import_personal_provider_bundle(self):
+        from src.core.user_provider_manager import create_user_provider, get_active_config_for_user
+
+        token = create_access_token(self.user.id, self.user.username)
+        other_token = create_access_token(self.other.id, self.other.username)
+        client = TestClient(app)
+        create_user_provider(
+            self.user.id,
+            {
+                "provider_id": "portable-morph",
+                "display_name": "Morph pessoal",
+                "base_url": "https://api.morphllm.com/v1",
+                "model": "morph-dsv4flash",
+                "api_key": "portable-secret",
+                "is_default": True,
+            },
+        )
+
+        with patch(
+            "src.api.routes.pm_export_custom",
+            return_value=[{
+                "id": "global-custom",
+                "name": "Global",
+                "base_url": "https://global.example.test/v1",
+                "api_format": "chat_completions",
+                "models": [{"id": "global-model", "enabled": True}],
+            }],
+        ) as export_custom:
+            exported = client.get(
+                "/api/v1/providers/export?include_api_keys=true",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(exported.status_code, 200)
+        bundle = exported.json()
+        self.assertEqual(bundle["personal_providers"][0]["api_key"], "portable-secret")
+        self.assertFalse(bundle["custom_api_keys_included"])
+        export_custom.assert_called_once_with(include_api_keys=False)
+
+        imported = client.post(
+            "/api/v1/providers/import",
+            headers={"Authorization": f"Bearer {other_token}"},
+            json=bundle,
+        )
+
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(
+            imported.json()["personal"]["created"],
+            ["portable-morph", "global-custom"],
+        )
+        self.assertEqual(
+            imported.json()["custom"]["converted_to_personal"],
+            [{"id": "global-custom", "model": "global-model"}],
+        )
+        self.assertEqual(get_active_config_for_user(self.other.id)["api_key"], "portable-secret")
+
     def test_chat_route_passes_active_user_provider_to_chat_engine(self):
         from src.core.user_provider_manager import create_user_provider
 

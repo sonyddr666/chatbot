@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Query, Depends, Header
+from fastapi import APIRouter, Body, HTTPException, UploadFile, File, Form, Request, Query, Depends, Header
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from slowapi import Limiter
@@ -37,7 +37,9 @@ from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
     activate_user_provider,
     create_user_provider,
+    export_user_providers,
     get_active_config_for_user,
+    import_user_providers,
     list_user_providers,
     metadata_from_config,
 )
@@ -673,6 +675,8 @@ from src.core.provider_manager import (
     set_api_key_for_provider as pm_set_api_key,
     get_provider_api_key as pm_get_api_key,
     get_provider_status as pm_get_status,
+    export_custom_providers as pm_export_custom,
+    import_custom_providers as pm_import_custom,
 )
 
 
@@ -687,6 +691,124 @@ def _safe_provider_config(cfg: dict) -> dict:
 async def providers_list(include_keys: bool = False, user=Depends(get_current_user)):
     """Lista todos os provedores disponiveis sem expor chaves reais."""
     return pm_list(include_keys=False)
+
+
+@router.get("/providers/export")
+async def providers_export(
+    include_api_keys: bool = False,
+    user=Depends(get_current_user),
+):
+    """Exporta custom globais e providers pessoais em um bundle JSON portavel."""
+    is_admin = bool(getattr(user, "is_admin", False))
+    include_global_keys = include_api_keys and is_admin
+    return {
+        "format": "chatbot-provider-bundle",
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "includes_api_keys": include_api_keys,
+        "custom_api_keys_included": include_global_keys,
+        "custom_providers": pm_export_custom(include_api_keys=include_global_keys),
+        "personal_providers": export_user_providers(
+            user.id,
+            include_api_keys=include_api_keys,
+        ),
+    }
+
+
+def _custom_providers_as_personal(items: list) -> tuple[list[dict], dict]:
+    """Converte custom globais portaveis em configs da conta atual."""
+    personal_items = []
+    converted = []
+    skipped = []
+    for item in items:
+        if not isinstance(item, dict):
+            skipped.append({"id": "", "reason": "provider custom invalido"})
+            continue
+        provider_id = str(item.get("id", "")).strip()
+        models = item.get("models", [])
+        if not provider_id or not isinstance(models, list) or not models:
+            skipped.append({"id": provider_id, "reason": "provider custom sem modelos"})
+            continue
+        for model in models:
+            if not isinstance(model, dict) or not str(model.get("id", "")).strip():
+                skipped.append({"id": provider_id, "reason": "modelo custom invalido"})
+                continue
+            model_id = str(model["id"]).strip()
+            personal = {
+                "provider_id": provider_id,
+                "display_name": str(item.get("name", provider_id)).strip() or provider_id,
+                "base_url": str(item.get("base_url", "")).strip(),
+                "model": model_id,
+                "api_format": str(item.get("api_format", "chat_completions")).strip()
+                or "chat_completions",
+                "is_enabled": bool(item.get("enabled", True))
+                and bool(model.get("enabled", True)),
+                "is_default": False,
+            }
+            if "api_key" in item:
+                personal["api_key"] = str(item.get("api_key", ""))
+            personal_items.append(personal)
+            converted.append({"id": provider_id, "model": model_id})
+    return personal_items, {
+        "created": [],
+        "updated": [],
+        "keys_imported": 0,
+        "converted_to_personal": converted,
+        "skipped": skipped,
+    }
+
+
+@router.post("/providers/import")
+async def providers_import(
+    body: dict | list = Body(..., media_type="application/json"),
+    user=Depends(get_current_user),
+):
+    """Importa providers pessoais; admins tambem restauram custom globais."""
+    if isinstance(body, list):
+        custom_items = body
+        personal_items = []
+    elif isinstance(body, dict):
+        export_format = body.get("format")
+        if export_format and export_format != "chatbot-provider-bundle":
+            raise HTTPException(status_code=400, detail="Formato de exportacao desconhecido")
+        try:
+            version = int(body.get("version", 1))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Versao de exportacao invalida")
+        if version > 1:
+            raise HTTPException(status_code=400, detail="Versao de exportacao ainda nao suportada")
+
+        custom_items = body.get("custom_providers", body.get("providers", []))
+        personal_items = body.get("personal_providers", [])
+        if not custom_items and not personal_items:
+            if body.get("provider_id") and body.get("model"):
+                personal_items = [body]
+            elif body.get("id"):
+                custom_items = [body]
+    else:
+        raise HTTPException(status_code=400, detail="Arquivo JSON invalido")
+
+    if not isinstance(custom_items, list) or not isinstance(personal_items, list):
+        raise HTTPException(status_code=400, detail="Listas de providers invalidas")
+
+    is_admin = bool(getattr(user, "is_admin", False))
+    custom_result = None
+    if not is_admin:
+        converted_items, custom_result = _custom_providers_as_personal(custom_items)
+        personal_items = [*personal_items, *converted_items]
+
+    try:
+        personal_result = import_user_providers(user.id, personal_items)
+        if is_admin:
+            custom_result = pm_import_custom(custom_items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {
+        "status": "ok",
+        "custom": custom_result,
+        "personal": personal_result,
+    }
 
 
 @router.get("/providers/user")

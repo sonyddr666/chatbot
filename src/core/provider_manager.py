@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from src.config import settings
 
 DATA_DIR = "./data"
@@ -541,6 +541,145 @@ def get_provider(provider_id: str, include_keys: bool = False) -> Optional[dict]
         if p["id"] == provider_id:
             return p
     return None
+
+
+def export_custom_providers(include_api_keys: bool = False) -> list[dict]:
+    """Exporta apenas providers customizados globais em formato portavel."""
+    raw = _load_raw()
+    exported = []
+    for provider in raw.get("custom_providers", []):
+        item = {
+            "id": provider.get("id", ""),
+            "name": provider.get("name", provider.get("id", "")),
+            "base_url": provider.get("base_url", ""),
+            "endpoint": provider.get("endpoint", ""),
+            "api_format": provider.get("api_format", "chat_completions"),
+            "enabled": bool(provider.get("enabled", True)),
+            "models": [
+                {
+                    key: value
+                    for key, value in model.items()
+                    if key not in {"api_key", "access_token", "refresh_token"}
+                }
+                for model in provider.get("models", [])
+                if isinstance(model, dict)
+            ],
+        }
+        if provider.get("reasoning_style"):
+            item["reasoning_style"] = provider["reasoning_style"]
+        if include_api_keys:
+            item["api_key"] = get_provider_api_key(str(provider.get("id", "")))
+        exported.append(item)
+    return exported
+
+
+def _normalize_import_models(value) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("models deve ser uma lista")
+    if len(value) > 500:
+        raise ValueError("Cada provider pode importar no maximo 500 modelos")
+
+    models = []
+    seen_ids = set()
+    for raw_model in value:
+        if not isinstance(raw_model, dict):
+            raise ValueError("Cada modelo importado deve ser um objeto JSON")
+        model_id = str(raw_model.get("id", "")).strip()
+        if not model_id:
+            raise ValueError("Todo modelo importado precisa de id")
+        if model_id in seen_ids:
+            raise ValueError(f"Modelo duplicado no provider: {model_id}")
+        seen_ids.add(model_id)
+        model = {
+            key: value
+            for key, value in raw_model.items()
+            if key not in {"active", "api_key", "access_token", "refresh_token"}
+        }
+        model["id"] = model_id
+        model["name"] = str(raw_model.get("name", model_id)).strip() or model_id
+        try:
+            model["context_length"] = max(1, int(raw_model.get("context_length", 128000)))
+        except (TypeError, ValueError):
+            model["context_length"] = 128000
+        model["enabled"] = bool(raw_model.get("enabled", True))
+        models.append(model)
+    return models
+
+
+def import_custom_providers(items: list[dict]) -> dict:
+    """Mescla providers customizados globais por ID sem alterar o provider ativo."""
+    if not isinstance(items, list):
+        raise ValueError("custom_providers deve ser uma lista")
+    if len(items) > 100:
+        raise ValueError("O arquivo pode importar no maximo 100 providers customizados")
+
+    raw = _load_raw()
+    custom = raw.setdefault("custom_providers", [])
+    by_id = {str(provider.get("id", "")): provider for provider in custom}
+    created = []
+    updated = []
+    skipped = []
+    keys_imported = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Cada provider importado deve ser um objeto JSON")
+        provider_id = str(item.get("id", "")).strip().lower().replace(" ", "-")
+        if not provider_id:
+            raise ValueError("Todo provider customizado importado precisa de id")
+        if provider_id in BUILTIN_PROVIDERS:
+            skipped.append({"id": provider_id, "reason": "provider built-in"})
+            continue
+
+        existing = by_id.get(provider_id)
+        provider = dict(existing or {})
+        provider["id"] = provider_id
+        provider["name"] = str(item.get("name", provider.get("name", provider_id))).strip() or provider_id
+        if "base_url" in item or not existing:
+            provider["base_url"] = str(item.get("base_url", "")).strip()
+        if "endpoint" in item or not existing:
+            provider["endpoint"] = str(item.get("endpoint", "")).strip()
+        if "api_format" in item or not existing:
+            provider["api_format"] = str(item.get("api_format", "chat_completions")).strip() or "chat_completions"
+        if "enabled" in item or not existing:
+            requested_enabled = bool(item.get("enabled", True))
+            if raw.get("active_provider_id") == provider_id and not requested_enabled:
+                requested_enabled = True
+            provider["enabled"] = requested_enabled
+        if "models" in item or not existing:
+            provider["models"] = _normalize_import_models(item.get("models", []))
+        if "reasoning_style" in item:
+            provider["reasoning_style"] = str(item.get("reasoning_style", "")).strip()
+        provider["created_at"] = provider.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        if "api_key" in item:
+            api_key = str(item.get("api_key", ""))
+            provider["api_key"] = api_key
+            if api_key:
+                raw.setdefault("provider_keys", {})[provider_id] = api_key
+                keys_imported += 1
+            else:
+                raw.setdefault("provider_keys", {}).pop(provider_id, None)
+
+        if existing:
+            index = custom.index(existing)
+            custom[index] = provider
+            updated.append(provider_id)
+        else:
+            custom.append(provider)
+            created.append(provider_id)
+        by_id[provider_id] = provider
+
+    raw["custom_providers"] = custom
+    _save_raw(raw)
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "keys_imported": keys_imported,
+    }
 
 
 def get_active_model_metadata() -> dict:

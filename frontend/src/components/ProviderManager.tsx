@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useCallback, useRef } from 'react'
 import {
   X, Plus, Trash2, Check,
   Server, Globe, Cpu, Eye, EyeOff, Power, PowerOff,
-  Pencil, Save, AlertTriangle, Loader2, Upload, RefreshCw, User,
+  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
@@ -77,6 +77,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const [showAddForm, setShowAddForm] = useState(false)
   const [showPersonalForm, setShowPersonalForm] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [showExportDialog, setShowExportDialog] = useState(false)
+  const [exportingProviders, setExportingProviders] = useState(false)
+  const [importingProviders, setImportingProviders] = useState(false)
+  const importProvidersRef = useRef<HTMLInputElement | null>(null)
 
   // Form state
   const [formName, setFormName] = useState('')
@@ -189,6 +193,68 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   }
 
   // ─── Salvar chave de API ──────────────────────────────────────
+
+  const handleExportProviders = async (includeApiKeys: boolean) => {
+    setExportingProviders(true)
+    try {
+      const bundle = await apiReq<Record<string, unknown>>(
+        `${API}/providers/export?include_api_keys=${includeApiKeys ? 'true' : 'false'}`,
+      )
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const date = new Date().toISOString().slice(0, 10)
+      link.href = url
+      link.download = `chatbot-providers-${includeApiKeys ? 'com-chaves' : 'sem-chaves'}-${date}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setShowExportDialog(false)
+      toast.success(includeApiKeys ? 'Providers exportados com suas chaves' : 'Providers exportados sem chaves')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setExportingProviders(false)
+    }
+  }
+
+  const handleImportProviders = async (event: any) => {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    setImportingProviders(true)
+    try {
+      const parsed = JSON.parse(await file.text())
+      const hasApiKeys = JSON.stringify(parsed).includes('"api_key"')
+      const accepted = confirm(
+        `Importar providers de "${file.name}"?\n\n`
+        + 'Providers pessoais existentes com a mesma configuracao serao atualizados. '
+        + 'Para usuarios comuns, providers customizados serao adicionados como providers pessoais.'
+        + (hasApiKeys ? '\n\nO arquivo contem API keys.' : ''),
+      )
+      if (!accepted) return
+
+      const result = await apiReq<any>(`${API}/providers/import`, {
+        method: 'POST',
+        body: JSON.stringify(parsed),
+      })
+      await loadProviders()
+      loadConfig()
+      const customChanged = (result.custom?.created?.length || 0) + (result.custom?.updated?.length || 0)
+      const personalChanged = (result.personal?.created?.length || 0) + (result.personal?.updated?.length || 0)
+      const customSkipped = result.custom?.skipped?.length || 0
+      toast.success(`${customChanged + personalChanged} provider(s) importado(s) ou atualizado(s)`)
+      if (customSkipped) {
+        toast(`${customSkipped} item(ns) customizado(s) nao puderam ser importado(s)`)
+      }
+    } catch (err: any) {
+      toast.error(err instanceof SyntaxError ? 'Arquivo JSON invalido' : err.message)
+    } finally {
+      input.value = ''
+      setImportingProviders(false)
+    }
+  }
 
   const handleSaveApiKey = async () => {
     if (!selectedId || !localApiKey.trim()) {
@@ -663,6 +729,33 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
 
           {/* Botão Add Provider */}
           <div className="p-3 border-t" style={{ borderColor: 'var(--border)' }}>
+            <input
+              ref={importProvidersRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportProviders}
+            />
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <button
+                onClick={() => setShowExportDialog(true)}
+                disabled={exportingProviders}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+              >
+                {exportingProviders ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                Exportar
+              </button>
+              <button
+                onClick={() => importProvidersRef.current?.click()}
+                disabled={importingProviders}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+              >
+                {importingProviders ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                Importar JSON
+              </button>
+            </div>
             <button
               onClick={() => { resetForm(); setShowAddForm(true); setShowPersonalForm(false); setSelectedId(null) }}
               className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all hover:opacity-90"
@@ -1357,6 +1450,75 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
           )}
         </div>
       </div>
+      {showExportDialog && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+          onClick={() => !exportingProviders && setShowExportDialog(false)}
+        >
+          <div
+            className="w-full max-w-md mx-4 rounded-2xl border p-6 shadow-2xl"
+            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+                  Exportar providers
+                </h3>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                  O arquivo inclui providers customizados e os seus providers pessoais.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowExportDialog(false)}
+                disabled={exportingProviders}
+                className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => handleExportProviders(false)}
+                disabled={exportingProviders}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+              >
+                <Download size={20} style={{ color: 'var(--accent)' }} />
+                <span>
+                  <span className="block text-sm font-semibold">Exportar sem API keys</span>
+                  <span className="block text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                    Seguro para compartilhar ou versionar.
+                  </span>
+                </span>
+              </button>
+
+              <button
+                onClick={() => handleExportProviders(true)}
+                disabled={exportingProviders}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ borderColor: '#f59e0b', color: 'var(--text-primary)', background: '#f59e0b12' }}
+              >
+                {exportingProviders
+                  ? <Loader2 size={20} className="animate-spin" style={{ color: '#d97706' }} />
+                  : <Eye size={20} style={{ color: '#d97706' }} />}
+                <span>
+                  <span className="block text-sm font-semibold">Exportar com API keys</span>
+                  <span className="block text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                    Inclui suas chaves pessoais. Chaves globais entram somente para admins.
+                  </span>
+                </span>
+              </button>
+            </div>
+
+            <div className="mt-4 flex items-start gap-2 text-xs" style={{ color: '#d97706' }}>
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+              Guarde arquivos com chaves em local seguro. Eles contêm credenciais em texto legível.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 })
