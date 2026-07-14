@@ -618,11 +618,33 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-            <h2 className="font-bold text-lg" style={{ color: 'var(--text-primary)' }}>Providers</h2>
-            <button onClick={onClose} className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10">
-              <X size={18} style={{ color: 'var(--text-secondary)' }} />
-            </button>
+          <div className="px-3 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-bold text-lg" style={{ color: 'var(--text-primary)' }}>Providers</h2>
+              <button onClick={onClose} className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10">
+                <X size={18} style={{ color: 'var(--text-secondary)' }} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button
+                onClick={() => setShowExportDialog(true)}
+                disabled={exportingProviders}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border text-xs font-semibold disabled:opacity-50"
+                style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+              >
+                {exportingProviders ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                Exportar
+              </button>
+              <button
+                onClick={() => importProvidersRef.current?.click()}
+                disabled={importingProviders}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border text-xs font-semibold disabled:opacity-50"
+                style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+              >
+                {importingProviders ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                Importar JSON
+              </button>
+            </div>
           </div>
 
           {/* Lista */}
