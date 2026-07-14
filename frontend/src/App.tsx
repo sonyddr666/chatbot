@@ -41,6 +41,7 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const autoScrollRef = useRef(true)
   const liveEnabledRef = useRef(false)
+  const initializedChatUserRef = useRef<number | null>(null)
 
   const handleStreamChunk = useCallback((chunk: StreamChunk) => {
     if (chunk.type === 'start') {
@@ -217,7 +218,18 @@ export default function App() {
     if (!user) return
     loadConfig()
     loadProfiles()
-    useChatStore.getState().setSession(useChatStore.getState().sessionId)
+    if (initializedChatUserRef.current === user.id) return
+    initializedChatUserRef.current = user.id
+    detachActiveChatStreams()
+    useChatStore.setState({
+      sessionId: `chat-${Date.now()}`,
+      messages: [],
+      isLoading: false,
+      error: null,
+      streamStatus: null,
+      route: null,
+      lastMetrics: null,
+    })
   }, [loadConfig, loadProfiles, user])
 
   const handleAuthenticated = useCallback((nextUser: UserInfo) => {
@@ -229,6 +241,7 @@ export default function App() {
   const handleLogout = useCallback(() => {
     disconnectWs()
     detachActiveChatStreams()
+    initializedChatUserRef.current = null
     api.logout()
     setUser(null)
     setShowOnboarding(false)

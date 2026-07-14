@@ -24,6 +24,13 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertIn("setLocalApiKey('')", provider_manager)
         self.assertNotIn("setLocalApiKey(selected.has_key ? (selected.api_key || '') : '')", provider_manager)
 
+    def test_app_starts_with_a_new_empty_chat_instead_of_default_history(self):
+        app = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("sessionId: `chat-${Date.now()}`", app)
+        self.assertIn("initializedChatUserRef", app)
+        self.assertNotIn("setSession(useChatStore.getState().sessionId)", app)
+
 
 if __name__ == "__main__":
     unittest.main()
