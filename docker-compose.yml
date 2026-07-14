@@ -1,6 +1,8 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      network: host
     expose:
       - "8000"
     environment:
@@ -43,6 +45,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      network: host
     ports:
       - "127.0.0.1:${FRONTEND_HOST_PORT:-3100}:80"
     expose:
