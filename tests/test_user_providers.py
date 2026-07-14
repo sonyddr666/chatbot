@@ -119,7 +119,13 @@ class UserProviderConfigTest(unittest.TestCase):
         seen = []
 
         class FakeChatEngine:
-            def __init__(self, memory, provider_config=None):
+            def __init__(
+                self,
+                memory,
+                provider_config=None,
+                response_mode="normal",
+                reasoning_effort=None,
+            ):
                 seen.append(provider_config)
 
             async def chat_stream(self, message):

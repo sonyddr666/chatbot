@@ -6,6 +6,8 @@ Gera streaming com separação de reasoning_content e content.
 import asyncio
 import json
 from typing import AsyncGenerator, Tuple, Optional
+from urllib.parse import urlparse
+
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -35,6 +37,16 @@ def _is_opencode_provider(config: dict) -> bool:
     return provider_id.startswith("opencode-") or "opencode.ai/" in base_url
 
 
+def _is_openai_compatible_provider(config: dict) -> bool:
+    api_format = str(config.get("api_format", "chat_completions")).strip().lower()
+    return api_format in {
+        "chat_completions",
+        "openai",
+        "openai_compatible",
+        "openai_chat_completions",
+    }
+
+
 def _coerce_stream_text(value) -> str:
     if isinstance(value, str):
         return value
@@ -55,6 +67,23 @@ def _openai_delta_parts(delta: dict) -> list[tuple[str, str]]:
         if reasoning:
             parts.append(("reasoning", reasoning))
             break
+    else:
+        reasoning_details = delta.get("reasoning_details")
+        if isinstance(reasoning_details, list):
+            visible_details = []
+            for detail in reasoning_details:
+                if not isinstance(detail, dict):
+                    continue
+                detail_type = str(detail.get("type", ""))
+                if detail_type == "reasoning.encrypted":
+                    continue
+                detail_text = _coerce_stream_text(
+                    detail.get("text") or detail.get("summary") or detail.get("content")
+                )
+                if detail_text:
+                    visible_details.append(detail_text)
+            if visible_details:
+                parts.append(("reasoning", "".join(visible_details)))
     content = _coerce_stream_text(delta.get("content"))
     if content:
         parts.append(("content", content))
@@ -81,55 +110,232 @@ def _messages_for_openai(messages: list[BaseMessage]) -> list[dict]:
     return result
 
 
-async def generate_opencode_stream(
+def _chat_completions_url(provider_config: dict) -> str:
+    base_url = str(provider_config.get("base_url", "")).strip().rstrip("/")
+    endpoint = str(provider_config.get("endpoint", "")).strip()
+    if endpoint.startswith(("http://", "https://")):
+        return endpoint
+    if endpoint:
+        return base_url + "/" + endpoint.lstrip("/")
+    if base_url.endswith("/chat/completions"):
+        return base_url
+    is_ollama = str(provider_config.get("provider_id", "")).lower() == "ollama"
+    if is_ollama and not base_url.endswith("/v1"):
+        base_url += "/v1"
+    return base_url + "/chat/completions"
+
+
+def _provider_reasoning_style(provider_config: dict) -> str:
+    explicit = str(provider_config.get("reasoning_style", "")).strip().lower()
+    if explicit in {"object", "reasoning", "reasoning_object", "morph", "openrouter"}:
+        return "reasoning_object"
+    if explicit in {"effort", "reasoning_effort", "openai"}:
+        return "reasoning_effort"
+    if explicit in {"none", "disabled", "off"}:
+        return "none"
+
+    provider_id = str(provider_config.get("provider_id", "")).lower()
+    hostname = urlparse(str(provider_config.get("base_url", ""))).hostname or ""
+    if "morphllm.com" in hostname or "openrouter.ai" in hostname:
+        return "reasoning_object"
+    if hostname == "api.openai.com" or provider_id == "openai":
+        return "reasoning_effort"
+    if (
+        provider_id.startswith("opencode-")
+        or "opencode.ai" in hostname
+        or provider_id == "ollama"
+        or "localhost" in hostname
+    ):
+        return "none"
+    return "adaptive"
+
+
+def _compatible_reasoning_effort(provider_config: dict, effort: str) -> str:
+    hostname = urlparse(str(provider_config.get("base_url", ""))).hostname or ""
+    if "morphllm.com" in hostname and effort in {"max", "xhigh"}:
+        return "high"
+    return effort
+
+
+def _openai_request_variants(
     messages: list[BaseMessage],
     provider_config: dict,
-) -> AsyncGenerator[Tuple[str, str], None]:
-    """Read OpenCode SSE directly so non-standard reasoning fields are preserved."""
-    base_url = str(provider_config.get("base_url", "")).rstrip("/")
-    model = str(provider_config.get("model_id", "")).strip()
-    api_key = str(provider_config.get("api_key", "")).strip()
-    if not base_url or not model or not api_key:
-        raise RuntimeError("Provider OpenCode incompleto: URL, modelo ou chave ausente")
-
-    endpoint = base_url if base_url.endswith("/chat/completions") else base_url + "/chat/completions"
-    payload = {
-        "model": model,
+    response_mode: str,
+    reasoning_effort: str | None,
+) -> list[dict]:
+    mode = normalize_response_mode(response_mode, default=settings.codex_response_mode_default)
+    effort = normalize_reasoning_effort(reasoning_effort, mode=mode)
+    effort = _compatible_reasoning_effort(provider_config, effort)
+    base_payload = {
+        "model": str(provider_config.get("model_id", "")).strip(),
         "messages": _messages_for_openai(messages),
         "stream": True,
         "temperature": 0.7,
     }
+    style = _provider_reasoning_style(provider_config)
+    extras: list[dict]
+    if style == "reasoning_object":
+        extras = [{"reasoning": {"effort": effort}}, {}]
+    elif style == "reasoning_effort":
+        extras = [{"reasoning_effort": effort}, {}]
+    elif style == "adaptive":
+        extras = [
+            {"reasoning": {"effort": effort}},
+            {"reasoning_effort": effort},
+            {},
+        ]
+    else:
+        extras = [{}]
+
+    variants: list[dict] = []
+    for extra in extras:
+        payload = {**base_payload, **extra}
+        if payload not in variants:
+            variants.append(payload)
+    return variants
+
+
+def _can_retry_without_reasoning(status_code: int, detail: str) -> bool:
+    if status_code not in {400, 404, 422}:
+        return False
+    lowered = detail.lower()
+    if "reasoning" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in (
+            "unknown",
+            "unsupported",
+            "not support",
+            "not allowed",
+            "unrecognized",
+            "unexpected",
+            "extra_forbidden",
+            "additional propert",
+            "invalid parameter",
+            "invalid field",
+        )
+    )
+
+
+async def _iter_openai_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
+    """Yield complete SSE data payloads, with a JSON-response fallback."""
+    data_lines: list[str] = []
+    raw_lines: list[str] = []
+    saw_sse_data = False
+    async for line in response.aiter_lines():
+        if line == "":
+            if data_lines:
+                saw_sse_data = True
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            if data_lines:
+                candidate = "\n".join(data_lines)
+                try:
+                    json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    saw_sse_data = True
+                    yield candidate
+                    data_lines = []
+            data_lines.append(line[5:].lstrip(" "))
+            continue
+        raw_lines.append(line)
+
+    if data_lines:
+        saw_sse_data = True
+        yield "\n".join(data_lines)
+    if not saw_sse_data and raw_lines:
+        yield "\n".join(raw_lines)
+
+
+def _openai_event_parts(event: dict) -> list[tuple[str, str]]:
+    parts: list[tuple[str, str]] = []
+    for choice in event.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta") or choice.get("message") or {}
+        if isinstance(delta, dict):
+            parts.extend(_openai_delta_parts(delta))
+    return parts
+
+
+def _provider_error(provider_config: dict, message: str) -> RuntimeError:
+    label = str(
+        provider_config.get("name")
+        or provider_config.get("provider_id")
+        or "Provider OpenAI-compatible"
+    )
+    return RuntimeError(f"{label}: {message}")
+
+
+async def generate_openai_compatible_stream(
+    messages: list[BaseMessage],
+    provider_config: dict,
+    response_mode: str = "normal",
+    reasoning_effort: str | None = None,
+) -> AsyncGenerator[Tuple[str, str], None]:
+    """Stream any Chat Completions-compatible provider without losing reasoning fields."""
+    base_url = str(provider_config.get("base_url", "")).strip()
+    model = str(provider_config.get("model_id", "")).strip()
+    api_key = str(provider_config.get("api_key", "")).strip()
+    if not base_url or not model:
+        raise _provider_error(provider_config, "URL ou modelo ausente")
+
+    endpoint = _chat_completions_url(provider_config)
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Accept": "text/event-stream",
         "Content-Type": "application/json",
     }
-    received_text = False
-    pending_type = ""
-    pending_text = ""
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    variants = _openai_request_variants(
+        messages,
+        provider_config,
+        response_mode,
+        reasoning_effort,
+    )
     timeout = httpx.Timeout(120.0, connect=10.0)
-
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        async with client.stream("POST", endpoint, headers=headers, json=payload) as response:
-            if response.status_code >= 400:
-                detail = (await response.aread()).decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(f"OpenCode retornou HTTP {response.status_code}: {detail}")
+        for attempt, payload in enumerate(variants):
+            async with client.stream(
+                "POST",
+                endpoint,
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    detail = (await response.aread()).decode("utf-8", errors="replace")[:1000]
+                    has_fallback = attempt < len(variants) - 1
+                    if has_fallback and _can_retry_without_reasoning(response.status_code, detail):
+                        continue
+                    raise _provider_error(
+                        provider_config,
+                        f"HTTP {response.status_code}: {detail}",
+                    )
 
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if not raw or raw == "[DONE]":
-                    continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("error"):
-                    raise RuntimeError(f"OpenCode retornou erro: {event['error']}")
-                for choice in event.get("choices") or []:
-                    delta = choice.get("delta") or choice.get("message") or {}
-                    for typ, text in _openai_delta_parts(delta):
+                received_text = False
+                pending_type = ""
+                pending_text = ""
+                async for raw in _iter_openai_payloads(response):
+                    raw = raw.strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("error"):
+                        raise _provider_error(provider_config, f"erro no stream: {event['error']}")
+                    for typ, text in _openai_event_parts(event):
                         received_text = True
                         if pending_type and pending_type != typ and pending_text:
                             for piece in _smooth_stream_parts(pending_text):
@@ -145,12 +351,28 @@ async def generate_opencode_stream(
                                     await asyncio.sleep(0.004)
                             pending_text = ""
 
-    if pending_type and pending_text:
-        for piece in _smooth_stream_parts(pending_text):
-            yield (pending_type, piece)
+                if pending_type and pending_text:
+                    for piece in _smooth_stream_parts(pending_text):
+                        yield (pending_type, piece)
+                if not received_text:
+                    raise _provider_error(provider_config, "stream encerrado sem conteúdo")
+                return
 
-    if not received_text:
-        raise RuntimeError("OpenCode encerrou o stream sem conteudo")
+
+async def generate_opencode_stream(
+    messages: list[BaseMessage],
+    provider_config: dict,
+    response_mode: str = "normal",
+    reasoning_effort: str | None = None,
+) -> AsyncGenerator[Tuple[str, str], None]:
+    """Backward-compatible OpenCode entrypoint using the shared adapter."""
+    async for chunk in generate_openai_compatible_stream(
+        messages,
+        provider_config,
+        response_mode=response_mode,
+        reasoning_effort=reasoning_effort,
+    ):
+        yield chunk
 
 
 def _convert_messages_to_codex(messages: list[BaseMessage]) -> list[dict]:
@@ -337,7 +559,22 @@ async def generate_stream(
         return
 
     if _is_opencode_provider(pm_cfg):
-        async for chunk in generate_opencode_stream(messages, pm_cfg):
+        async for chunk in generate_opencode_stream(
+            messages,
+            pm_cfg,
+            response_mode=response_mode,
+            reasoning_effort=reasoning_effort,
+        ):
+            yield chunk
+        return
+
+    if _is_openai_compatible_provider(pm_cfg) and pm_cfg.get("base_url"):
+        async for chunk in generate_openai_compatible_stream(
+            messages,
+            pm_cfg,
+            response_mode=response_mode,
+            reasoning_effort=reasoning_effort,
+        ):
             yield chunk
         return
 

@@ -72,7 +72,13 @@ class SkillRunsTest(unittest.TestCase):
         token = create_access_token(self.user.id, self.user.username)
 
         class FakeChatEngine:
-            def __init__(self, memory, provider_config=None):
+            def __init__(
+                self,
+                memory,
+                provider_config=None,
+                response_mode="normal",
+                reasoning_effort=None,
+            ):
                 pass
 
             async def chat(self, message):
