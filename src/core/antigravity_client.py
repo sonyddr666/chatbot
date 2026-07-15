@@ -198,12 +198,17 @@ def provider_models_from_account(account: dict) -> list[dict]:
         image_model = "image" in lowered or "imagen" in lowered
         if image_model:
             continue
+        supports_thinking = bool(info.get("supportsThinking"))
+        # The extra-low Gemini variant performs internal reasoning and returns a
+        # thoughtSignature, but does not stream thought text through this API.
+        thinking_stream = supports_thinking and "extra-low" not in lowered
         result.append({
             "id": model_id,
             "name": str(info.get("displayName") or model_id),
             "context_length": int(info.get("inputTokenLimit") or info.get("maxInputTokens") or 1_000_000),
             "enabled": True,
-            "supports_thinking": bool(info.get("supportsThinking")),
+            "supports_thinking": supports_thinking,
+            "thinking_stream": thinking_stream,
             "supports_images": bool(info.get("supportsImages")),
             "supports_video": bool(info.get("supportsVideo")),
             "image_generation": False,

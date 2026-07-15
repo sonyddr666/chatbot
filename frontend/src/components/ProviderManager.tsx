@@ -21,6 +21,7 @@ interface ModelInfo {
   active?: boolean
   supports_images?: boolean
   supports_thinking?: boolean
+  thinking_stream?: boolean
   recommended?: boolean
 }
 
@@ -1704,9 +1705,18 @@ function ModelRow({
                 Visão
               </span>
             )}
-            {model.supports_thinking && (
+            {model.supports_thinking && model.thinking_stream !== false && (
               <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#ffedd5', color: '#c2410c' }}>
                 Thinking
+              </span>
+            )}
+            {model.supports_thinking && model.thinking_stream === false && (
+              <span
+                className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                title="O modelo raciocina internamente, mas este endpoint não transmite o texto do pensamento"
+              >
+                Thinking interno
               </span>
             )}
           </div>

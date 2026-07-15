@@ -37,6 +37,23 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertTrue(model["supports_images"])
         self.assertTrue(model["recommended"])
 
+    def test_extra_low_thinking_is_marked_internal_only(self):
+        account = {
+            "models": {
+                "gemini-3.5-flash-extra-low": {
+                    "displayName": "Gemini 3.5 Flash (Low)",
+                    "supportsThinking": True,
+                },
+                "gemini-3.5-flash-low": {
+                    "displayName": "Gemini 3.5 Flash (Medium)",
+                    "supportsThinking": True,
+                },
+            }
+        }
+        models = {model["id"]: model for model in provider_models_from_account(account)}
+        self.assertFalse(models["gemini-3.5-flash-extra-low"]["thinking_stream"])
+        self.assertTrue(models["gemini-3.5-flash-low"]["thinking_stream"])
+
     def test_image_action_is_conservative(self):
         image = [{"kind": "image", "id": "att_1"}]
         self.assertEqual(detect_image_action("melhore esta foto", image)["operation"], "edit")

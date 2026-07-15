@@ -477,7 +477,8 @@ def _apply_builtin_model_overrides(provider_id: str, models: list[dict], raw: di
         if isinstance(override, dict):
             merged.update({k: v for k, v in override.items() if k in {"name", "context_length", "enabled"}})
         result.append(merged)
-    return result
+    from src.core.model_catalog import enrich_builtin_models
+    return enrich_builtin_models(provider_id, result)
 
 
 def set_builtin_dynamic_models(provider_id: str, models: list[dict]) -> list[dict]:
