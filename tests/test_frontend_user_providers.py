@@ -23,6 +23,8 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertIn("/providers/import", provider_manager)
         self.assertIn("setLocalApiKey('')", provider_manager)
         self.assertNotIn("setLocalApiKey(selected.has_key ? (selected.api_key || '') : '')", provider_manager)
+        self.assertIn("event.key !== 'Escape'", provider_manager)
+        self.assertIn("event.target === event.currentTarget", provider_manager)
 
     def test_app_starts_with_a_new_empty_chat_instead_of_default_history(self):
         app = Path("frontend/src/App.tsx").read_text(encoding="utf-8")

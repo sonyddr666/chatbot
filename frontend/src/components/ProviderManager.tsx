@@ -371,6 +371,27 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const [testingProvider, setTestingProvider] = useState(false)
   const [testResult, setTestResult] = useState<{ok: boolean; latency_ms?: number; message?: string; source?: string} | null>(null)
 
+  useEffect(() => {
+    if (!open) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (showExportDialog) {
+        setShowExportDialog(false)
+      } else if (showApiKey) {
+        setShowApiKey(false)
+      } else {
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [onClose, open, showApiKey, showExportDialog])
+
   // ─── Estados do formulário de criação (com modelo) ───────────
   const [formModelId, setFormModelId] = useState('')
   const [formModelName, setFormModelName] = useState('')
@@ -607,7 +628,13 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
       <div
         className="flex w-[95vw] max-w-6xl h-[85vh] rounded-2xl overflow-hidden shadow-2xl"
         style={{ background: 'var(--bg-primary)' }}
