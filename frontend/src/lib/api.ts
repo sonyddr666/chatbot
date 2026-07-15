@@ -58,6 +58,8 @@ export interface ChatMessage {
   providerName?: string | null
   modelId?: string | null
   modelName?: string | null
+  responseMode?: ResponseMode
+  reasoningEffort?: ReasoningEffort
   workspacePlan?: WorkspaceActionPlan
   skillActivities?: SkillActivity[]
   jobId?: string | null
