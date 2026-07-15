@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { ArrowDown, Brain, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, UserRound, Users, Wifi, WifiOff } from 'lucide-react'
+import { ArrowDown, Brain, Check, ChevronDown, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, UserRound, Users, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
@@ -18,6 +18,126 @@ import { detachActiveChatStreams, useChatStore } from './hooks/useChatStore'
 import { api, getAuthToken, setAuthToken, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useLiveVoice } from './voice/useLiveVoice'
+
+interface HeaderSelectOption<T extends string> {
+  value: T
+  label: string
+}
+
+interface HeaderSelectProps<T extends string> {
+  value: T
+  options: HeaderSelectOption<T>[]
+  onChange: (value: T) => void
+  icon: ReactNode
+  label: string
+  className: string
+  disabled?: boolean
+  title?: string
+}
+
+function HeaderSelect<T extends string>({
+  value,
+  options,
+  onChange,
+  icon,
+  label,
+  className,
+  disabled = false,
+  title,
+}: HeaderSelectProps<T>) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const selected = options.find(option => option.value === value) || options[0]
+
+  useEffect(() => {
+    if (!open) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [open])
+
+  return (
+    <div ref={rootRef} className={`relative ${className}`}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(current => !current)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') setOpen(false)
+        }}
+        className="flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-semibold shadow-sm transition-all hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
+        style={{
+          background: open ? 'var(--bg-primary)' : 'var(--bg-tertiary)',
+          borderColor: open ? 'var(--accent)' : 'var(--border)',
+          color: 'var(--text-secondary)',
+        }}
+        title={title || label}
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="flex-shrink-0" style={{ color: open ? 'var(--accent)' : 'var(--text-tertiary)' }}>
+          {icon}
+        </span>
+        <span className="whitespace-nowrap">{selected.label}</span>
+        <ChevronDown
+          size={13}
+          className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label={label}
+          className="absolute right-0 top-[calc(100%+8px)] z-[80] min-w-44 overflow-hidden rounded-2xl border p-1.5 shadow-2xl"
+          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+        >
+          {options.map(option => {
+            const isSelected = option.value === value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(option.value)
+                  setOpen(false)
+                }}
+                className="flex w-full items-center justify-between gap-4 rounded-xl px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                style={{
+                  background: isSelected ? 'var(--accent-light)' : 'transparent',
+                  color: isSelected ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+              >
+                <span>{option.label}</span>
+                {isSelected && <Check size={14} aria-hidden="true" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const RESPONSE_MODE_OPTIONS: HeaderSelectOption<ResponseMode>[] = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'thinking', label: 'Pensando' },
+  { value: 'live', label: 'Live' },
+]
+
+const REASONING_EFFORT_OPTIONS: HeaderSelectOption<ReasoningEffort>[] = [
+  { value: 'low', label: 'Leve' },
+  { value: 'medium', label: 'Medio' },
+  { value: 'high', label: 'Alto' },
+  { value: 'xhigh', label: 'Extra alto' },
+  { value: 'max', label: 'Maximo' },
+]
 
 export default function App() {
   const {
@@ -377,45 +497,25 @@ export default function App() {
               )}
             </span>
             <ModelSelector />
-            <div
-              className="hidden sm:flex items-center rounded-lg border pl-2"
-              style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+            <HeaderSelect
+              value={liveVoice.enabled ? 'live' : responseMode}
+              options={RESPONSE_MODE_OPTIONS}
+              onChange={setResponseMode}
+              disabled={liveVoice.enabled}
+              icon={<UserRound size={14} aria-hidden="true" />}
+              label="Modo do agente"
+              className="hidden sm:block"
               title={liveVoice.enabled ? 'O modo Live esta ativo enquanto o microfone estiver ligado' : 'Modo do agente'}
-            >
-              <UserRound size={14} aria-hidden="true" />
-              <select
-                value={liveVoice.enabled ? 'live' : responseMode}
-                onChange={event => setResponseMode(event.target.value as ResponseMode)}
-                disabled={liveVoice.enabled}
-                className="border-0 bg-transparent px-1.5 py-1.5 text-xs font-semibold outline-none disabled:opacity-70"
-                style={{ color: 'var(--text-secondary)' }}
-                aria-label="Modo do agente"
-              >
-                <option value="normal">Normal</option>
-                <option value="thinking">Pensando</option>
-                <option value="live">Live</option>
-              </select>
-            </div>
-            <div
-              className="hidden md:flex items-center rounded-lg border pl-2"
-              style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+            />
+            <HeaderSelect
+              value={reasoningEffort}
+              options={REASONING_EFFORT_OPTIONS}
+              onChange={setReasoningEffort}
+              icon={<Brain size={14} aria-hidden="true" />}
+              label="Esforco de raciocinio do modelo"
+              className="hidden md:block"
               title="Esforco de raciocinio enviado ao modelo"
-            >
-              <Brain size={14} aria-hidden="true" />
-              <select
-                value={reasoningEffort}
-                onChange={event => setReasoningEffort(event.target.value as ReasoningEffort)}
-                className="border-0 bg-transparent px-1.5 py-1.5 text-xs font-semibold outline-none"
-                style={{ color: 'var(--text-secondary)' }}
-                aria-label="Esforco de raciocinio do modelo"
-              >
-                <option value="low">Leve</option>
-                <option value="medium">Medio</option>
-                <option value="high">Alto</option>
-                <option value="xhigh">Extra alto</option>
-                <option value="max">Maximo</option>
-              </select>
-            </div>
+            />
             <LiveVoiceButton controller={liveVoice} />
             {user.is_admin && (
               <button

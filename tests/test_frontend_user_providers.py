@@ -32,6 +32,9 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertNotIn("setSession(useChatStore.getState().sessionId)", app)
         self.assertIn('<UserRound size={14}', app)
         self.assertIn('<Brain size={14}', app)
+        self.assertIn('function HeaderSelect<T extends string>', app)
+        self.assertIn('role="listbox"', app)
+        self.assertNotIn('<option value="xhigh">Extra alto</option>', app)
 
 
 if __name__ == "__main__":
