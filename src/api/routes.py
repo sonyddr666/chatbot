@@ -1753,6 +1753,7 @@ async def list_conversations(user=Depends(get_current_user)):
     """Lista todas as conversas."""
     ensure_db()
     convs = ConversationRepo.list_all(user.id)
+    activity = ConversationRepo.activity_for_user(user.id, [conversation.id for conversation in convs])
     return [
         ConversationResponse(
             id=c.id,
@@ -1762,6 +1763,8 @@ async def list_conversations(user=Depends(get_current_user)):
             message_count=c.messages_count,
             created_at=utc_isoformat(c.created_at),
             updated_at=utc_isoformat(c.updated_at),
+            job_status=(activity.get(c.id) or {}).get("job_status"),
+            has_unread_response=bool((activity.get(c.id) or {}).get("has_unread_response")),
         )
         for c in convs
     ]

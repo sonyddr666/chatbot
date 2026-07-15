@@ -68,6 +68,8 @@ export interface ChatMessage {
 export interface Conversation {
   id: number; session_id: string; title: string; language: string
   message_count: number; created_at: string; updated_at: string
+  job_status?: 'queued' | 'running' | 'completed' | 'interrupted' | 'failed' | 'cancelled' | null
+  has_unread_response?: boolean
 }
 
 export function parseApiTimestamp(value: string | Date) {

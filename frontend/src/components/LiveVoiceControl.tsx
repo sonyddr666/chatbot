@@ -26,6 +26,17 @@ const STATE_LABELS: Record<LiveVoiceState, string> = {
   unsupported: 'Navegador sem suporte',
 }
 
+const MOBILE_STATE_LABELS: Record<LiveVoiceState, string> = {
+  idle: 'Desligado',
+  listening: 'Ouvindo',
+  endpointing: 'Enviando',
+  generating: 'Respondendo',
+  speaking: 'Falando',
+  paused: 'Pausado',
+  error: 'Atencao',
+  unsupported: 'Sem suporte',
+}
+
 const STATE_COLORS: Record<LiveVoiceState, string> = {
   idle: 'var(--text-tertiary)',
   listening: '#16a34a',
@@ -73,12 +84,12 @@ export function LiveVoiceDock({ controller }: { controller: LiveVoiceController 
   const systemVoices = controller.voices.filter(voice => !voice.is_custom)
 
   return (
-    <div className="border-t px-3 py-2" style={{ borderColor: 'var(--border)', background: 'var(--bg-primary)' }}>
+    <div className="border-t px-2 py-2 sm:px-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-primary)' }}>
       <div
         className="mx-auto max-w-4xl overflow-hidden rounded-2xl border shadow-sm"
         style={{ borderColor: stateColor, background: 'var(--bg-secondary)' }}
       >
-        <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 px-2.5 py-2 sm:flex-nowrap sm:gap-3 sm:px-3 sm:py-2.5">
           <div
             className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${controller.state === 'listening' ? 'live-voice-pulse' : ''}`}
             style={{ background: `color-mix(in srgb, ${stateColor} 16%, transparent)`, color: stateColor }}
@@ -91,16 +102,17 @@ export function LiveVoiceDock({ controller }: { controller: LiveVoiceController 
           </div>
 
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
               <span className="text-xs font-black uppercase tracking-[0.15em]" style={{ color: stateColor }}>
-                {STATE_LABELS[controller.state]}
+                <span className="sm:hidden">{MOBILE_STATE_LABELS[controller.state]}</span>
+                <span className="hidden sm:inline">{STATE_LABELS[controller.state]}</span>
               </span>
               {controller.queueLength > 0 && (
                 <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   {controller.queueLength} trecho(s)
                 </span>
               )}
-              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+              <span className="hidden rounded-full px-2 py-0.5 text-[10px] font-bold sm:inline" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                 Inworld TTS
               </span>
             </div>
@@ -109,7 +121,7 @@ export function LiveVoiceDock({ controller }: { controller: LiveVoiceController 
             </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="ml-11 flex w-[calc(100%-2.75rem)] shrink-0 items-center justify-end gap-1 border-t pt-1.5 sm:ml-0 sm:w-auto sm:border-0 sm:pt-0" style={{ borderColor: 'var(--border)' }}>
             {(controller.state === 'generating' || isSpeaking) && (
               <button
                 type="button"

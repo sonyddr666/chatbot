@@ -462,9 +462,9 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 animate-fade-in`}>
-      <div className="max-w-[85%] md:max-w-[75%] group relative">
+      <div className="group relative max-w-[94%] sm:max-w-[85%] md:max-w-[75%]">
         <div
-          className="rounded-2xl px-4 py-3 shadow-sm"
+          className="rounded-2xl px-3.5 py-3 shadow-sm sm:px-4"
           style={{
             background: isUser ? 'var(--user-bubble)' : 'var(--bot-bubble)',
             color: isUser ? 'var(--user-text)' : 'var(--bot-text)',

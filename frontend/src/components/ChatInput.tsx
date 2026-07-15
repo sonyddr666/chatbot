@@ -179,7 +179,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
   const canSend = (!!input.trim() || files.length > 0) && !busy && !isSubmitting
 
   return (
-    <div className="border-t px-4 py-3" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}>
+    <div className="border-t px-2 py-2 sm:px-4 sm:py-3" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}>
       {isDragging && (
         <div
           className="fixed inset-0 z-[100] grid place-items-center p-6"
@@ -242,7 +242,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
         {fileError && <p className="mb-2 text-xs font-medium" style={{ color: 'var(--danger)' }}>{fileError}</p>}
 
         <div
-          className="flex items-end gap-1.5 rounded-xl p-1.5 transition-all focus-within:shadow-md"
+          className="flex items-end gap-1 rounded-xl p-1 transition-all focus-within:shadow-md sm:gap-1.5 sm:p-1.5"
           style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
         >
           <input
@@ -272,7 +272,7 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
               ? 'Continue digitando... o envio libera quando a resposta terminar'
               : files.length
                 ? 'Escreva o que o modelo deve fazer com os arquivos...'
-                : 'Digite, cole uma imagem ou arraste arquivos...'}
+                : 'Digite uma mensagem...'}
             rows={1}
             className="flex-1 resize-none rounded-lg bg-transparent px-2 py-2.5 text-[15px] outline-none sm:px-3"
             style={{ color: 'var(--text-primary)', maxHeight: '200px' }}
@@ -303,7 +303,8 @@ export function ChatInput({ onSend, busy = false, onStop, maxUploadMb = 10, stat
           </div>
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] sm:text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          <span>Cole imagens com Ctrl+V. Arquivos vao ao Workspace; RAG so quando voce escolher.</span>
+          <span className="sm:hidden">Anexe imagens ou arquivos. RAG so quando voce escolher.</span>
+          <span className="hidden sm:inline">Cole imagens com Ctrl+V. Arquivos vao ao Workspace; RAG so quando voce escolher.</span>
           <span className="shrink-0">{files.length}/{MAX_FILES}</span>
         </div>
       </div>

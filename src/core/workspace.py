@@ -4,12 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import shutil
+import unicodedata
 
 from src.core.userspace import safe_user_path
 
 
 MAX_TEXT_FILE_BYTES = 1024 * 1024
+MAX_SEARCH_VISITS = 5000
+IGNORED_SEARCH_PARTS = frozenset({".git", ".codex", "node_modules", "__pycache__"})
+IMAGE_EXTENSIONS = frozenset({".avif", ".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
+DOCUMENT_EXTENSIONS = frozenset({".csv", ".doc", ".docx", ".md", ".odt", ".pdf", ".ppt", ".pptx", ".rtf", ".txt", ".xls", ".xlsx"})
+SEARCH_STOPWORDS = frozenset({
+    "a", "ache", "achar", "arquivo", "arquivos", "busca", "buscar", "busque", "de", "dentro",
+    "do", "dos", "encontre", "encontrar", "eu", "imagem", "imagens", "local", "locais", "meu",
+    "meus", "minha", "minhas", "no", "nos", "o", "os", "procure", "procurar", "seu", "seus",
+    "sistema", "tenta", "tente", "uma", "workspace",
+})
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,59 @@ def list_tree(user_id: int, path: str = "") -> list[WorkspaceNode]:
             )
         )
     return nodes
+
+
+def _fold(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+
+def search_files(user_id: int, query: str, limit: int = 25) -> list[WorkspaceNode]:
+    """Find user-owned Workspace files by name/path and broad file category."""
+    root = _workspace_path(user_id).resolve()
+    if not root.exists():
+        return []
+
+    normalized = _fold(query)
+    wants_images = bool(re.search(r"\b(?:foto|fotos|imagem|imagens|image|images)\b", normalized))
+    wants_documents = bool(re.search(r"\b(?:documento|documentos|doc|docs|pdf|planilha|planilhas)\b", normalized))
+    terms = [
+        word for word in re.findall(r"[a-z0-9_.-]+", normalized)
+        if len(word) > 1 and word not in SEARCH_STOPWORDS
+    ]
+
+    matches: list[tuple[int, str, WorkspaceNode]] = []
+    visited = 0
+    for path in root.rglob("*"):
+        visited += 1
+        if visited > MAX_SEARCH_VISITS:
+            break
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            relative = path.resolve().relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        if any(part in IGNORED_SEARCH_PARTS or part.startswith(".") for part in Path(relative).parts):
+            continue
+
+        extension = path.suffix.lower()
+        if wants_images and extension not in IMAGE_EXTENSIONS:
+            continue
+        if wants_documents and not wants_images and extension not in DOCUMENT_EXTENSIONS:
+            continue
+
+        folded_path = _fold(relative)
+        if terms and not all(term in folded_path for term in terms):
+            continue
+        score = (100 if wants_images or wants_documents else 0) + sum(20 for term in terms if term in folded_path)
+        if terms and any(_fold(path.stem) == term for term in terms):
+            score += 40
+        node = WorkspaceNode(name=path.name, path=relative, kind="file", size=path.stat().st_size)
+        matches.append((score, folded_path, node))
+
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    return [node for _, _, node in matches[:max(1, min(limit, 100))]]
 
 
 def read_text_file(user_id: int, path: str) -> str:

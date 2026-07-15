@@ -40,6 +40,22 @@ class WorkspaceServiceTest(unittest.TestCase):
         self.assertEqual([node.name for node in root_nodes], ["notes.md", "projetos"])
         self.assertEqual([node.name for node in project_nodes], ["app.md"])
 
+    def test_search_files_filters_images_and_stays_inside_user_workspace(self):
+        from src.core.userspace import safe_user_path
+        from src.core.workspace import search_files
+
+        first_image = safe_user_path(1, "workspace", "images/foto-ferias.png")
+        first_image.parent.mkdir(parents=True, exist_ok=True)
+        first_image.write_bytes(b"png")
+        safe_user_path(1, "workspace", "images/notas.txt").write_text("texto", encoding="utf-8")
+        other_image = safe_user_path(2, "workspace", "privada.jpg")
+        other_image.parent.mkdir(parents=True, exist_ok=True)
+        other_image.write_bytes(b"jpg")
+
+        matches = search_files(1, "procure uma imagem nos meus arquivos")
+
+        self.assertEqual([item.path for item in matches], ["images/foto-ferias.png"])
+
     def test_delete_path_removes_file_and_empty_folder(self):
         from src.core.workspace import delete_path, mkdir, write_text_file
 

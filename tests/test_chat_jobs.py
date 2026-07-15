@@ -53,6 +53,29 @@ class ChatJobPersistenceTest(unittest.TestCase):
         self.assertEqual(events[0]["id"], second)
         self.assertEqual(events[-1]["type"], "done")
 
+    def test_conversation_activity_tracks_running_and_unread_completion(self):
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:activity",
+            message="Continue em segundo plano",
+            provider={"provider_id": "codex", "model_id": "gpt-test"},
+            response_mode="thinking",
+            reasoning_effort="high",
+            use_rag=False,
+        )
+        running = ConversationRepo.activity_for_user(self.user.id, [job["conversation_id"]])
+        self.assertEqual(running[job["conversation_id"]]["job_status"], "queued")
+        self.assertFalse(running[job["conversation_id"]]["has_unread_response"])
+
+        ChatJobRepo.finish(job["id"], "completed")
+        completed = ConversationRepo.activity_for_user(self.user.id, [job["conversation_id"]])
+        self.assertEqual(completed[job["conversation_id"]]["job_status"], "completed")
+        self.assertTrue(completed[job["conversation_id"]]["has_unread_response"])
+
+        self.assertTrue(MessageRepo.mark_read(job["assistant_message_id"], self.user.id))
+        read = ConversationRepo.activity_for_user(self.user.id, [job["conversation_id"]])
+        self.assertFalse(read[job["conversation_id"]]["has_unread_response"])
+
     def test_workspace_router_skips_messages_without_file_intent(self):
         self.assertFalse(workspace_request_candidate("oi"))
         self.assertFalse(workspace_request_candidate("coloca uma estante no predio"))

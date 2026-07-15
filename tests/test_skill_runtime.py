@@ -6,6 +6,8 @@ from src.core.skill_runtime import (
     build_search_query,
     build_runtime_context,
     requests_web_search,
+    requests_search_clarification,
+    requests_workspace_search,
     run_enabled_skill_context,
     runtime_skill_activity,
     should_force_rag,
@@ -27,6 +29,15 @@ class SkillRuntimeTest(unittest.TestCase):
         self.assertFalse(should_run_web_search("pesquise novidades de IA", [{"name": "simple_search", "enabled": False}]))
         self.assertTrue(requests_web_search("pode pesquisar sobre Veryti"))
         self.assertFalse(requests_web_search("o que apareceu na pesquisa?"))
+
+    def test_local_file_search_never_routes_to_the_web(self):
+        message = "tenta procurar uma imagem dentro do seu sistema"
+
+        self.assertTrue(requests_workspace_search(message))
+        self.assertFalse(requests_web_search(message))
+        self.assertFalse(requests_search_clarification(message))
+        self.assertTrue(requests_web_search("procure uma imagem na internet"))
+        self.assertTrue(requests_search_clarification("procure uma imagem"))
 
     def test_search_query_deduplicates_quotes_and_resolves_recent_reference(self):
         repeated = build_search_query(
@@ -76,6 +87,42 @@ class SkillRuntimeTest(unittest.TestCase):
 
 
 class SkillRuntimeAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_local_file_search_uses_workspace_without_calling_web(self):
+        workspace_skill = {
+            "name": "workspace_manager",
+            "enabled": True,
+            "requires_shell": False,
+            "definition": {"permissions": {"workspace_read": True, "workspace_write": True, "shell": False}},
+        }
+        with (
+            patch("src.core.skill_runtime.SkillRepo.list_for_user", return_value=[workspace_skill]),
+            patch("src.core.skill_runtime.search_files", return_value=[SimpleNamespace(path="images/foto.png", size=42)]),
+            patch("src.core.skill_runtime.web_search", new=AsyncMock()) as web,
+            patch("src.core.skill_runtime.perplexo_search", new=AsyncMock()) as perplexo,
+            patch("src.core.skill_runtime.SkillRunRepo.create"),
+        ):
+            context = await run_enabled_skill_context(
+                7,
+                "tenta procurar uma imagem dentro do seu sistema",
+                session_id="u7:test",
+            )
+
+        self.assertIn("images/foto.png", context)
+        self.assertIn("somente no Workspace privado", context)
+        web.assert_not_awaited()
+        perplexo.assert_not_awaited()
+
+    async def test_ambiguous_find_request_asks_scope_without_searching(self):
+        search_skill = {"name": "simple_search", "enabled": True, "requires_shell": False}
+        with (
+            patch("src.core.skill_runtime.SkillRepo.list_for_user", return_value=[search_skill]),
+            patch("src.core.skill_runtime.web_search", new=AsyncMock()) as web,
+        ):
+            context = await run_enabled_skill_context(7, "procure uma imagem")
+
+        self.assertIn("internet ou nos arquivos do Workspace", context)
+        web.assert_not_awaited()
+
     async def test_two_word_search_still_executes_enabled_skill(self):
         with (
             patch(

@@ -147,7 +147,7 @@ export function SettingsPanel({ open, onClose }: Props) {
     <>
       <div className="fixed inset-0 bg-black/60 z-50" onClick={onClose} />
       <div
-        className="fixed right-0 top-0 h-full w-80 z-50 shadow-lg animate-slide-in"
+        className="fixed right-0 top-0 z-50 h-full w-full shadow-lg animate-slide-in sm:w-80"
         style={{ background: 'var(--bg-primary)', borderLeft: '1px solid var(--border)' }}
       >
         <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: 'var(--border)' }}>

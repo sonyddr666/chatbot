@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEv
 import toast from 'react-hot-toast'
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Database,
   Download,
@@ -429,13 +430,13 @@ export function WorkspacePanel({ open, onClose }: Props) {
     <>
       <div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-5xl flex-col border-l p-4 shadow-xl"
+        className="fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l p-3 shadow-xl sm:p-4 md:max-w-5xl"
         style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
       >
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: 'var(--accent)' }}>Workspace</p>
-            <h2 className="text-xl font-black" style={{ color: 'var(--text-primary)' }}>Gerenciador completo de arquivos</h2>
+            <h2 className="text-lg font-black sm:text-xl" style={{ color: 'var(--text-primary)' }}>Gerenciador completo de arquivos</h2>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
               Workspace e RAG sao separados. Nada entra no RAG sem sua confirmacao.
             </p>
@@ -444,7 +445,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
         </div>
 
         <div className="mt-4 grid min-h-0 flex-1 gap-4 md:grid-cols-[340px_1fr]">
-          <section className="flex min-h-0 flex-col rounded-2xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+          <section className={`${selectedPath ? 'hidden md:flex' : 'flex'} min-h-0 flex-col rounded-2xl border p-3`} style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
             <div
               onDragOver={event => {
                 event.preventDefault()
@@ -496,9 +497,17 @@ export function WorkspacePanel({ open, onClose }: Props) {
             </div>
           </section>
 
-          <section className="flex min-h-0 flex-col rounded-2xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+          <section className={`${selectedPath ? 'flex' : 'hidden md:flex'} min-h-0 flex-col rounded-2xl border p-3`} style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
             {selectedPath ? (
               <>
+                <button
+                  type="button"
+                  onClick={() => { setSelectedPath(''); setSelectedFile(''); setSelectedKind('') }}
+                  className="mb-3 inline-flex w-fit items-center gap-1 rounded-xl px-2 py-1.5 text-sm font-bold md:hidden"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+                >
+                  <ChevronLeft size={16} /> Arquivos
+                </button>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold" style={{ color: 'var(--text-tertiary)' }}>{selectedKind === 'folder' ? 'Pasta selecionada' : 'Arquivo aberto'}</p>

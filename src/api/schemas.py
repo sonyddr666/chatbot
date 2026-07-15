@@ -74,6 +74,8 @@ class ConversationResponse(BaseModel):
     message_count: int
     created_at: str
     updated_at: str
+    job_status: Optional[str] = None
+    has_unread_response: bool = False
 
 
 class RegisterRequest(BaseModel):

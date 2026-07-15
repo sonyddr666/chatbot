@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { ArrowDown, Brain, Check, ChevronDown, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, UserRound, Users, Wifi, WifiOff } from 'lucide-react'
+import { ArrowDown, Brain, Check, ChevronDown, FileText, FolderOpen, LogOut, Menu, MoreHorizontal, Server, Settings, Sparkles, UserRound, Users, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
@@ -125,6 +125,30 @@ function HeaderSelect<T extends string>({
   )
 }
 
+function MobileToolButton({
+  icon,
+  label,
+  onClick,
+  danger = false,
+}: {
+  icon: ReactNode
+  label: string
+  onClick: () => void
+  danger?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+      style={{ color: danger ? 'var(--danger)' : 'var(--text-primary)' }}
+    >
+      <span className="shrink-0" style={{ color: danger ? 'var(--danger)' : 'var(--text-tertiary)' }}>{icon}</span>
+      {label}
+    </button>
+  )
+}
+
 const RESPONSE_MODE_OPTIONS: HeaderSelectOption<ResponseMode>[] = [
   { value: 'normal', label: 'Normal' },
   { value: 'thinking', label: 'Pensando' },
@@ -154,6 +178,7 @@ export default function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [documentsOpen, setDocumentsOpen] = useState(false)
   const [adminUsersOpen, setAdminUsersOpen] = useState(false)
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -452,10 +477,10 @@ export default function App() {
 
       <div className="flex-1 flex flex-col min-w-0">
         <header
-          className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0"
+          className="relative flex items-center justify-between gap-2 border-b px-2 py-2.5 sm:px-4 sm:py-3 flex-shrink-0"
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button
               onClick={toggleSidebar}
               className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
@@ -463,7 +488,7 @@ export default function App() {
             >
               <Menu size={20} style={{ color: 'var(--text-secondary)' }} />
             </button>
-            <h1 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)' }}>Chatbot</h1>
+            <h1 className="hidden text-lg font-bold truncate sm:block" style={{ color: 'var(--text-primary)' }}>Chatbot</h1>
             {route && (
               <span
                 className="hidden sm:inline-flex text-xs px-2 py-0.5 rounded-full font-medium"
@@ -485,11 +510,11 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-1 sm:gap-2">
             <span className="hidden md:inline text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
               {user.display_name || user.username}
             </span>
-            <span title={wsConnected ? 'WebSocket conectado' : 'Modo HTTP'}>
+            <span className="hidden sm:inline" title={wsConnected ? 'WebSocket conectado' : 'Modo HTTP'}>
               {wsConnected ? (
                 <Wifi size={14} style={{ color: '#16a34a' }} />
               ) : (
@@ -517,10 +542,20 @@ export default function App() {
               title="Esforco de raciocinio enviado ao modelo"
             />
             <LiveVoiceButton controller={liveVoice} />
+            <button
+              type="button"
+              onClick={() => setMobileToolsOpen(open => !open)}
+              className="rounded-lg p-1.5 transition-colors hover:bg-black/5 dark:hover:bg-white/10 sm:hidden"
+              title="Mais ferramentas"
+              aria-label="Mais ferramentas"
+              aria-expanded={mobileToolsOpen}
+            >
+              <MoreHorizontal size={20} style={{ color: 'var(--text-secondary)' }} />
+            </button>
             {user.is_admin && (
               <button
                 onClick={() => setAdminUsersOpen(true)}
-                className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
                 title="Usuarios e aprovacoes"
               >
                 <Users size={18} style={{ color: 'var(--text-secondary)' }} />
@@ -528,46 +563,70 @@ export default function App() {
             )}
             <button
               onClick={() => setWorkspaceOpen(true)}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Workspace"
             >
               <FolderOpen size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={() => setDocumentsOpen(true)}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Documentos RAG"
             >
               <FileText size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={() => setSkillsOpen(true)}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Skills"
             >
               <Sparkles size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={() => setProviderManagerOpen(true)}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Gerenciar providers"
             >
               <Server size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={() => setSettingsOpen(true)}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Configuracoes"
             >
               <Settings size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={handleLogout}
-              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors sm:block"
               title="Sair"
             >
               <LogOut size={18} style={{ color: 'var(--text-secondary)' }} />
             </button>
+            {mobileToolsOpen && (
+              <>
+                <button
+                  type="button"
+                  className="fixed inset-0 z-[69] sm:hidden"
+                  aria-label="Fechar ferramentas"
+                  onClick={() => setMobileToolsOpen(false)}
+                />
+                <div
+                  className="absolute right-2 top-[calc(100%+8px)] z-[70] grid w-64 gap-1 rounded-2xl border p-2 shadow-2xl sm:hidden"
+                  style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+                >
+                  {user.is_admin && (
+                    <MobileToolButton icon={<Users size={17} />} label="Usuarios e aprovacoes" onClick={() => { setMobileToolsOpen(false); setAdminUsersOpen(true) }} />
+                  )}
+                  <MobileToolButton icon={<FolderOpen size={17} />} label="Workspace" onClick={() => { setMobileToolsOpen(false); setWorkspaceOpen(true) }} />
+                  <MobileToolButton icon={<FileText size={17} />} label="Documentos RAG" onClick={() => { setMobileToolsOpen(false); setDocumentsOpen(true) }} />
+                  <MobileToolButton icon={<Sparkles size={17} />} label="Skills" onClick={() => { setMobileToolsOpen(false); setSkillsOpen(true) }} />
+                  <MobileToolButton icon={<Server size={17} />} label="Gerenciar providers" onClick={() => { setMobileToolsOpen(false); setProviderManagerOpen(true) }} />
+                  <MobileToolButton icon={<Settings size={17} />} label="Configuracoes" onClick={() => { setMobileToolsOpen(false); setSettingsOpen(true) }} />
+                  <MobileToolButton icon={<LogOut size={17} />} label="Sair" onClick={() => { setMobileToolsOpen(false); handleLogout() }} danger />
+                </div>
+              </>
+            )}
           </div>
         </header>
 
@@ -585,7 +644,7 @@ export default function App() {
           <div
             ref={scrollRef}
             onScroll={handleMessagesScroll}
-            className="h-full overflow-y-auto px-4 py-6"
+            className="h-full overflow-y-auto px-2.5 py-4 sm:px-4 sm:py-6"
           >
             <div className="max-w-4xl mx-auto">
               {messages.length === 0 ? (

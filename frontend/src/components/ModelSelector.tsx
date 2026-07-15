@@ -161,11 +161,11 @@ export function ModelSelector() {
   const activeModel = activeProvider?.models.find(m => m.active) || activeProvider?.models[0]
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative min-w-0" ref={dropdownRef}>
       {/* Botão do seletor */}
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium transition-all hover:opacity-90"
+        className="flex min-w-0 items-center gap-1.5 rounded-xl px-2 py-1.5 text-sm font-medium transition-all hover:opacity-90 sm:gap-2 sm:px-3"
         style={{
           background: 'var(--accent-light)',
           color: 'var(--accent)',
@@ -178,10 +178,10 @@ export function ModelSelector() {
         }
       >
         <Cpu size={14} />
-        <span className="max-w-[160px] truncate flex items-center gap-1">
+        <span className="flex max-w-[112px] min-w-0 items-center gap-1 truncate sm:max-w-[160px]">
           {activeProvider && activeModel ? (
             <>
-              <span className="opacity-60 font-normal text-xs">
+              <span className="hidden opacity-60 font-normal text-xs sm:inline">
                 {activeProvider.name.replace('OpenCode ', '')}
               </span>
               <span>{activeModel.name}</span>
@@ -196,7 +196,7 @@ export function ModelSelector() {
       {/* Dropdown */}
       {open && (
         <div
-          className="absolute top-full right-0 mt-1 w-80 max-h-96 overflow-y-auto rounded-xl border shadow-lg z-50"
+          className="fixed inset-x-2 top-14 z-50 max-h-[70dvh] overflow-y-auto rounded-xl border shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-1 sm:w-80 sm:max-h-96"
           style={{
             background: 'var(--bg-primary)',
             borderColor: 'var(--border)',

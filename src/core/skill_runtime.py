@@ -10,16 +10,16 @@ import unicodedata
 from src.db.repository import ConversationRepo, SkillRepo, SkillRunRepo
 from src.core.patcher import preview_workspace_patch
 from src.core.skill_permissions import can_execute_skill, executable_skill_names
-from src.core.workspace import read_text_file
+from src.core.workspace import read_text_file, search_files
 from src.tools.conversation_history import search_conversation_history
 from src.tools.perplexo_search import perplexo_search
 from src.tools.web_search import web_search
 
 
 SEARCH_SKILLS = {"perplexo_search", "simple_search", "search_and_answer"}
-ACTIVITY_SKILLS = SEARCH_SKILLS | {"conversation_history"}
+ACTIVITY_SKILLS = SEARCH_SKILLS | {"conversation_history", "workspace_search"}
 SEARCH_REQUEST = re.compile(
-    r"(?:\b(?:pesquise|pesquisar|busque|buscar|procure|procurar)\b"
+    r"(?:\b(?:ache|achar|encontre|encontrar|pesquise|pesquisar|busque|buscar|procure|procurar)\b"
     r"|^\s*(?:pesquisa|google|search)\b"
     r"|\bpesquisa\s+(?:sobre|por)\b"
     r"|\b(?:faz|faca|fazer|quero)\s+(?:uma\s+)?pesquisa\b"
@@ -27,7 +27,7 @@ SEARCH_REQUEST = re.compile(
     re.IGNORECASE,
 )
 SEARCH_FRAGMENT = re.compile(
-    r"\b(?:pesquise|pesquisar|pesquisa|busque|buscar|procure|procurar|google|search)\b",
+    r"\b(?:ache|achar|encontre|encontrar|pesquise|pesquisar|pesquisa|busque|buscar|procure|procurar|google|search)\b",
     re.IGNORECASE,
 )
 QUOTED_SEARCH_TERM = re.compile(r"[\"“]([^\"”\r\n]{1,160})[\"”]")
@@ -64,6 +64,12 @@ HISTORY_TRIGGERS = (
     "voce lembra",
 )
 EXPLICIT_WEB_SCOPE = ("internet", "web", "google", "noticias", "news", "online")
+LOCAL_SEARCH_SCOPE = re.compile(
+    r"(?:\bworkspace\b|\barquivos?\s+locais?\b|\bmeus?\s+arquivos?\b|\bminhas?\s+(?:fotos|imagens|pastas)\b|"
+    r"\b(?:no|nos|dentro\s+do|dentro\s+da)\s+(?:meu|minha|seu|sua)\s+(?:sistema|workspace|dispositivo|galeria|pasta|arquivos?)\b)",
+    re.IGNORECASE,
+)
+GENERIC_LOCAL_OR_WEB_SEARCH = re.compile(r"\b(?:ache|achar|busque|buscar|encontre|encontrar|procure|procurar)\b", re.IGNORECASE)
 MAX_SKILL_CONTEXT_CHARS = 12000
 WORKSPACE_READ_COMMAND = re.compile(r"^\s*@workspace:read\s+([^\r\n]+)\s*$", re.IGNORECASE)
 WORKSPACE_PREVIEW_COMMAND = re.compile(
@@ -104,7 +110,31 @@ def requests_conversation_history(message: str) -> bool:
 
 def requests_web_search(message: str) -> bool:
     """Recognize commands to search, not ordinary mentions of a previous search."""
-    return bool(SEARCH_REQUEST.search(_normalized_message(message)))
+    normalized = _normalized_message(message)
+    if not SEARCH_REQUEST.search(normalized):
+        return False
+    local_scope = bool(LOCAL_SEARCH_SCOPE.search(normalized))
+    web_scope = any(scope in normalized for scope in EXPLICIT_WEB_SCOPE)
+    if local_scope:
+        return False
+    if GENERIC_LOCAL_OR_WEB_SEARCH.search(normalized) and not web_scope:
+        return False
+    return True
+
+
+def requests_workspace_search(message: str) -> bool:
+    normalized = _normalized_message(message)
+    return bool(SEARCH_REQUEST.search(normalized) and LOCAL_SEARCH_SCOPE.search(normalized)) \
+        and not any(scope in normalized for scope in EXPLICIT_WEB_SCOPE)
+
+
+def requests_search_clarification(message: str) -> bool:
+    normalized = _normalized_message(message)
+    if not SEARCH_REQUEST.search(normalized) or not GENERIC_LOCAL_OR_WEB_SEARCH.search(normalized):
+        return False
+    local_scope = bool(LOCAL_SEARCH_SCOPE.search(normalized))
+    web_scope = any(scope in normalized for scope in EXPLICIT_WEB_SCOPE)
+    return local_scope == web_scope
 
 
 def _quoted_terms(value: str) -> list[str]:
@@ -205,6 +235,14 @@ def _history_skill_for_message(message: str, skills: Iterable[dict]) -> dict | N
     return _enabled_skill(skills, "conversation_history", "history_read")
 
 
+def _workspace_search_skill(skills: Iterable[dict]) -> dict | None:
+    return (
+        _enabled_skill(skills, "workspace_manager", "workspace_read")
+        or _enabled_skill(skills, "workspace_read", "workspace_read")
+        or _enabled_skill(skills, "file_delivery", "workspace_read")
+    )
+
+
 def should_run_web_search(message: str, skills: Iterable[dict]) -> bool:
     """Compatibility helper for callers that only need the decision."""
     return _search_skill_for_message(message, skills) is not None
@@ -253,6 +291,8 @@ def runtime_skill_activity(runtime_context: str) -> dict | None:
     query_match = SKILL_EXECUTED_QUERY.search(runtime_context)
     if skill_name == "conversation_history":
         label = "Historico pessoal consultado"
+    elif skill_name == "workspace_search":
+        label = "Workspace pesquisado"
     elif skill_name == "perplexo_search" and not used_fallback:
         label = "Pesquisa Perplexo concluida"
     elif used_fallback:
@@ -442,6 +482,39 @@ async def _run_history_skill(
         return ""
 
 
+def _run_workspace_search(user_id: int, skill: dict, message: str) -> str:
+    skill_name = str(skill["name"])
+    try:
+        matches = search_files(user_id, message, limit=25)
+        if matches:
+            lines = [f"- `{item.path}` ({item.size} bytes)" for item in matches]
+            result = "Arquivos encontrados no Workspace do usuario:\n" + "\n".join(lines)
+        else:
+            result = "Nenhum arquivo correspondente foi encontrado no Workspace do usuario."
+        SkillRunRepo.create(
+            user_id,
+            skill_name,
+            "completed",
+            {"query": message, "match_count": len(matches), "scope": "current_user_workspace"},
+            output_summary=result,
+        )
+        return (
+            "Resultado da skill workspace_search:\n"
+            f"Consulta executada: {message}\n\n{result}\n\n"
+            "A busca foi feita somente no Workspace privado deste usuario, nao na internet. "
+            "Responda com os caminhos encontrados e nao invente arquivos ausentes."
+        )
+    except Exception as exc:
+        SkillRunRepo.create(
+            user_id,
+            skill_name,
+            "failed",
+            {"query": message, "scope": "current_user_workspace"},
+            error_message=str(exc),
+        )
+        return _workspace_error_context("workspace_search", exc)
+
+
 def _run_workspace_read_skill(user_id: int, skill: dict, path: str) -> str:
     skill_name = str(skill["name"])
     try:
@@ -504,6 +577,24 @@ async def run_enabled_skill_context(
     history_skill = _history_skill_for_message(message, skills)
     if history_skill:
         sections.append(await _run_history_skill(user_id, history_skill, message, session_id))
+
+    workspace_search_requested = requests_workspace_search(message)
+    if workspace_search_requested:
+        workspace_skill = _workspace_search_skill(skills)
+        if workspace_skill:
+            sections.append(_run_workspace_search(user_id, workspace_skill, message))
+        else:
+            sections.append(
+                "O usuario pediu uma busca em arquivos locais, mas nenhuma skill com permissao de leitura "
+                "do Workspace esta habilitada. Explique isso e nao substitua por pesquisa na internet."
+            )
+
+    if requests_search_clarification(message):
+        sections.append(
+            "O usuario pediu para procurar ou buscar, mas nao informou o local. "
+            "Pergunte se ele quer pesquisar na internet ou nos arquivos do Workspace. "
+            "Nao execute nem alegue ter executado qualquer pesquisa ainda."
+        )
 
     search_skill = _search_skill_for_message(message, skills)
     explicit_web = any(scope in _normalized_message(message) for scope in EXPLICIT_WEB_SCOPE)

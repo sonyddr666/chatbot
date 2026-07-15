@@ -36,6 +36,16 @@ export function Sidebar() {
   }, [loadDocuments, tab])
 
   useEffect(() => {
+    if (tab !== 'chats') return
+    const refresh = () => {
+      if (!document.hidden) void loadConversations()
+    }
+    refresh()
+    const interval = window.setInterval(refresh, 2000)
+    return () => window.clearInterval(interval)
+  }, [loadConversations, tab])
+
+  useEffect(() => {
     if (tab !== 'stats') return
     void loadStats()
     const refresh = window.setInterval(() => {
@@ -192,8 +202,10 @@ export function Sidebar() {
                   {search ? 'Nenhuma conversa encontrada' : 'Nenhuma conversa ainda'}
                 </p>
               ) : (
-                filteredConvs.map(c => (
-                  <div
+                filteredConvs.map(c => {
+                  const isResponding = c.job_status === 'queued' || c.job_status === 'running'
+                  const hasUnreadResponse = !!c.has_unread_response && c.session_id !== sessionId
+                  return <div
                     key={c.session_id}
                     onClick={() => handleSelect(c.session_id)}
                     className="group flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-all"
@@ -202,7 +214,18 @@ export function Sidebar() {
                       color: 'var(--text-primary)',
                     }}
                   >
-                    <MessageSquare size={14} className="flex-shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+                    <span className="relative flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                      {isResponding ? (
+                        <>
+                          <span className="absolute h-3 w-3 rounded-full bg-blue-400/60 animate-ping" />
+                          <span className="relative h-2 w-2 rounded-full bg-blue-500" title="Respondendo em segundo plano" />
+                        </>
+                      ) : hasUnreadResponse ? (
+                        <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" title="Resposta concluída" />
+                      ) : (
+                        <MessageSquare size={14} style={{ color: 'var(--text-tertiary)' }} />
+                      )}
+                    </span>
                     <div className="flex-1 min-w-0">
                       {editingId === c.session_id ? (
                         <input
@@ -218,8 +241,15 @@ export function Sidebar() {
                       ) : (
                         <p className="truncate font-medium">{c.title}</p>
                       )}
-                      <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                        {c.message_count} msgs · {parseApiTimestamp(c.updated_at).toLocaleDateString()}
+                      <p
+                        className="text-xs"
+                        style={{ color: isResponding ? '#3b82f6' : hasUnreadResponse ? '#10b981' : 'var(--text-tertiary)' }}
+                      >
+                        {isResponding
+                          ? (c.job_status === 'queued' ? 'Na fila…' : 'Respondendo em segundo plano…')
+                          : hasUnreadResponse
+                            ? 'Resposta concluída'
+                            : `${c.message_count} msgs · ${parseApiTimestamp(c.updated_at).toLocaleDateString()}`}
                       </p>
                     </div>
                     <div className="hidden group-hover:flex items-center gap-1">
@@ -244,7 +274,7 @@ export function Sidebar() {
                       </button>
                     </div>
                   </div>
-                ))
+                })
               )}
             </>
           )}

@@ -574,6 +574,37 @@ class ConversationRepo:
             db.close()
 
     @staticmethod
+    def activity_for_user(user_id: int, conversation_ids: list[int]) -> dict[int, dict]:
+        """Return the latest persisted job state for each visible conversation."""
+        if not conversation_ids:
+            return {}
+        db = get_session_db()
+        try:
+            jobs = db.query(ChatJob).filter(
+                ChatJob.user_id == user_id,
+                ChatJob.conversation_id.in_(conversation_ids),
+            ).order_by(ChatJob.created_at.desc(), ChatJob.id.desc()).all()
+            latest: dict[int, ChatJob] = {}
+            for job in jobs:
+                latest.setdefault(int(job.conversation_id), job)
+            message_ids = [job.assistant_message_id for job in latest.values()]
+            messages = db.query(Message).filter(Message.id.in_(message_ids)).all() if message_ids else []
+            by_message_id = {message.id: message for message in messages}
+            return {
+                conversation_id: {
+                    "job_status": job.status,
+                    "has_unread_response": bool(
+                        job.status == "completed"
+                        and (message := by_message_id.get(job.assistant_message_id)) is not None
+                        and message.read_at is None
+                    ),
+                }
+                for conversation_id, job in latest.items()
+            }
+        finally:
+            db.close()
+
+    @staticmethod
     def export_for_user(user_id: int, session_id: str | None = None) -> list[dict]:
         """Return every persisted message owned by a user, without the UI history limits."""
         db = get_session_db()

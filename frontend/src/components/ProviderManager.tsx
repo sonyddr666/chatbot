@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useCallback, useRef } from 'react'
 import {
   X, Plus, Trash2, Check,
   Server, Globe, Cpu, Eye, EyeOff, Power, PowerOff,
-  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User,
+  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
@@ -640,12 +640,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       }}
     >
       <div
-        className="flex w-[95vw] max-w-6xl h-[85vh] rounded-2xl overflow-hidden shadow-2xl"
+        className="flex h-[100dvh] w-full max-w-6xl overflow-hidden shadow-2xl sm:h-[85vh] sm:w-[95vw] sm:rounded-2xl"
         style={{ background: 'var(--bg-primary)' }}
       >
         {/* ─── Sidebar ─── */}
         <div
-          className="w-72 flex-shrink-0 flex flex-col border-r overflow-hidden"
+          className={`${showPersonalForm || showAddForm || selected ? 'hidden md:flex' : 'flex'} w-full flex-shrink-0 flex-col overflow-hidden border-r md:w-72`}
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
           {/* Header */}
@@ -829,9 +829,22 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         </div>
 
         {/* ─── Main Area ─── */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className={`${showPersonalForm || showAddForm || selected ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col overflow-hidden`}>
+          <div className="flex items-center justify-between border-b px-3 py-3 md:hidden" style={{ borderColor: 'var(--border)' }}>
+            <button
+              type="button"
+              onClick={() => { setSelectedId(null); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
+              className="inline-flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm font-bold"
+              style={{ color: 'var(--text-primary)' }}
+            >
+              <ArrowLeft size={18} /> Providers
+            </button>
+            <button onClick={onClose} className="rounded-lg p-2" title="Fechar">
+              <X size={19} style={{ color: 'var(--text-secondary)' }} />
+            </button>
+          </div>
           {showPersonalForm ? (
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               <div className="max-w-xl mx-auto">
                 <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
                   Criar provider pessoal
@@ -841,7 +854,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                 </p>
 
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider ID</label>
                       <input
@@ -909,7 +922,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Modelo</label>
                       <input
@@ -996,7 +1009,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
             </div>
           ) : showAddForm ? (
             /* ─── Formulário de Adição/Edição ─── */
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               <div className="max-w-xl mx-auto">
                 <h3 className="text-xl font-bold mb-6" style={{ color: 'var(--text-primary)' }}>
                   {editing ? 'Edit Provider' : 'Add New Provider'}
@@ -1089,7 +1102,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         <p className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
                           🧩 Modelo inicial <span className="text-xs font-normal" style={{ color: 'var(--text-tertiary)' }}>(opcional — adicione mais depois)</span>
                         </p>
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                           <div>
                             <label className="block text-xs mb-1" style={{ color: 'var(--text-tertiary)' }}>Model ID</label>
                             <input
@@ -1168,11 +1181,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
             </div>
           ) : selected ? (
             /* ─── Detalhes do Provider ─── */
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               {/* Header */}
-              <div className="flex items-center justify-between mb-6">
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <h3 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{selected.name}</h3>
                     {selected.active && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -1199,7 +1212,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {!selected.active && (
                     <button
                       onClick={() => handleActivate(selected.id)}
@@ -1243,7 +1256,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
               </div>
 
               {/* Info */}
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
                 <InfoCard label="API Format" value={formatLabels[selected.api_format] || selected.api_format} icon={<Globe size={16} />} />
                 <InfoCard label="Provider Type" value={selected.provider_type === 'builtin' ? 'Built-in' : 'Custom'} icon={<Server size={16} />} />
                 <InfoCard label="Endpoint" value={selected.endpoint || 'Padrao do formato'} icon={<Globe size={16} />} />
@@ -1425,7 +1438,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   <h5 className="font-medium text-sm mb-3" style={{ color: 'var(--text-primary)' }}>
                     {editingModelId ? 'Edit Model' : 'Add Model'}
                   </h5>
-                  <div className="grid grid-cols-3 gap-3 mb-3">
+                  <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div>
                       <label className="block text-xs mb-1" style={{ color: 'var(--text-tertiary)' }}>Model ID</label>
                       <input
@@ -1668,15 +1681,15 @@ function ModelRow({
   const status = model.status ? statusLabels[model.status] : null
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+    <div className="flex flex-col gap-2 px-3 py-3 transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:px-4"
       style={{
         background: isActive ? 'var(--accent-light)' : 'transparent',
         borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
       }}>
-      <div className="flex items-center gap-3">
-        <Cpu size={16} style={{ color: isActive ? 'var(--accent)' : model.enabled ? 'var(--text-secondary)' : 'var(--text-tertiary)' }} />
-        <div>
-          <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
+        <Cpu className="mt-1 shrink-0 sm:mt-0" size={16} style={{ color: isActive ? 'var(--accent)' : model.enabled ? 'var(--text-secondary)' : 'var(--text-tertiary)' }} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
               {model.name}
             </p>
@@ -1721,7 +1734,7 @@ function ModelRow({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            <span className="font-mono">{model.id}</span>
+            <span className="break-all font-mono">{model.id}</span>
             {model.alias && <span>alias: {model.alias}</span>}
           </div>
           {model.usage && (
@@ -1731,13 +1744,13 @@ function ModelRow({
           )}
         </div>
         <span
-          className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+          className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-mono"
           style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
         >
           {ctxLabel}
         </span>
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center justify-end gap-1 border-t pt-2 sm:border-0 sm:pt-0" style={{ borderColor: 'var(--border)' }}>
         {model.enabled && (
           <button
             onClick={onSelect}

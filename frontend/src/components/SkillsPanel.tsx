@@ -100,7 +100,7 @@ export function SkillsPanel({ open, onClose }: Props) {
     <>
       <div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} />
       <aside
-        className="fixed right-0 top-0 z-50 h-full w-full max-w-md border-l p-4 shadow-xl"
+        className="fixed right-0 top-0 z-50 h-full w-full border-l p-4 shadow-xl sm:max-w-md"
         style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
       >
         <div className="flex items-center justify-between">
@@ -113,7 +113,7 @@ export function SkillsPanel({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div className="mt-5 max-h-[calc(100vh-105px)] space-y-5 overflow-y-auto pr-1">
+        <div className="mt-5 max-h-[calc(100dvh-105px)] space-y-5 overflow-y-auto pr-1">
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-black" style={{ color: 'var(--text-primary)' }}>Skills disponiveis</h3>
@@ -186,7 +186,7 @@ export function SkillsPanel({ open, onClose }: Props) {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <label className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                       Modelo
                       <select

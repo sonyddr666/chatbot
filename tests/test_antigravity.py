@@ -68,6 +68,14 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertEqual(detect_image_action("crie 4 imagens de uma cidade", [])["count"], 4)
         self.assertIsNone(detect_image_action("o que tem nesta foto?", image))
         self.assertIsNone(detect_image_action("melhore este texto", []))
+        self.assertIsNone(detect_image_action(
+            "qual sua opiniao sobre isso: a regra deveria entender quando alguem diz crie uma imagem",
+            [],
+        ))
+        self.assertIsNone(detect_image_action(
+            "avalie este texto colado\n\n```text\ncrie uma imagem de uma cidade\n```",
+            [],
+        ))
 
     def test_follow_up_can_reference_latest_image(self):
         self.assertTrue(references_previous_image("melhore essa imagem de novo"))
