@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from src.config import settings
+from src.core.agent import AgentContext, AgentRunOutcome, run_agent_tools
 from src.core.chat import ChatEngine
 from src.core.chat_attachments import inspect_workspace_attachment
 from src.core.classifier import classify_route
@@ -216,7 +217,8 @@ async def process_chat_job(job_id: str) -> None:
         )
 
         effective_attachments = attachments
-        if not attachments and references_previous_image(message):
+        agent_attachments = list(attachments)
+        if not attachments:
             recent_files = await _repo_call(
                 ChatAttachmentRepo.list_owned_for_delivery,
                 user_id,
@@ -224,16 +226,84 @@ async def process_chat_job(job_id: str) -> None:
             )
             previous_image = next((item for item in recent_files if item.get("kind") == "image"), None)
             if previous_image:
-                effective_attachments = [previous_image]
-                model_message = await _repo_call(
-                    build_model_user_content,
-                    user_id,
-                    message,
-                    effective_attachments,
-                )
-                await _add_event(job_id, "status", "Usando a imagem mais recente desta conversa...")
+                agent_attachments = [previous_image]
+                if references_previous_image(message):
+                    effective_attachments = [previous_image]
+                    model_message = await _repo_call(
+                        build_model_user_content,
+                        user_id,
+                        message,
+                        effective_attachments,
+                    )
+                    await _add_event(job_id, "status", "Usando a imagem mais recente desta conversa...")
 
-        image_action = detect_image_action(message, effective_attachments)
+        async def agent_event_sink(event_name: str, payload: dict) -> None:
+            await _add_event(job_id, "tool", json.dumps({
+                "event": event_name,
+                **payload,
+            }, ensure_ascii=False))
+            if event_name == "tool.started":
+                labels = {
+                    "image_generate": "Gerando imagem com Antigravity...",
+                    "image_edit": "Editando imagem com Antigravity...",
+                }
+                await _add_event(
+                    job_id,
+                    "status",
+                    labels.get(str(payload.get("name") or ""), "Executando ferramenta do agente..."),
+                )
+
+        agent_outcome = AgentRunOutcome()
+        try:
+            agent_outcome = await run_agent_tools(AgentContext(
+                user_id=user_id,
+                session_id=session_id,
+                request=message,
+                attachments=agent_attachments,
+                provider_config=provider_config,
+                event_sink=agent_event_sink,
+            ))
+        except Exception as exc:
+            # A decisao semantica e uma camada adaptativa. Se o provider nao
+            # conseguir produzi-la, os roteadores conservadores ainda protegem
+            # os fluxos existentes durante a migracao.
+            await _add_event(job_id, "tool", json.dumps({
+                "event": "agent.fallback",
+                "error": str(exc)[:500],
+            }, ensure_ascii=False))
+            agent_outcome = AgentRunOutcome()
+
+        if agent_outcome.executed:
+            for result in agent_outcome.results:
+                if not result.audit_recorded:
+                    await _repo_call(
+                        SkillRunRepo.create,
+                        user_id,
+                        result.name,
+                        result.status,
+                        {"message": message, "tool_call_id": result.call_id},
+                        output_summary=result.content if result.status == "completed" else "",
+                        error_message=result.error,
+                    )
+                if result.activity:
+                    await _add_event(job_id, "skill", json.dumps(result.activity, ensure_ascii=False))
+                workspace_plan = result.data.get("workspace_plan")
+                if isinstance(workspace_plan, dict):
+                    await _add_event(job_id, "workspace_plan", json.dumps(workspace_plan, ensure_ascii=False))
+                delivered_attachments = []
+                for artifact in result.attachments:
+                    delivered = await _repo_call(
+                        ChatAttachmentRepo.prepare_delivery,
+                        job_id,
+                        user_id,
+                        artifact=artifact,
+                    )
+                    delivered_attachments.append(delivered)
+                    await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
+                if delivered_attachments:
+                    result.attachments = delivered_attachments
+
+        image_action = None if agent_outcome.executed else detect_image_action(message, effective_attachments)
         if image_action and has_antigravity_image_model(user_id):
             await _add_event(job_id, "status", "Preparando o pedido de imagem com o modelo selecionado...")
             image_action = await plan_image_action(image_action, provider_config)
@@ -265,6 +335,8 @@ async def process_chat_job(job_id: str) -> None:
             None,
         )
         if (
+            not agent_outcome.executed
+            and
             image_for_analysis
             and needs_vision_fallback(provider_config)
             and has_antigravity_vision_model(user_id)
@@ -276,12 +348,14 @@ async def process_chat_job(job_id: str) -> None:
                 image_for_analysis,
             )
 
-        workspace_request = await model_requests_workspace(
-            user_id,
-            message,
-            provider_config,
-            session_id=session_id,
-        )
+        workspace_request = False
+        if not agent_outcome.executed:
+            workspace_request = await model_requests_workspace(
+                user_id,
+                message,
+                provider_config,
+                session_id=session_id,
+            )
         memory = _prepare_memory(session_id, message)
 
         if workspace_request:
@@ -319,15 +393,24 @@ async def process_chat_job(job_id: str) -> None:
             route == "fast"
             and len(message.split()) <= 2
             and not attachments
+            and not agent_outcome.executed
             and not requests_conversation_history(message)
             and not requests_web_search(message)
         )
+        agent_runtime_context = agent_outcome.model_context()
         if simple_fast:
-            runtime_context = ""
+            runtime_context = agent_runtime_context
         else:
             await _add_event(job_id, "status", "Verificando skills e contexto...")
-            runtime_context = await run_enabled_skill_context(user_id, message, session_id=session_id)
-            skill_activity = runtime_skill_activity(runtime_context)
+            legacy_runtime_context = "" if agent_outcome.executed else await run_enabled_skill_context(
+                user_id,
+                message,
+                session_id=session_id,
+            )
+            runtime_context = "\n\n".join(
+                part for part in (agent_runtime_context, legacy_runtime_context) if part
+            )
+            skill_activity = runtime_skill_activity(legacy_runtime_context)
             if skill_activity:
                 await _add_event(job_id, "skill", json.dumps(skill_activity, ensure_ascii=False))
 

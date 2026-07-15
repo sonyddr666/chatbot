@@ -621,6 +621,61 @@ async def run_enabled_skill_context(
     return "\n\n".join(section for section in sections if section)
 
 
+async def execute_enabled_skill_tool(
+    user_id: int,
+    tool_name: str,
+    arguments: dict,
+    *,
+    session_id: str | None = None,
+) -> str:
+    """Execute one declared read/search tool through the existing audited handlers."""
+    skills = SkillRepo.list_for_user(user_id)
+    query = str(arguments.get("query") or arguments.get("request") or "").strip()
+    if tool_name in SEARCH_SKILLS:
+        skill = _enabled_skill(skills, tool_name, "network")
+        if not skill:
+            raise PermissionError(f"A skill {tool_name} nao esta habilitada")
+        if not query:
+            raise ValueError("query e obrigatoria")
+        result = await _run_search_skill(user_id, skill, query, session_id)
+    elif tool_name == "conversation_history":
+        skill = _enabled_skill(skills, "conversation_history", "history_read")
+        if not skill:
+            raise PermissionError("A skill conversation_history nao esta habilitada")
+        if not query:
+            raise ValueError("query e obrigatoria")
+        result = await _run_history_skill(user_id, skill, query, session_id)
+    elif tool_name == "workspace_search":
+        skill = _workspace_search_skill(skills)
+        if not skill:
+            raise PermissionError("Nenhuma skill com leitura do Workspace esta habilitada")
+        if not query:
+            raise ValueError("query e obrigatoria")
+        result = _run_workspace_search(user_id, skill, query)
+    elif tool_name == "workspace_read":
+        skill = _enabled_skill(skills, "workspace_read", "workspace_read")
+        if not skill:
+            raise PermissionError("A skill workspace_read nao esta habilitada")
+        path = str(arguments.get("path") or "").strip()
+        if not path:
+            raise ValueError("path e obrigatorio")
+        result = _run_workspace_read_skill(user_id, skill, path)
+    elif tool_name == "workspace_write_preview":
+        skill = _enabled_skill(skills, "workspace_write_preview", "workspace_write")
+        if not skill:
+            raise PermissionError("A skill workspace_write_preview nao esta habilitada")
+        path = str(arguments.get("path") or "").strip()
+        content = str(arguments.get("content") or "")
+        if not path or not content:
+            raise ValueError("path e content sao obrigatorios")
+        result = _run_workspace_preview_skill(user_id, skill, path, content)
+    else:
+        raise KeyError(f"Ferramenta desconhecida: {tool_name}")
+    if not result:
+        raise RuntimeError(f"A ferramenta {tool_name} nao retornou resultado")
+    return result
+
+
 def user_has_personal_rag(user_id: int, message: str = "", log_run: bool = False) -> bool:
     enabled = should_force_rag(SkillRepo.list_for_user(user_id))
     if enabled and log_run:

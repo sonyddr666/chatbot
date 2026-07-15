@@ -22,7 +22,7 @@ _EDIT_TERMS = re.compile(
     re.IGNORECASE,
 )
 _GENERATE_TERMS = re.compile(
-    r"\b(gere|gerar|crie|criar|fa(c|ç)a|desenhe|produza|imagine|generate|create|draw)\b",
+    r"\b(gera|gere|gerar|cria|crie|criar|faz|fa(c|ç)a|desenhe|produza|imagine|generate|create|draw)\b",
     re.IGNORECASE,
 )
 _IMAGE_NOUNS = re.compile(

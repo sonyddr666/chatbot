@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from src.config import settings
+from src.core.agent.schemas import ToolResult
+from src.core.agent.runtime import AgentRunOutcome
 from src.core.chat import ChatEngine
 from src.core.chat_jobs import process_chat_job
 from src.core.workspace_agent import workspace_request_candidate
@@ -151,6 +153,56 @@ class ChatJobPersistenceTest(unittest.TestCase):
             "pesquisa meme",
             session_id=f"u{self.user.id}:short-search",
         )
+
+    def test_agent_tool_events_and_result_reach_the_final_model_response(self):
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:agent",
+            message="gera uma imagem de um pato",
+            provider={"provider_id": "test", "model_id": "test-model"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+        outcome = AgentRunOutcome(
+            tools_declared=["image_generate"],
+            results=[ToolResult(
+                call_id="call_test",
+                name="image_generate",
+                status="completed",
+                content="1 imagem gerada com Antigravity.",
+                activity={
+                    "name": "image_generate",
+                    "status": "completed",
+                    "label": "1 imagem gerada",
+                    "source_count": 0,
+                    "sources": [],
+                },
+            )],
+        )
+
+        async def fake_stream(engine, message):
+            self.assertIn("Ferramentas executadas", str(engine.memory.messages[0].content))
+            yield ("content", "Gerei a imagem solicitada.")
+
+        with (
+            patch("src.core.chat_jobs.get_active_config_for_user", return_value={
+                "provider_id": "test",
+                "model_id": "test-model",
+                "base_url": "https://example.test/v1",
+            }),
+            patch("src.core.chat_jobs.run_agent_tools", new=AsyncMock(return_value=outcome)),
+            patch("src.core.chat_jobs.model_requests_workspace", new=AsyncMock(return_value=False)),
+            patch("src.core.chat_jobs.user_has_personal_rag", return_value=False),
+            patch.object(ChatEngine, "chat_stream", new=fake_stream),
+        ):
+            asyncio.run(process_chat_job(job["id"]))
+
+        snapshot = ChatJobRepo.get(job["id"], self.user.id)
+        events = ChatJobRepo.list_events(job["id"], self.user.id)
+        self.assertEqual(snapshot["status"], "completed")
+        self.assertEqual(snapshot["content"], "Gerei a imagem solicitada.")
+        self.assertTrue(any(event["type"] == "skill" for event in events))
 
 
 if __name__ == "__main__":
