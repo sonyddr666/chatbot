@@ -33,7 +33,8 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("chunk.type === 'skill_activity'", app)
         self.assertIn("Ferramentas e Skills", block)
         self.assertIn("fontes verificadas", block)
-        self.assertIn("Consulta usada:", block)
+        self.assertIn("Consulta usada", block)
+        self.assertIn("Prompt usado", block)
         self.assertIn('target="_blank"', block)
 
     def test_input_remains_editable_while_model_is_busy(self):
@@ -84,6 +85,18 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("event.currentTarget === event.target", message)
         self.assertIn("Ampliar", message)
         self.assertIn("URL.revokeObjectURL", message)
+
+    def test_html_and_markdown_code_blocks_have_safe_preview(self):
+        message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("CodePreviewModal", message)
+        self.assertIn("rawLanguage === 'html'", message)
+        self.assertIn("rawLanguage === 'markdown'", message)
+        self.assertIn('sandbox="allow-scripts"', message)
+        self.assertIn("Content-Security-Policy", message)
+        self.assertIn('referrerPolicy="no-referrer"', message)
+        self.assertIn("Prévia Markdown", message)
+        self.assertIn("navigator.clipboard.writeText(code)", message)
 
     def test_saved_trace_is_restored_when_conversation_reopens(self):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")

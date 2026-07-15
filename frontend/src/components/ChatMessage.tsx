@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, Download, FileText, Image as ImageIcon, Maximize2, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX, X } from 'lucide-react'
+import { Copy, Check, Download, Eye, FileText, Image as ImageIcon, Maximize2, ThumbsUp, ThumbsDown, RefreshCw, Volume2, VolumeX, X } from 'lucide-react'
 import type { ChatAttachmentInfo, ChatMessage as ChatMessageType } from '../lib/api'
 import { api } from '../lib/api'
 import { useChatStore } from '../hooks/useChatStore'
@@ -26,10 +26,115 @@ function formatTime(d: Date) {
 }
 
 // ─── CodeBlock (extraído para evitar hooks no render) ───
+type CodePreviewKind = 'html' | 'markdown'
+
+const HTML_PREVIEW_CSP = [
+  "default-src 'none'",
+  "img-src data: blob: https:",
+  "media-src data: blob: https:",
+  "style-src 'unsafe-inline' https:",
+  "font-src data: https:",
+  "script-src 'unsafe-inline'",
+  "connect-src 'none'",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ')
+
+function htmlPreviewDocument(code: string) {
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`
+  return `<!doctype html>${policy}${code}`
+}
+
+function CodePreviewModal({ kind, code, onClose }: { kind: CodePreviewKind; code: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[160] flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={kind === 'html' ? 'Previa do HTML' : 'Previa do Markdown'}
+      onMouseDown={event => {
+        if (event.currentTarget === event.target) onClose()
+      }}
+    >
+      <div
+        className="flex h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border shadow-2xl"
+        style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}
+      >
+        <div
+          className="flex items-center justify-between gap-3 border-b px-4 py-3"
+          style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}
+        >
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+              {kind === 'html' ? 'Prévia HTML' : 'Prévia Markdown'}
+            </p>
+            <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              {kind === 'html' ? 'Executado em ambiente isolado' : 'Markdown renderizado com segurança'}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? 'Copiado!' : 'Copiar'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-9 w-9 place-items-center rounded-lg border transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+              aria-label="Fechar prévia"
+            >
+              <X size={17} />
+            </button>
+          </div>
+        </div>
+        {kind === 'html' ? (
+          <iframe
+            title="Prévia isolada do HTML"
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+            srcDoc={htmlPreviewDocument(code)}
+            className="min-h-0 flex-1 border-0 bg-white"
+          />
+        ) : (
+          <div className="markdown min-h-0 flex-1 overflow-auto p-5 sm:p-8" style={{ color: 'var(--text-primary)' }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{code}</ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 function CodeBlock({ className, children }: ComponentProps<'code'>) {
   const match = /language-([^\s]+)/.exec(className || '')
   const isInline = !match
   const [codeCopied, setCodeCopied] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const code = String(children).replace(/\n$/, '')
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'))
 
@@ -55,6 +160,11 @@ function CodeBlock({ className, children }: ComponentProps<'code'>) {
     shell: 'bash',
   }
   const language = languageAliases[rawLanguage] || rawLanguage
+  const previewKind: CodePreviewKind | null = rawLanguage === 'html' || rawLanguage === 'htm'
+    ? 'html'
+    : rawLanguage === 'md' || rawLanguage === 'markdown'
+      ? 'markdown'
+      : null
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(code)
@@ -77,10 +187,22 @@ function CodeBlock({ className, children }: ComponentProps<'code'>) {
         }}
       >
         <span>{rawLanguage}</span>
-        <button onClick={handleCopyCode} className="flex items-center gap-1 hover:text-white transition-colors">
-          {codeCopied ? <Check size={12} /> : <Copy size={12} />}
-          {codeCopied ? 'Copiado!' : 'Copiar'}
-        </button>
+        <div className="flex items-center gap-3">
+          {previewKind && (
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(true)}
+              className="flex items-center gap-1 transition-colors hover:text-white"
+            >
+              <Eye size={12} />
+              Prévia
+            </button>
+          )}
+          <button type="button" onClick={handleCopyCode} className="flex items-center gap-1 transition-colors hover:text-white">
+            {codeCopied ? <Check size={12} /> : <Copy size={12} />}
+            {codeCopied ? 'Copiado!' : 'Copiar'}
+          </button>
+        </div>
       </div>
       <SyntaxHighlighter
         style={isDark ? oneDark : oneLight}
@@ -97,6 +219,9 @@ function CodeBlock({ className, children }: ComponentProps<'code'>) {
       >
         {code}
       </SyntaxHighlighter>
+      {previewOpen && previewKind && (
+        <CodePreviewModal kind={previewKind} code={code} onClose={() => setPreviewOpen(false)} />
+      )}
     </div>
   )
 }
