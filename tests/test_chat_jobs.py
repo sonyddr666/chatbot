@@ -8,7 +8,9 @@ from src.config import settings
 from src.core.agent.schemas import ToolResult
 from src.core.agent.runtime import AgentRunOutcome
 from src.core.chat import ChatEngine
-from src.core.chat_jobs import process_chat_job
+from src.core.chat_jobs import _planner_recent_history, process_chat_job
+from src.core.classifier import classify_tool_route
+from src.core.memory import ConversationMemory
 from src.core.workspace_agent import workspace_request_candidate
 from src.db.models import init_db
 from src.db.repository import ChatJobRepo, ConversationRepo, MessageRepo, UserRepo
@@ -155,10 +157,11 @@ class ChatJobPersistenceTest(unittest.TestCase):
         )
 
     def test_agent_tool_events_and_result_reach_the_final_model_response(self):
+        message = "gera uma imagem de um pato e pesquise sobre patos"
         job = ChatJobRepo.create_with_messages(
             user_id=self.user.id,
             session_id=f"u{self.user.id}:agent",
-            message="gera uma imagem de um pato",
+            message=message,
             provider={"provider_id": "test", "model_id": "test-model"},
             response_mode="normal",
             reasoning_effort="low",
@@ -166,6 +169,7 @@ class ChatJobPersistenceTest(unittest.TestCase):
         )
         outcome = AgentRunOutcome(
             tools_declared=["image_generate"],
+            route=classify_tool_route(message),
             results=[ToolResult(
                 call_id="call_test",
                 name="image_generate",
@@ -203,6 +207,62 @@ class ChatJobPersistenceTest(unittest.TestCase):
         self.assertEqual(snapshot["status"], "completed")
         self.assertEqual(snapshot["content"], "Gerei a imagem solicitada.")
         self.assertTrue(any(event["type"] == "skill" for event in events))
+
+    def test_planner_history_excludes_system_and_image_payloads(self):
+        memory = ConversationMemory()
+        memory.add_user_message([
+            {"type": "text", "text": "tema visual da conversa"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}},
+        ])
+        memory.add_ai_message("resposta visivel")
+        history = _planner_recent_history(memory)
+        self.assertEqual(history, [
+            {"role": "user", "content": "tema visual da conversa"},
+            {"role": "assistant", "content": "resposta visivel"},
+        ])
+        self.assertNotIn("SECRET", str(history))
+
+    def test_direct_image_failure_becomes_tool_result_and_chat_still_answers(self):
+        message = "gere uma imagem de um pato"
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:image-failure",
+            message=message,
+            provider={"provider_id": "test", "model_id": "test-model"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+
+        async def fake_stream(engine, _message):
+            system_context = str(engine.memory.messages[0].content)
+            self.assertIn('"status":"failed"', system_context)
+            self.assertIn("image_generate", system_context)
+            yield ("content", "A geracao da imagem falhou, mas a conversa continua normalmente.")
+
+        with (
+            patch("src.core.chat_jobs.get_active_config_for_user", return_value={
+                "provider_id": "test",
+                "model_id": "test-model",
+                "base_url": "https://example.test/v1",
+            }),
+            patch("src.core.chat_jobs.image_generation_enabled", return_value=True),
+            patch("src.core.chat_jobs.has_antigravity_image_model", return_value=True),
+            patch("src.core.chat_jobs.execute_image_action", new=AsyncMock(side_effect=RuntimeError("antigravity offline"))),
+            patch("src.core.chat_jobs.user_has_personal_rag", return_value=False),
+            patch.object(ChatEngine, "chat_stream", new=fake_stream),
+        ):
+            asyncio.run(process_chat_job(job["id"]))
+
+        snapshot = ChatJobRepo.get(job["id"], self.user.id)
+        events = ChatJobRepo.list_events(job["id"], self.user.id)
+        self.assertEqual(snapshot["status"], "completed")
+        self.assertIn("conversa continua", snapshot["content"])
+        failed_cards = [
+            event for event in events
+            if event["type"] == "skill" and '"status": "failed"' in event["payload"]
+        ]
+        self.assertTrue(failed_cards)
 
 
 if __name__ == "__main__":

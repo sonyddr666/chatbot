@@ -7,6 +7,7 @@ import json
 
 from src.config import settings
 from src.core.agent import AgentContext, AgentRunOutcome, run_agent_tools
+from src.core.agent.schemas import ToolResult
 from src.core.chat import ChatEngine
 from src.core.chat_attachments import inspect_workspace_attachment
 from src.core.classifier import classify_route, classify_tool_route
@@ -103,6 +104,48 @@ def _prepare_memory(session_id: str, current_message: str):
     ):
         memory.messages.pop()
     return memory
+
+
+def _planner_text_content(content) -> str:
+    """Extract only visible text; never send images/base64 or UI payloads to the planner."""
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "") not in {"text", "input_text"}:
+            continue
+        value = str(item.get("text") or item.get("content") or "").strip()
+        if value:
+            parts.append(value)
+    return "\n".join(parts)
+
+
+def _planner_recent_history(memory, *, max_messages: int = 12, max_chars: int = 12000) -> list[dict[str, str]]:
+    """Return a bounded, user-visible dialogue extract in chronological order."""
+    selected: list[dict[str, str]] = []
+    remaining = max_chars
+    for item in reversed(memory.messages[1:]):
+        role = "user" if getattr(item, "type", "") == "human" else (
+            "assistant" if getattr(item, "type", "") == "ai" else ""
+        )
+        if not role:
+            continue
+        text = _planner_text_content(getattr(item, "content", ""))
+        if not text:
+            continue
+        text = text[-min(3000, remaining):]
+        if not text:
+            break
+        selected.append({"role": role, "content": text})
+        remaining -= len(text)
+        if len(selected) >= max_messages or remaining <= 0:
+            break
+    selected.reverse()
+    return selected
 
 
 async def process_chat_job(job_id: str) -> None:
@@ -284,9 +327,17 @@ async def process_chat_job(job_id: str) -> None:
 
         direct_image_action = detect_image_action(message, effective_attachments)
         tool_route = classify_tool_route(message, effective_attachments)
+        planner_memory = _prepare_memory(session_id, message)
+        recent_history = (
+            _planner_recent_history(planner_memory)
+            if tool_route.uses_current_context
+            else []
+        )
         simple_direct_image_request = (
             direct_image_action is not None
+            and direct_image_action.get("confidence") == "high"
             and not tool_route.compound
+            and not tool_route.requires_planning
         )
 
         agent_outcome = AgentRunOutcome()
@@ -298,6 +349,7 @@ async def process_chat_job(job_id: str) -> None:
                     request=message,
                     attachments=agent_attachments,
                     provider_config=provider_config,
+                    recent_history=recent_history,
                     job_id=job_id,
                     event_sink=agent_event_sink,
                 ))
@@ -377,7 +429,9 @@ async def process_chat_job(job_id: str) -> None:
             result for result in agent_outcome.results
             if result.name in {"image_generate", "image_edit"} and result.status == "completed"
         ]
-        if completed_image_results:
+        if completed_image_results and not bool(
+            getattr(agent_outcome.route, "requires_final_synthesis", False)
+        ):
             edited = completed_image_results[-1].name == "image_edit"
             response = "Imagem editada com Antigravity." if edited else "Imagem gerada com Antigravity."
             await _add_event(job_id, "text_delta", response)
@@ -386,6 +440,37 @@ async def process_chat_job(job_id: str) -> None:
             memory.add_ai_message(response)
             await _repo_call(ChatJobRepo.finish, job_id, "completed")
             return
+
+        if completed_image_results:
+            generated_attachments = [
+                attachment
+                for result in completed_image_results
+                for attachment in result.attachments
+            ]
+            if generated_attachments:
+                await _add_event(job_id, "status", "Validando a imagem gerada com o pedido original...")
+                validation_request = (
+                    f"Pedido original do usuario:\n{message}\n\n"
+                    f"Confianca da classificacao inicial: {getattr(agent_outcome.route, 'confidence', 'medium')}.\n\n"
+                    "A imagem anexada foi produzida por uma ferramenta durante este pedido. Observe o resultado "
+                    "real e compare-o com a intencao do usuario. Se a imagem for pertinente, responda ao pedido "
+                    "combinando imagem e texto. Se a ferramenta tiver interpretado o pedido incorretamente, "
+                    "reconheca brevemente a divergencia e entregue em texto aquilo que o usuario realmente pediu."
+                )
+                if provider_config.get("supports_images") is True:
+                    model_message = await asyncio.to_thread(
+                        build_model_user_content,
+                        user_id,
+                        validation_request,
+                        generated_attachments,
+                    )
+                else:
+                    model_message = await build_vision_fallback_context(
+                        user_id,
+                        validation_request,
+                        generated_attachments,
+                    )
+                agent_outcome.visual_validation_performed = True
 
         image_tool_completed = any(
             result.name in {"image_generate", "image_edit"} and result.status == "completed"
@@ -409,7 +494,12 @@ async def process_chat_job(job_id: str) -> None:
                         f"{supporting_context}"
                     ),
                 }
-        if image_action and image_generation_enabled(user_id) and has_antigravity_image_model(user_id):
+        if (
+            image_action
+            and image_action.get("confidence") == "high"
+            and image_generation_enabled(user_id)
+            and has_antigravity_image_model(user_id)
+        ):
             fallback_call_id = f"image_{job_id}"
             await _add_event(job_id, "status", "Preparando o pedido de imagem com o modelo selecionado...")
             if not simple_direct_image_request:
@@ -426,9 +516,10 @@ async def process_chat_job(job_id: str) -> None:
                 "sources": [],
                 "query": image_action.get("prompt"),
             }, ensure_ascii=False))
+            artifacts = None
             try:
                 artifacts = await execute_image_action(user_id, image_action)
-            except Exception:
+            except Exception as exc:
                 await _add_event(job_id, "skill", json.dumps({
                     "call_id": fallback_call_id,
                     "provider": "Antigravity",
@@ -439,36 +530,88 @@ async def process_chat_job(job_id: str) -> None:
                     "sources": [],
                     "query": image_action.get("prompt"),
                 }, ensure_ascii=False))
-                raise
-            for artifact in artifacts:
-                delivered = await _repo_call(
-                    ChatAttachmentRepo.prepare_delivery,
-                    job_id,
-                    user_id,
-                    artifact=artifact,
+                failed_result = ToolResult(
+                    call_id=fallback_call_id,
+                    name=tool_name,
+                    status="failed",
+                    content="A ferramenta de imagem falhou e nao produziu nenhum arquivo.",
+                    error=str(exc),
+                    activity={
+                        "provider": "Antigravity",
+                        "name": tool_name,
+                        "status": "failed",
+                        "label": "Falha ao gerar imagem" if tool_name == "image_generate" else "Falha ao editar imagem",
+                        "source_count": 0,
+                        "sources": [],
+                        "query": image_action.get("prompt"),
+                    },
                 )
-                await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
-            await _add_event(job_id, "skill", json.dumps({
-                "call_id": fallback_call_id,
-                "provider": "Antigravity",
-                "name": tool_name,
-                "status": "completed",
-                "label": f"{len(artifacts)} imagem(ns) gerada(s)" if tool_name == "image_generate" else f"{len(artifacts)} imagem(ns) editada(s)",
-                "source_count": 0,
-                "sources": [],
-                "query": image_action.get("prompt"),
-            }, ensure_ascii=False))
-            response = (
-                "Imagem editada com Antigravity."
-                if image_action["operation"] == "edit"
-                else "Imagem gerada com Antigravity."
-            )
-            await _add_event(job_id, "text_delta", response)
-            memory = _prepare_memory(session_id, message)
-            memory.add_user_message(message)
-            memory.add_ai_message(response)
-            await _repo_call(ChatJobRepo.finish, job_id, "completed")
-            return
+                agent_outcome.route = agent_outcome.route or tool_route
+                if tool_name not in agent_outcome.tools_declared:
+                    agent_outcome.tools_declared.append(tool_name)
+                agent_outcome.results.append(failed_result)
+                await _repo_call(
+                    SkillRunRepo.create,
+                    user_id,
+                    tool_name,
+                    "failed",
+                    {"message": message, "tool_call_id": fallback_call_id},
+                    error_message=str(exc),
+                )
+            if artifacts is not None:
+                fallback_delivered = []
+                for artifact in artifacts:
+                    delivered = await _repo_call(
+                        ChatAttachmentRepo.prepare_delivery,
+                        job_id,
+                        user_id,
+                        artifact=artifact,
+                    )
+                    fallback_delivered.append(delivered)
+                    await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
+                await _add_event(job_id, "skill", json.dumps({
+                    "call_id": fallback_call_id,
+                    "provider": "Antigravity",
+                    "name": tool_name,
+                    "status": "completed",
+                    "label": f"{len(artifacts)} imagem(ns) gerada(s)" if tool_name == "image_generate" else f"{len(artifacts)} imagem(ns) editada(s)",
+                    "source_count": 0,
+                    "sources": [],
+                    "query": image_action.get("prompt"),
+                }, ensure_ascii=False))
+                if not tool_route.requires_final_synthesis:
+                    response = (
+                        "Imagem editada com Antigravity."
+                        if image_action["operation"] == "edit"
+                        else "Imagem gerada com Antigravity."
+                    )
+                    await _add_event(job_id, "text_delta", response)
+                    memory = _prepare_memory(session_id, message)
+                    memory.add_user_message(message)
+                    memory.add_ai_message(response)
+                    await _repo_call(ChatJobRepo.finish, job_id, "completed")
+                    return
+                await _add_event(job_id, "status", "Validando a imagem gerada com o pedido original...")
+                validation_request = (
+                    f"Pedido original do usuario:\n{message}\n\n"
+                    f"Confianca da classificacao inicial: {tool_route.confidence}.\n\n"
+                    "A imagem anexada foi gerada depois das pesquisas e consultas solicitadas. Observe o resultado "
+                    "real, use os resultados das ferramentas e responda ao pedido completo de forma direta."
+                )
+                if provider_config.get("supports_images") is True:
+                    model_message = await asyncio.to_thread(
+                        build_model_user_content,
+                        user_id,
+                        validation_request,
+                        fallback_delivered,
+                    )
+                else:
+                    model_message = await build_vision_fallback_context(
+                        user_id,
+                        validation_request,
+                        fallback_delivered,
+                    )
+                agent_outcome.visual_validation_performed = True
 
         images_for_analysis = [
             item for item in effective_attachments if item.get("kind") == "image"

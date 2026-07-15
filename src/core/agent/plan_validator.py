@@ -74,6 +74,8 @@ def validate_tool_calls(
     for call in calls:
         if call.name not in route.allowed_tools:
             continue
+        if call.name in IMAGE_TOOLS and route.action_confidences.get("image") == "low":
+            continue
         category = tool_category(call.name)
         budget = DEFAULT_BUDGETS.get(category, 1)
         if counts[category] + accepted_categories[category] >= budget:

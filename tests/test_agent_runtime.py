@@ -58,6 +58,25 @@ class AgentPlannerTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(calls[0].name, "image_generate")
 
+    async def test_planner_receives_filtered_recent_conversation_context(self):
+        tool = ToolDefinition(name="image_generate", description="gera imagem", input_schema={"type": "object"})
+        native = AsyncMock(return_value=[])
+        history = [
+            {"role": "user", "content": "Vamos falar sobre cidades sustentaveis."},
+            {"role": "assistant", "content": "Falamos sobre jardins verticais e transporte limpo."},
+        ]
+        with patch("src.core.agent.planner._native_openai_decision", new=native):
+            await decide_tool_calls(
+                request="crie uma imagem baseada na nossa conversa",
+                attachment_summary=[],
+                prior_results=[],
+                tools=[tool],
+                provider_config={"provider_id": "test", "model_id": "m", "base_url": "https://example.test"},
+                recent_history=history,
+            )
+        request_payload = native.await_args.args[0]
+        self.assertEqual(request_payload["recent_conversation_context"], history)
+
     def test_get_time_uses_user_timezone_and_real_calendar(self):
         with patch(
             "src.tools.get_time.UserRepo.get_profile",
@@ -200,14 +219,30 @@ class AgentRoutingTests(unittest.TestCase):
 
     def test_router_distinguishes_simple_and_compound_image_requests(self):
         simple = classify_tool_route("gere uma imagem de um pato")
+        ambiguous = classify_tool_route("gera alguma coisa pra mim")
+        textual = classify_tool_route("gera uma duvida pra mim")
         compound = classify_tool_route("gere uma imagem pesquisando codex e lendo arquivos e historico")
         self.assertEqual(simple.allowed_tools, frozenset({"image_generate"}))
+        self.assertEqual(simple.confidence, "high")
+        self.assertEqual(ambiguous.confidence, "medium")
+        self.assertTrue(ambiguous.requires_visual_validation)
+        self.assertEqual(textual.confidence, "low")
+        self.assertNotIn("image_generate", textual.allowed_tools)
         self.assertFalse(simple.compound)
         self.assertTrue(compound.compound)
+        self.assertTrue(compound.requires_final_synthesis)
         self.assertIn("image_generate", compound.allowed_tools)
         self.assertIn("web_search", compound.allowed_tools)
         self.assertIn("conversation_history", compound.allowed_tools)
         self.assertIn("workspace_search", compound.allowed_tools)
+
+        sequential = classify_tool_route(
+            "Pensa a respeito de toda a nossa conversa e gera um texto para gerar uma imagem do texto que voce criar"
+        )
+        self.assertIn("image_generate", sequential.allowed_tools)
+        self.assertTrue(sequential.requires_planning)
+        self.assertTrue(sequential.uses_current_context)
+        self.assertTrue(sequential.requires_final_synthesis)
 
     def test_validator_enforces_one_search_budget(self):
         route = ToolRoute(

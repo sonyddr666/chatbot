@@ -26,6 +26,13 @@ class ToolRoute:
     requested_categories: frozenset[str] = field(default_factory=frozenset)
     terminal_tool: str = ""
     compound: bool = False
+    intent: str = "chat"
+    confidence: Literal["high", "medium", "low"] = "high"
+    action_confidences: dict[str, str] = field(default_factory=dict)
+    requires_visual_validation: bool = False
+    requires_final_synthesis: bool = False
+    requires_planning: bool = False
+    uses_current_context: bool = False
 
 
 def _plain(value: str) -> str:
@@ -61,7 +68,10 @@ def classify_tool_route(message: str, attachments: list[dict] | None = None) -> 
     # Image intent uses the same conservative detector as the durable job path.
     from src.core.image_actions import detect_image_action
     image_action = detect_image_action(message, attachments or [])
-    if image_action:
+    image_confidence = str((image_action or {}).get("confidence") or "high")
+    image_requires_planning = bool((image_action or {}).get("requires_planning"))
+    uses_current_context = bool((image_action or {}).get("uses_current_context"))
+    if image_action and image_confidence != "low":
         terminal = "image_edit" if image_action.get("operation") == "edit" else "image_generate"
         allowed.add(terminal)
         categories.add("image")
@@ -99,11 +109,23 @@ def classify_tool_route(message: str, attachments: list[dict] | None = None) -> 
         categories.add("schedule")
 
     # A request is compound when it genuinely needs more than one capability category.
+    compound = len(categories) > 1
+    intent = "image_generation" if image_action and image_confidence != "low" else (
+        next(iter(categories)) if categories else "chat"
+    )
+    confidence = image_confidence if image_action else "high"
     return ToolRoute(
         allowed_tools=frozenset(allowed),
         requested_categories=frozenset(categories),
         terminal_tool=terminal,
-        compound=len(categories) > 1,
+        compound=compound,
+        intent=intent,
+        confidence=confidence,
+        action_confidences={"image": image_confidence} if image_action else {},
+        requires_visual_validation=bool(image_action and image_confidence == "medium") or bool(terminal and compound),
+        requires_final_synthesis=image_requires_planning or bool(image_action and image_confidence == "medium") or bool(terminal and compound),
+        requires_planning=image_requires_planning,
+        uses_current_context=uses_current_context,
     )
 
 # Palavras que indicam pergunta complexa (precisa de rota completa)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import re
 from pathlib import Path
@@ -43,10 +44,80 @@ _OPINION_OR_ANALYSIS = re.compile(
 )
 _NON_IMAGE_GENERATION = re.compile(
     r"\b(texto|relatorio|arquivo|documento|codigo|funcao|classe|lista|tabela|plano|pasta|"
-    r"projeto|sistema|aplicativo|app|site|pagina|script|programa|resumo|email)\b",
+    r"projeto|sistema|aplicativo|app|site|pagina|script|programa|resumo|email|"
+    r"duvid\w*|pergunt\w*|questa\w*|ideia\w*|sugest\w*|conselh\w*|dica\w*|"
+    r"historia\w*|piada\w*|exemplo\w*|explic\w*|respost\w*|defin\w*|frase\w*|"
+    r"poema\w*|verso\w*|musica\w*|letra\w*|receita\w*|roteiro\w*|nome\w*|"
+    r"titulo\w*|tema\w*|topico\w*|tarefa\w*|regra\w*|exercicio\w*|prova\w*|"
+    r"desafio\w*|enigma\w*|charada\w*|conversa\w*|dialogo\w*|debate\w*|"
+    r"argumento\w*|hipotese\w*|teoria\w*|conceito\w*|analise\w*|opiniao\w*)\b",
     re.IGNORECASE,
 )
 MAX_DIRECT_IMAGE_ACTION_OFFSET = 160
+_ABSTRACT_OUTPUT_WORDS = {
+    "duvida", "pergunta", "questao", "ideia", "sugestao", "conselho", "dica",
+    "historia", "piada", "exemplo", "explicacao", "resposta", "definicao", "frase",
+    "poema", "verso", "receita", "roteiro", "nome", "titulo", "tema", "topico",
+    "tarefa", "regra", "exercicio", "desafio", "enigma", "charada", "conversa",
+    "dialogo", "debate", "argumento", "hipotese", "teoria", "conceito", "analise",
+    "opiniao", "texto", "relatorio", "arquivo", "documento", "codigo", "lista", "plano",
+}
+_VAGUE_OUTPUT_WORDS = {
+    "algo", "alguma", "algum", "coisa", "isso", "isto", "negocio", "parada",
+    "troco", "treco", "bagulho",
+}
+_VISUAL_OUTPUT_WORDS = {
+    "abelha", "animal", "arvore", "aviao", "barco", "bicicleta", "bolo", "cachorro",
+    "cama", "casa", "carro", "cenario", "cidade", "comida", "crianca", "dinossauro",
+    "flor", "floresta", "gato", "homem", "mulher", "montanha", "paisagem", "pato",
+    "pessoa", "praia", "predio", "quarto", "rato", "robo", "rua", "veiculo",
+}
+_ATYPICAL_VISUAL_CONTEXT = re.compile(
+    r"\b(em cima|embaixo|debaixo|dentro|saindo|misturad[oa]|junto com)\b",
+    re.IGNORECASE,
+)
+_CURRENT_CONTEXT_REFERENCE = re.compile(
+    r"\b(nossa\s+conversa|conversa\s+atual|que\s+(?:a\s+gente|nos)\s+conversou|"
+    r"mensagens?\s+anteriores?|contexto\s+(?:acima|anterior|da\s+conversa)|"
+    r"texto\s+que\s+(?:voce|voc[eê])\s+criar)\b",
+    re.IGNORECASE,
+)
+_SEQUENTIAL_REQUEST = re.compile(
+    r"\b(primeir\w*|antes|depois|em\s+seguida|por\s+fim|entao|"
+    r"basead\w*\s+(?:na|no|nas|nos)|com\s+base|a\s+partir|"
+    r"analis\w*|pens\w*\s+(?:a\s+respeito|sobre)|resum\w*|"
+    r"(?:ger\w*|cri\w*|escrev\w*)\s+(?:um\s+)?(?:texto|prompt))\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_abstract_output(text: str) -> bool:
+    normalized = text.lower().translate(str.maketrans("áàâãéêíóôõúç", "aaaaeeiooouc"))
+    tokens = re.findall(r"[a-z]+", normalized)
+    return any(
+        token in _ABSTRACT_OUTPUT_WORDS
+        or bool(difflib.get_close_matches(token, _ABSTRACT_OUTPUT_WORDS, n=1, cutoff=0.82))
+        for token in tokens[:8]
+    )
+
+
+def _looks_like_vague_output(text: str) -> bool:
+    normalized = text.lower().translate(str.maketrans("áàâãéêíóôõúç", "aaaaeeiooouc"))
+    tokens = re.findall(r"[a-z]+", normalized)
+    return any(token in _VAGUE_OUTPUT_WORDS for token in tokens[:8])
+
+
+def _has_clear_visual_target(text: str, generate_match: re.Match) -> bool:
+    tail = text[generate_match.end():]
+    normalized = tail.lower().translate(str.maketrans("áàâãéêíóôõúç", "aaaaeeiooouc"))
+    tokens = re.findall(r"[a-z]+", normalized)[:6]
+    return any(token in _VISUAL_OUTPUT_WORDS for token in tokens)
+
+
+def _requires_image_planning(text: str, generate_match: re.Match | None, image_match: re.Match | None) -> bool:
+    if not generate_match or not image_match:
+        return False
+    return bool(_CURRENT_CONTEXT_REFERENCE.search(text) or _SEQUENTIAL_REQUEST.search(text))
 
 
 def detect_image_action(message: str, attachments: list[dict]) -> dict | None:
@@ -55,25 +126,45 @@ def detect_image_action(message: str, attachments: list[dict]) -> dict | None:
     count_match = re.search(r"\b([1-4])\s+(?:imagens|fotos|images|pictures)\b", text, re.IGNORECASE)
     count = int(count_match.group(1)) if count_match else 1
     if image_attachments and _EDIT_TERMS.search(text):
-        return {"operation": "edit", "reference": image_attachments[0], "prompt": text, "count": count}
-    if _OPINION_OR_ANALYSIS.search(text):
-        return None
+        return {"operation": "edit", "reference": image_attachments[0], "prompt": text, "count": count, "confidence": "high"}
     generate_match = _GENERATE_TERMS.search(text)
     image_match = _IMAGE_NOUNS.search(text)
+    if _requires_image_planning(text, generate_match, image_match):
+        return {
+            "operation": "generate",
+            "reference": None,
+            "prompt": text,
+            "count": count,
+            "confidence": "medium",
+            "requires_planning": True,
+            "uses_current_context": bool(_CURRENT_CONTEXT_REFERENCE.search(text)),
+            "sequence": ["build_prompt", "image_generate"],
+        }
+    if _OPINION_OR_ANALYSIS.search(text):
+        return None
     if (
         generate_match
         and image_match
         and generate_match.start() <= MAX_DIRECT_IMAGE_ACTION_OFFSET
         and abs(generate_match.start() - image_match.start()) <= 120
     ):
-        return {"operation": "generate", "reference": None, "prompt": text, "count": count}
+        return {"operation": "generate", "reference": None, "prompt": text, "count": count, "confidence": "high"}
+    if generate_match and (_NON_IMAGE_GENERATION.search(text) or _looks_like_abstract_output(text)):
+        return {"operation": "generate", "reference": None, "prompt": text, "count": count, "confidence": "low"}
     if (
         generate_match
         and generate_match.start() <= 24
         and not _NON_IMAGE_GENERATION.search(text)
         and len(text.split()) >= 3
     ):
-        return {"operation": "generate", "reference": None, "prompt": text, "count": count}
+        confidence = (
+            "high"
+            if _has_clear_visual_target(text, generate_match)
+            and not _ATYPICAL_VISUAL_CONTEXT.search(text)
+            and not _looks_like_vague_output(text)
+            else "medium"
+        )
+        return {"operation": "generate", "reference": None, "prompt": text, "count": count, "confidence": confidence}
     return None
 
 

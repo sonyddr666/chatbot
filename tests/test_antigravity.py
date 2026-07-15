@@ -66,8 +66,29 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertEqual(detect_image_action("melhore esta foto", image)["operation"], "edit")
         self.assertEqual(detect_image_action("crie uma imagem de uma cidade", [])["operation"], "generate")
         self.assertEqual(detect_image_action("gera uma imagem de um pato", [])["operation"], "generate")
-        self.assertEqual(detect_image_action("gere um rato em cima da cama", [])["operation"], "generate")
-        self.assertIsNone(detect_image_action("crie um relatorio sobre vendas", []))
+        self.assertEqual(detect_image_action("gere um rato em cima da cama", [])["confidence"], "medium")
+        self.assertEqual(detect_image_action("gere um pato", [])["confidence"], "high")
+        self.assertEqual(detect_image_action("gera alguma coisa pra mim", [])["confidence"], "medium")
+        self.assertEqual(detect_image_action("crie uma imagem de uma cidade", [])["confidence"], "high")
+        self.assertEqual(detect_image_action("crie um relatorio sobre vendas", [])["confidence"], "low")
+        self.assertEqual(detect_image_action("gera uma duvda pra mim", [])["confidence"], "low")
+        sequential = detect_image_action(
+            "Pensa a respeito de toda a nossa conversa e gera um texto para gerar uma imagem do texto que voce criar",
+            [],
+        )
+        self.assertEqual(sequential["confidence"], "medium")
+        self.assertTrue(sequential["requires_planning"])
+        self.assertTrue(sequential["uses_current_context"])
+        self.assertEqual(sequential["sequence"], ["build_prompt", "image_generate"])
+        analysis_sequence = detect_image_action(
+            "analise nossa conversa, crie um prompt e depois gere uma imagem",
+            [],
+        )
+        self.assertTrue(analysis_sequence["requires_planning"])
+        self.assertTrue(detect_image_action(
+            "gera um texto para depois gerar uma imagem",
+            [],
+        )["requires_planning"])
         self.assertEqual(detect_image_action("gera um papel de parede com essa data", [])["operation"], "generate")
         self.assertEqual(detect_image_action("gera um papel e paree com essa data", [])["operation"], "generate")
         self.assertEqual(detect_image_action("crie 4 imagens de uma cidade", [])["count"], 4)

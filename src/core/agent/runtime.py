@@ -50,6 +50,7 @@ class AgentContext:
     request: str
     attachments: list[dict[str, Any]]
     provider_config: dict[str, Any]
+    recent_history: list[dict[str, str]] = field(default_factory=list)
     job_id: str = ""
     current_call_id: str = ""
     event_sink: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
@@ -78,6 +79,8 @@ class AgentContext:
 class AgentRunOutcome:
     tools_declared: list[str] = field(default_factory=list)
     results: list[ToolResult] = field(default_factory=list)
+    route: Any | None = None
+    visual_validation_performed: bool = False
 
     @property
     def executed(self) -> bool:
@@ -105,7 +108,7 @@ async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
         tool for tool in available_tools(context)
         if tool.definition.name in route.allowed_tools
     ]
-    outcome = AgentRunOutcome(tools_declared=[tool.definition.name for tool in registered])
+    outcome = AgentRunOutcome(tools_declared=[tool.definition.name for tool in registered], route=route)
     if not registered:
         return outcome
     if context.event_sink:
@@ -191,6 +194,7 @@ async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
             prior_results=[result.model_payload() for result in outcome.results],
             tools=definitions,
             provider_config=context.provider_config,
+            recent_history=context.recent_history,
         )
         pending = validate_tool_calls(calls, route, used_counts, seen)
         if not pending:

@@ -39,6 +39,29 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
             ("content", "resposta"),
         ])
 
+    def test_content_blocks_preserve_reasoning_and_final_text(self):
+        from src.core.llm import _openai_delta_parts
+
+        parts = _openai_delta_parts({
+            "content": [
+                {"type": "thinking", "thinking": "planejando"},
+                {"type": "text", "text": "resposta"},
+            ],
+        })
+
+        self.assertEqual(parts, [
+            ("reasoning", "planejando"),
+            ("content", "resposta"),
+        ])
+
+    def test_analysis_field_is_treated_as_structured_reasoning(self):
+        from src.core.llm import _openai_delta_parts
+
+        self.assertEqual(
+            _openai_delta_parts({"analysis": "plano", "content": "final"}),
+            [("reasoning", "plano"), ("content", "final")],
+        )
+
     def test_morph_request_enables_selected_reasoning_effort(self):
         from src.core.llm import _openai_request_variants
 
@@ -64,6 +87,63 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreater(len(parts), 1)
         self.assertEqual("".join(parts), content)
+
+    def test_inline_thought_tag_is_split_from_final_content(self):
+        from src.core.llm import _OpenAIReasoningNormalizer
+
+        normalizer = _OpenAIReasoningNormalizer()
+        parts = []
+        for chunk in ("<tho", "ught>analisando", " com calma</th", "ought>Resposta final"):
+            parts.extend(normalizer.feed("content", chunk))
+        parts.extend(normalizer.finish())
+
+        self.assertEqual(
+            "".join(text for typ, text in parts if typ == "reasoning"),
+            "analisando com calma",
+        )
+        self.assertEqual(
+            "".join(text for typ, text in parts if typ == "content"),
+            "Resposta final",
+        )
+
+    def test_inline_reasoning_supports_common_openai_compatible_tags(self):
+        from src.core.llm import _OpenAIReasoningNormalizer
+
+        for tag in ("think", "thought", "reasoning", "analysis"):
+            with self.subTest(tag=tag):
+                normalizer = _OpenAIReasoningNormalizer()
+                parts = normalizer.feed(
+                    "content",
+                    f"  <{tag}>plano</{tag}>\nresposta",
+                )
+                parts.extend(normalizer.finish())
+                self.assertEqual(parts, [
+                    ("reasoning", "plano"),
+                    ("content", "\nresposta"),
+                ])
+
+    def test_inline_tag_in_normal_text_is_not_reclassified(self):
+        from src.core.llm import _OpenAIReasoningNormalizer
+
+        normalizer = _OpenAIReasoningNormalizer()
+        text = "Exemplo de XML: <thought>isto continua sendo texto</thought>."
+        parts = normalizer.feed("content", text)
+        parts.extend(normalizer.finish())
+
+        self.assertEqual(parts, [("content", text)])
+
+    def test_structured_reasoning_has_priority_over_inline_tags(self):
+        from src.core.llm import _OpenAIReasoningNormalizer
+
+        normalizer = _OpenAIReasoningNormalizer()
+        parts = normalizer.feed("reasoning", "campo nativo")
+        parts.extend(normalizer.feed("content", "<thought>texto literal</thought>resposta"))
+        parts.extend(normalizer.finish())
+
+        self.assertEqual(parts, [
+            ("reasoning", "campo nativo"),
+            ("content", "<thought>texto literal</thought>resposta"),
+        ])
 
     async def test_opencode_provider_uses_direct_reasoning_stream(self):
         from src.core.llm import generate_stream
@@ -200,6 +280,43 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(requests[0]["url"], "https://openrouter.ai/api/v1/chat/completions")
         self.assertEqual(requests[0]["json"]["reasoning"], {"effort": "high"})
+
+    async def test_unknown_provider_splits_inline_thought_from_sse_content(self):
+        from src.core.llm import generate_openai_compatible_stream
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            stream = (
+                'data: {"choices":[{"delta":{"content":"<tho"}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"ught>planejando</th"}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"ought>Olá!"}}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, content=stream.encode())
+
+        real_async_client = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+
+        def client_factory(*args, **kwargs):
+            kwargs["transport"] = transport
+            return real_async_client(*args, **kwargs)
+
+        with patch("src.core.llm.httpx.AsyncClient", new=client_factory):
+            chunks = [
+                chunk
+                async for chunk in generate_openai_compatible_stream(
+                    [HumanMessage(content="oi")],
+                    {
+                        "provider_id": "google-ai-studio-manual",
+                        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                        "api_key": "test-key",
+                        "api_format": "chat_completions",
+                        "model_id": "gemma-test",
+                    },
+                )
+            ]
+
+        self.assertEqual("".join(t for typ, t in chunks if typ == "reasoning"), "planejando")
+        self.assertEqual("".join(t for typ, t in chunks if typ == "content"), "Olá!")
 
     async def test_unknown_provider_omits_unverified_reasoning_fields(self):
         from src.core.llm import generate_openai_compatible_stream

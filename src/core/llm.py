@@ -28,6 +28,9 @@ from src.core.response_modes import (
 from src.core.model_capabilities import adapt_reasoning_effort
 
 
+_REASONING_FIELDS = ("reasoning_content", "reasoning", "thinking", "analysis", "thought")
+
+
 def _is_codex_provider(provider_id: str) -> bool:
     return provider_id == "codex-chatgpt"
 
@@ -58,7 +61,7 @@ def _coerce_stream_text(value) -> str:
     if isinstance(value, list):
         return "".join(_coerce_stream_text(item) for item in value)
     if isinstance(value, dict):
-        for key in ("text", "content", "reasoning_content", "reasoning", "thinking"):
+        for key in ("text", "content", *_REASONING_FIELDS):
             if key in value:
                 return _coerce_stream_text(value[key])
     return ""
@@ -67,10 +70,12 @@ def _coerce_stream_text(value) -> str:
 def _openai_delta_parts(delta: dict) -> list[tuple[str, str]]:
     """Normalize common reasoning fields used by OpenAI-compatible gateways."""
     parts: list[tuple[str, str]] = []
-    for key in ("reasoning_content", "reasoning", "thinking"):
+    structured_reasoning = False
+    for key in _REASONING_FIELDS:
         reasoning = _coerce_stream_text(delta.get(key))
         if reasoning:
             parts.append(("reasoning", reasoning))
+            structured_reasoning = True
             break
     else:
         reasoning_details = delta.get("reasoning_details")
@@ -89,10 +94,158 @@ def _openai_delta_parts(delta: dict) -> list[tuple[str, str]]:
                     visible_details.append(detail_text)
             if visible_details:
                 parts.append(("reasoning", "".join(visible_details)))
-    content = _coerce_stream_text(delta.get("content"))
-    if content:
-        parts.append(("content", content))
+                structured_reasoning = True
+
+    content_value = delta.get("content")
+    if isinstance(content_value, list):
+        reasoning_blocks: list[str] = []
+        content_blocks: list[str] = []
+        for block in content_value:
+            if not isinstance(block, dict):
+                text = _coerce_stream_text(block)
+                if text:
+                    content_blocks.append(text)
+                continue
+            block_type = str(block.get("type", "")).strip().lower().replace("-", "_")
+            is_reasoning_block = (
+                block.get("thought") is True
+                or block_type in {
+                    "analysis",
+                    "reasoning",
+                    "reasoning_text",
+                    "thinking",
+                    "thought",
+                }
+            )
+            text = _coerce_stream_text(block)
+            if not text:
+                continue
+            if is_reasoning_block and not structured_reasoning:
+                reasoning_blocks.append(text)
+            elif not is_reasoning_block:
+                content_blocks.append(text)
+        if reasoning_blocks:
+            parts.append(("reasoning", "".join(reasoning_blocks)))
+        if content_blocks:
+            parts.append(("content", "".join(content_blocks)))
+    else:
+        content = _coerce_stream_text(content_value)
+        if content:
+            parts.append(("content", content))
     return parts
+
+
+class _InlineReasoningParser:
+    """Split common inline reasoning tags without provider-specific rules.
+
+    Some OpenAI-compatible models put reasoning inside the normal ``content``
+    field (for example ``<think>...</think>answer``).  The parser is deliberately
+    conservative: an opening tag is only special at the start of the response,
+    after optional whitespace.  Tags appearing later in prose or code remain
+    ordinary content.
+    """
+
+    _TAGS = ("think", "thought", "reasoning", "analysis")
+
+    def __init__(self) -> None:
+        self._state = "probing"
+        self._buffer = ""
+        self._tag = ""
+
+    @staticmethod
+    def _split_safe_suffix(value: str, marker: str) -> tuple[str, str]:
+        """Keep a possible partial closing tag for the next SSE chunk."""
+        lowered = value.lower()
+        marker = marker.lower()
+        max_size = min(len(value), len(marker) - 1)
+        for size in range(max_size, 0, -1):
+            if lowered.endswith(marker[:size]):
+                return value[:-size], value[-size:]
+        return value, ""
+
+    def feed(self, text: str) -> list[tuple[str, str]]:
+        if not text:
+            return []
+        if self._state == "content":
+            return [("content", text)]
+
+        self._buffer += text
+        if self._state == "probing":
+            candidate = self._buffer.lstrip()
+            if not candidate:
+                return []
+            lowered = candidate.lower()
+            opening_tags = {tag: f"<{tag}>" for tag in self._TAGS}
+            for tag, opening in opening_tags.items():
+                if lowered.startswith(opening):
+                    self._tag = tag
+                    self._buffer = candidate[len(opening):]
+                    self._state = "reasoning"
+                    break
+            else:
+                if any(opening.startswith(lowered) for opening in opening_tags.values()):
+                    return []
+                result = self._buffer
+                self._buffer = ""
+                self._state = "content"
+                return [("content", result)]
+
+        closing = f"</{self._tag}>"
+        lowered = self._buffer.lower()
+        closing_index = lowered.find(closing)
+        if closing_index >= 0:
+            reasoning = self._buffer[:closing_index]
+            content = self._buffer[closing_index + len(closing):]
+            self._buffer = ""
+            self._state = "content"
+            parts: list[tuple[str, str]] = []
+            if reasoning:
+                parts.append(("reasoning", reasoning))
+            if content:
+                parts.append(("content", content))
+            return parts
+
+        safe, retained = self._split_safe_suffix(self._buffer, closing)
+        self._buffer = retained
+        return [("reasoning", safe)] if safe else []
+
+    def disable(self) -> list[tuple[str, str]]:
+        """Stop inline parsing when the provider supplies structured reasoning."""
+        pending = self._buffer
+        self._buffer = ""
+        self._state = "content"
+        return [("content", pending)] if pending else []
+
+    def finish(self) -> list[tuple[str, str]]:
+        if not self._buffer:
+            return []
+        pending = self._buffer
+        self._buffer = ""
+        if self._state == "reasoning":
+            return [("reasoning", pending)]
+        return [("content", pending)]
+
+
+class _OpenAIReasoningNormalizer:
+    """Prefer native reasoning fields, then fall back to inline tag parsing."""
+
+    def __init__(self) -> None:
+        self._inline = _InlineReasoningParser()
+        self._structured_reasoning = False
+
+    def feed(self, typ: str, text: str) -> list[tuple[str, str]]:
+        if typ == "reasoning":
+            pending = self._inline.disable() if not self._structured_reasoning else []
+            self._structured_reasoning = True
+            return [*pending, ("reasoning", text)]
+        if typ == "content" and not self._structured_reasoning:
+            return self._inline.feed(text)
+        return [(typ, text)] if text else []
+
+    def finish(self) -> list[tuple[str, str]]:
+        if self._structured_reasoning:
+            return []
+        return self._inline.finish()
 
 
 def _smooth_stream_parts(text: str, chunk_size: int = 48) -> list[str]:
@@ -364,6 +517,7 @@ async def generate_openai_compatible_stream(
                 received_content = False
                 pending_type = ""
                 pending_text = ""
+                reasoning_normalizer = _OpenAIReasoningNormalizer()
                 async for raw in _iter_openai_payloads(response):
                     raw = raw.strip()
                     if not raw or raw == "[DONE]":
@@ -376,7 +530,10 @@ async def generate_openai_compatible_stream(
                         continue
                     if event.get("error"):
                         raise _provider_error(provider_config, f"erro no stream: {event['error']}")
+                    normalized_parts: list[tuple[str, str]] = []
                     for typ, text in _openai_event_parts(event):
+                        normalized_parts.extend(reasoning_normalizer.feed(typ, text))
+                    for typ, text in normalized_parts:
                         received_text = True
                         if typ == "content":
                             received_content = True
@@ -393,6 +550,17 @@ async def generate_openai_compatible_stream(
                                 if len(pieces) > 1 and index < len(pieces) - 1:
                                     await asyncio.sleep(0.004)
                             pending_text = ""
+
+                for typ, text in reasoning_normalizer.finish():
+                    received_text = True
+                    if typ == "content":
+                        received_content = True
+                    if pending_type and pending_type != typ and pending_text:
+                        for piece in _smooth_stream_parts(pending_text):
+                            yield (pending_type, piece)
+                        pending_text = ""
+                    pending_type = typ
+                    pending_text += text
 
                 if pending_type and pending_text:
                     for piece in _smooth_stream_parts(pending_text):
@@ -651,7 +819,7 @@ async def generate_stream(
     async for chunk in llm.astream(messages):
         if isinstance(chunk, AIMessageChunk):
             reasoning = ""
-            for key in ("reasoning_content", "reasoning", "thinking"):
+            for key in _REASONING_FIELDS:
                 reasoning = _coerce_stream_text(chunk.additional_kwargs.get(key))
                 if reasoning:
                     break
