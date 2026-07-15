@@ -1,11 +1,15 @@
+import asyncio
 import unittest
+from collections import Counter
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src.core.agent.planner import decide_tool_calls, parse_tool_calls
+from src.core.agent.plan_validator import validate_tool_calls
 from src.core.agent.runtime import AgentContext, run_agent_tools
 from src.core.agent.schemas import RegisteredTool, ToolCall, ToolDefinition, ToolResult
+from src.core.classifier import ToolRoute, classify_tool_route
 from src.tools.get_time import current_time
 
 
@@ -92,10 +96,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ),
             handler=handler,
         )
-        decisions = [
-            [ToolCall(id="call_1", name="image_generate", arguments={"prompt": "pato"})],
-            [],
-        ]
+        decisions = [[ToolCall(id="call_1", name="image_generate", arguments={"prompt": "pato"})]]
         with (
             patch("src.core.agent.runtime.available_tools", return_value=[registered]),
             patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(side_effect=decisions)),
@@ -103,7 +104,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             outcome = await run_agent_tools(AgentContext(
                 user_id=7,
                 session_id="s1",
-                request="gera um pato",
+                request="gera uma imagem de um pato",
                 attachments=[],
                 provider_config={"provider_id": "test", "model_id": "test-model", "base_url": "https://example.test/v1"},
                 event_sink=sink,
@@ -112,7 +113,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome.executed)
         self.assertIn("imagem criada", outcome.model_context())
         self.assertEqual([item[0] for item in events], [
-            "tools.declared", "tool.requested", "tool.started", "tool.completed",
+            "tools.declared", "agent.planning", "tool.requested", "tool.started", "tool.completed",
         ])
 
     async def test_duplicate_calls_cannot_loop_forever(self):
@@ -127,6 +128,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("src.core.agent.runtime.available_tools", return_value=[registered]),
             patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(return_value=calls)),
+            patch(
+                "src.core.agent.runtime.classify_tool_route",
+                return_value=ToolRoute(allowed_tools=frozenset({"noop"})),
+            ),
         ):
             outcome = await run_agent_tools(AgentContext(
                 user_id=1,
@@ -137,6 +142,84 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ))
         self.assertEqual(len(outcome.results), 1)
         handler.assert_awaited_once()
+
+    async def test_independent_tools_execute_in_parallel(self):
+        active = 0
+        maximum_active = 0
+
+        async def handler(context, arguments):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return ToolResult(
+                call_id=context.current_call_id,
+                name=arguments["result_name"],
+                status="completed",
+                content="ok",
+            )
+
+        registered = [
+            RegisteredTool(
+                definition=ToolDefinition(name=name, description=name, input_schema={"type": "object"}),
+                handler=handler,
+            )
+            for name in ("web_search", "conversation_history")
+        ]
+        decisions = [[
+            ToolCall(id="search", name="web_search", arguments={"query": "codex", "result_name": "web_search"}),
+            ToolCall(id="history", name="conversation_history", arguments={"query": "codex", "result_name": "conversation_history"}),
+        ], []]
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=registered),
+            patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(side_effect=decisions)),
+        ):
+            outcome = await run_agent_tools(AgentContext(
+                user_id=1,
+                session_id="s",
+                request="pesquise codex e consulte meu historico",
+                attachments=[],
+                provider_config={"provider_id": "test", "model_id": "m", "base_url": "https://example.test"},
+            ))
+        self.assertEqual(len(outcome.results), 2)
+        self.assertEqual(maximum_active, 2)
+
+
+class AgentRoutingTests(unittest.TestCase):
+    def test_router_skips_tools_for_plain_chat(self):
+        self.assertEqual(classify_tool_route("explique o que e uma abelha").allowed_tools, frozenset())
+        self.assertEqual(classify_tool_route("explique meu projeto").allowed_tools, frozenset())
+
+    def test_router_distinguishes_web_and_local_search(self):
+        web = classify_tool_route("pesquise codex na internet")
+        local = classify_tool_route("procure uma imagem dentro do sistema")
+        self.assertIn("web_search", web.allowed_tools)
+        self.assertNotIn("web_search", local.allowed_tools)
+        self.assertIn("workspace_search", local.allowed_tools)
+
+    def test_router_distinguishes_simple_and_compound_image_requests(self):
+        simple = classify_tool_route("gere uma imagem de um pato")
+        compound = classify_tool_route("gere uma imagem pesquisando codex e lendo arquivos e historico")
+        self.assertEqual(simple.allowed_tools, frozenset({"image_generate"}))
+        self.assertFalse(simple.compound)
+        self.assertTrue(compound.compound)
+        self.assertIn("image_generate", compound.allowed_tools)
+        self.assertIn("web_search", compound.allowed_tools)
+        self.assertIn("conversation_history", compound.allowed_tools)
+        self.assertIn("workspace_search", compound.allowed_tools)
+
+    def test_validator_enforces_one_search_budget(self):
+        route = ToolRoute(
+            allowed_tools=frozenset({"web_search"}),
+            requested_categories=frozenset({"search"}),
+        )
+        calls = [
+            ToolCall(id="1", name="web_search", arguments={"query": "codex"}),
+            ToolCall(id="2", name="web_search", arguments={"query": "Codex OpenAI"}),
+        ]
+        accepted = validate_tool_calls(calls, route, Counter(), set())
+        self.assertEqual(len(accepted), 1)
 
 
 if __name__ == "__main__":

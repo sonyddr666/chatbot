@@ -41,6 +41,11 @@ _OPINION_OR_ANALYSIS = re.compile(
     r"o\s+que\s+(?:voce|você)\s+acha|(?:analise|avalie|comente|explique|opine)\b)",
     re.IGNORECASE,
 )
+_NON_IMAGE_GENERATION = re.compile(
+    r"\b(texto|relatorio|arquivo|documento|codigo|funcao|classe|lista|tabela|plano|pasta|"
+    r"projeto|sistema|aplicativo|app|site|pagina|script|programa|resumo|email)\b",
+    re.IGNORECASE,
+)
 MAX_DIRECT_IMAGE_ACTION_OFFSET = 160
 
 
@@ -60,6 +65,13 @@ def detect_image_action(message: str, attachments: list[dict]) -> dict | None:
         and image_match
         and generate_match.start() <= MAX_DIRECT_IMAGE_ACTION_OFFSET
         and abs(generate_match.start() - image_match.start()) <= 120
+    ):
+        return {"operation": "generate", "reference": None, "prompt": text, "count": count}
+    if (
+        generate_match
+        and generate_match.start() <= 24
+        and not _NON_IMAGE_GENERATION.search(text)
+        and len(text.split()) >= 3
     ):
         return {"operation": "generate", "reference": None, "prompt": text, "count": count}
     return None

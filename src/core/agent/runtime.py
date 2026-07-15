@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import Counter
+from dataclasses import replace
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from src.core.agent.planner import decide_tool_calls
+from src.core.agent.plan_validator import tool_category, validate_tool_calls
 from src.core.agent.policy import authorize_tool
 from src.core.agent.schemas import ToolResult
 from src.core.agent.tool_registry import available_tools
+from src.core.classifier import IMAGE_TOOLS, classify_tool_route
 
 
-MAX_AGENT_STEPS = 3
+MAX_AGENT_STEPS = 2
+DEPENDENT_TOOLS = {"workspace_read", "file_delivery"}
 
 
 def provider_can_plan(provider_config: dict[str, Any]) -> bool:
@@ -92,7 +98,13 @@ class AgentRunOutcome:
 async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
     if not provider_can_plan(context.provider_config):
         return AgentRunOutcome()
-    registered = available_tools(context)
+    route = classify_tool_route(context.request, context.attachments)
+    if not route.allowed_tools:
+        return AgentRunOutcome()
+    registered = [
+        tool for tool in available_tools(context)
+        if tool.definition.name in route.allowed_tools
+    ]
     outcome = AgentRunOutcome(tools_declared=[tool.definition.name for tool in registered])
     if not registered:
         return outcome
@@ -103,8 +115,76 @@ async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
     definitions = [tool.definition for tool in registered]
     by_name = {tool.definition.name: tool for tool in registered}
     seen: set[str] = set()
+    used_counts: Counter = Counter()
 
-    for _ in range(MAX_AGENT_STEPS):
+    async def execute_one(call) -> ToolResult:
+        registered_tool = by_name[call.name]
+        call_context = replace(context, current_call_id=call.id)
+        if context.event_sink:
+            await context.event_sink("tool.requested", {
+                "id": call.id,
+                "name": call.name,
+                "arguments": _event_arguments(call.arguments),
+            })
+            await context.event_sink("tool.started", {
+                "id": call.id,
+                "name": call.name,
+            })
+        try:
+            authorize_tool(context.user_id, registered_tool.definition)
+            result = await registered_tool.handler(call_context, call.arguments)
+        except Exception as exc:
+            result = ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                content="A ferramenta falhou e nao produziu resultado.",
+                error=str(exc),
+                activity={
+                    "name": call.name,
+                    "status": "failed",
+                    "label": f"Falha em {call.name}",
+                    "source_count": 0,
+                    "sources": [],
+                },
+            )
+        if context.event_sink:
+            await context.event_sink(
+                "tool.completed" if result.status == "completed" else "tool.failed",
+                result.model_payload(),
+            )
+        return result
+
+    async def execute_batch(calls) -> list[ToolResult]:
+        if not calls:
+            return []
+        parallel = []
+        sequential = []
+        for call in calls:
+            definition = by_name[call.name].definition
+            if (
+                call.name not in IMAGE_TOOLS
+                and not definition.confirmation_required
+                and definition.risk_level <= 1
+            ):
+                parallel.append(call)
+            else:
+                sequential.append(call)
+        results = list(await asyncio.gather(*(execute_one(call) for call in parallel))) if parallel else []
+        for call in sequential:
+            results.append(await execute_one(call))
+        for result in results:
+            used_counts[tool_category(result.name)] += 1
+        outcome.results.extend(results)
+        return results
+
+    for step in range(MAX_AGENT_STEPS):
+        if context.event_sink:
+            await context.event_sink("agent.planning", {
+                "step": step + 1,
+                "max_steps": MAX_AGENT_STEPS,
+                "has_prior_results": bool(outcome.results),
+            })
         calls = await decide_tool_calls(
             request=context.request,
             attachment_summary=context.attachment_summary(),
@@ -112,55 +192,29 @@ async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
             tools=definitions,
             provider_config=context.provider_config,
         )
-        pending = []
-        for call in calls:
-            signature = json.dumps(
-                {"name": call.name, "arguments": call.arguments},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            if signature not in seen:
-                seen.add(signature)
-                pending.append(call)
+        pending = validate_tool_calls(calls, route, used_counts, seen)
         if not pending:
             break
-        for call in pending:
-            registered_tool = by_name.get(call.name)
-            if not registered_tool:
-                continue
-            context.current_call_id = call.id
-            if context.event_sink:
-                await context.event_sink("tool.requested", {
-                    "id": call.id,
-                    "name": call.name,
-                    "arguments": _event_arguments(call.arguments),
-                })
-                await context.event_sink("tool.started", {
-                    "id": call.id,
-                    "name": call.name,
-                })
-            try:
-                authorize_tool(context.user_id, registered_tool.definition)
-                result = await registered_tool.handler(context, call.arguments)
-            except Exception as exc:
-                result = ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="failed",
-                    content="A ferramenta falhou e nao produziu resultado.",
-                    error=str(exc),
-                    activity={
-                        "name": call.name,
-                        "status": "failed",
-                        "label": f"Falha em {call.name}",
-                        "source_count": 0,
-                        "sources": [],
-                    },
-                )
-            outcome.results.append(result)
-            if context.event_sink:
-                await context.event_sink(
-                    "tool.completed" if result.status == "completed" else "tool.failed",
-                    result.model_payload(),
-                )
+        terminal = [call for call in pending if call.name in IMAGE_TOOLS]
+        nonterminal = [call for call in pending if call.name not in IMAGE_TOOLS]
+
+        # Search/list must finish before path-dependent reads or a terminal image prompt.
+        roots = [call for call in nonterminal if call.name not in DEPENDENT_TOOLS]
+        dependents = [call for call in nonterminal if call.name in DEPENDENT_TOOLS]
+        if roots and dependents:
+            await execute_batch(roots)
+        else:
+            await execute_batch(nonterminal)
+
+        # A simple terminal-only plan can execute immediately. Compound requests defer
+        # image generation until supporting results have been collected.
+        if terminal and not nonterminal and (step > 0 or not route.compound):
+            await execute_batch(terminal[:1])
+            break
+        if terminal and nonterminal and step > 0 and not dependents:
+            await execute_batch(terminal[:1])
+            break
+
+        if not route.compound:
+            break
     return outcome

@@ -9,7 +9,7 @@ from src.config import settings
 from src.core.agent import AgentContext, AgentRunOutcome, run_agent_tools
 from src.core.chat import ChatEngine
 from src.core.chat_attachments import inspect_workspace_attachment
-from src.core.classifier import classify_route
+from src.core.classifier import classify_route, classify_tool_route
 from src.core.file_delivery import requests_file_delivery, resolve_file_delivery
 from src.core.memory import get_session
 from src.core.image_actions import (
@@ -245,6 +245,13 @@ async def process_chat_job(job_id: str) -> None:
         tool_event_arguments: dict[str, dict] = {}
 
         async def agent_event_sink(event_name: str, payload: dict) -> None:
+            if event_name == "agent.planning":
+                await _add_event(
+                    job_id,
+                    "status",
+                    "Consolidando resultados..." if payload.get("has_prior_results") else "Planejando acoes necessarias...",
+                )
+                return
             await _add_event(job_id, "tool", json.dumps({
                 "event": event_name,
                 **payload,
@@ -276,11 +283,10 @@ async def process_chat_job(job_id: str) -> None:
                 }, ensure_ascii=False))
 
         direct_image_action = detect_image_action(message, effective_attachments)
+        tool_route = classify_tool_route(message, effective_attachments)
         simple_direct_image_request = (
             direct_image_action is not None
-            and not requests_web_search(message)
-            and not requests_conversation_history(message)
-            and not requests_file_delivery(message)
+            and not tool_route.compound
         )
 
         agent_outcome = AgentRunOutcome()
@@ -367,6 +373,20 @@ async def process_chat_job(job_id: str) -> None:
                 if delivered_attachments:
                     result.attachments = delivered_attachments
 
+        completed_image_results = [
+            result for result in agent_outcome.results
+            if result.name in {"image_generate", "image_edit"} and result.status == "completed"
+        ]
+        if completed_image_results:
+            edited = completed_image_results[-1].name == "image_edit"
+            response = "Imagem editada com Antigravity." if edited else "Imagem gerada com Antigravity."
+            await _add_event(job_id, "text_delta", response)
+            memory = _prepare_memory(session_id, message)
+            memory.add_user_message(message)
+            memory.add_ai_message(response)
+            await _repo_call(ChatJobRepo.finish, job_id, "completed")
+            return
+
         image_tool_completed = any(
             result.name in {"image_generate", "image_edit"} and result.status == "completed"
             for result in agent_outcome.results
@@ -392,7 +412,8 @@ async def process_chat_job(job_id: str) -> None:
         if image_action and image_generation_enabled(user_id) and has_antigravity_image_model(user_id):
             fallback_call_id = f"image_{job_id}"
             await _add_event(job_id, "status", "Preparando o pedido de imagem com o modelo selecionado...")
-            image_action = await plan_image_action(image_action, provider_config)
+            if not simple_direct_image_request:
+                image_action = await plan_image_action(image_action, provider_config)
             operation_label = "Editando imagem" if image_action["operation"] == "edit" else "Gerando imagem"
             tool_name = "image_edit" if image_action["operation"] == "edit" else "image_generate"
             await _add_event(job_id, "skill", json.dumps({
