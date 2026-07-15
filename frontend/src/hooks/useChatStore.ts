@@ -389,8 +389,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             providerName: job.provider_name,
             modelId: job.model_id,
             modelName: job.model_name,
-            responseMode: job.response_mode,
-            reasoningEffort: job.reasoning_effort,
           }
         }
         return { messages: next }
@@ -644,8 +642,6 @@ async function runPersistedJobResume(jobId: string) {
         ...message,
         content: job.content,
         reasoning: job.reasoning,
-        responseMode: job.response_mode,
-        reasoningEffort: job.reasoning_effort,
         attachments: job.assistant_attachments || message.attachments || [],
         jobStatus: job.status,
         messageId: job.assistant_message_id,
@@ -719,8 +715,6 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
           providerName: chunk.providerName,
           modelId: chunk.modelId,
           modelName: chunk.modelName,
-          responseMode: chunk.responseMode || message.responseMode,
-          reasoningEffort: chunk.reasoningEffort || message.reasoningEffort,
           jobId,
           jobStatus: 'running',
         }))

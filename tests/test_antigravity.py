@@ -1,7 +1,7 @@
 import unittest
 
 from src.core.antigravity_accounts import decrypt_secret, encrypt_secret
-from src.core.antigravity_client import _resolve_model, provider_models_from_account
+from src.core.antigravity_client import _reasoning_chunks, _resolve_model, provider_models_from_account
 from src.core.image_actions import detect_image_action, references_previous_image
 
 
@@ -53,6 +53,13 @@ class AntigravityAdapterTests(unittest.TestCase):
         models = {model["id"]: model for model in provider_models_from_account(account)}
         self.assertFalse(models["gemini-3.5-flash-extra-low"]["thinking_stream"])
         self.assertTrue(models["gemini-3.5-flash-low"]["thinking_stream"])
+
+    def test_batched_reasoning_is_split_without_changing_text(self):
+        original = "raciocinio enviado em um unico lote"
+        chunks = _reasoning_chunks(original, size=7)
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunks), original)
+        self.assertTrue(all(len(chunk) <= 7 for chunk in chunks))
 
     def test_image_action_is_conservative(self):
         image = [{"kind": "image", "id": "att_1"}]

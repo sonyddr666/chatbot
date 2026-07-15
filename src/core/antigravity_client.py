@@ -247,6 +247,14 @@ def _message_text(content: Any) -> str:
     return str(content or "")
 
 
+def _reasoning_chunks(text: str, size: int = 12) -> list[str]:
+    """Turn Antigravity's batched thought text into small ordered UI deltas."""
+    if not text:
+        return []
+    width = max(1, int(size))
+    return [text[index:index + width] for index in range(0, len(text), width)]
+
+
 def _message_parts(content: Any) -> list[dict]:
     if not isinstance(content, list):
         return [{"text": _message_text(content)}]
@@ -352,7 +360,14 @@ async def chat_stream(
                                 if not text:
                                     continue
                                 emitted = True
-                                yield ("reasoning" if part.get("thought") else "content", str(text))
+                                if part.get("thought"):
+                                    # Antigravity commonly sends the whole thought in one SSE
+                                    # part. Preserve the real text while rendering it gradually.
+                                    for delta in _reasoning_chunks(str(text)):
+                                        yield "reasoning", delta
+                                        await asyncio.sleep(0.012)
+                                else:
+                                    yield "content", str(text)
                     if not emitted:
                         raise RuntimeError("Antigravity encerrou o SSE sem texto")
                     update_account(user_id, account["id"], {"endpoint": endpoint})

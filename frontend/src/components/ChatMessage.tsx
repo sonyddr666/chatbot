@@ -440,14 +440,8 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
     void useChatStore.getState().loadStats()
   }
 
-  // Providers como o Antigravity podem segurar alguns segundos e depois
-  // entregar o reasoning em um unico lote SSE. O bloco nasce junto com o job.
-  const expectsReasoning = !!(
-    isLoading
-    && message.responseMode === 'thinking'
-    && (message.jobStatus === 'queued' || message.jobStatus === 'running')
-  )
-  const isReasoning = !!(isLoading && (expectsReasoning || (message.content === '' && message.reasoning)))
+  // Reasoning ativo (está chegando agora)
+  const isReasoning = !!(isLoading && message.content === '' && message.reasoning)
   // Reasoning já finalizado
   const hasReasoning = !!message.reasoning
   const displayContent = useMemo(
@@ -538,7 +532,7 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
               {message.workspacePlan && <WorkspacePlanCard plan={message.workspacePlan} />}
 
               {/* Loading indicator quando não tem content nem reasoning */}
-              {isLoading && !message.content && !message.reasoning && !expectsReasoning && <TypingIndicator status={status} />}
+              {isLoading && !message.content && !message.reasoning && <TypingIndicator status={status} />}
             </>
           )}
           <div

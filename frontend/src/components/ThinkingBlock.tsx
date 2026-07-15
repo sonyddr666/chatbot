@@ -90,7 +90,7 @@ export function ThinkingBlock({ text, isStreaming = false, startCollapsed = true
           className="px-3 pb-3 pt-1 text-xs leading-relaxed whitespace-pre-wrap max-h-[320px] overflow-y-auto"
           style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}
         >
-          {text || (isStreaming ? 'Aguardando o provider enviar o raciocínio…' : '')}
+          {text}
           {isStreaming && <span className="typing-cursor">▊</span>}
         </div>
       </div>
