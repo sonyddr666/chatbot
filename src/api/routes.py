@@ -677,12 +677,16 @@ from src.core.provider_manager import (
     get_provider_status as pm_get_status,
     export_custom_providers as pm_export_custom,
     import_custom_providers as pm_import_custom,
+    set_builtin_dynamic_models as pm_set_dynamic_models,
 )
 
 
 def _safe_provider_config(cfg: dict) -> dict:
     """Remove segredos antes de devolver config de provider pela API."""
-    safe = {k: v for k, v in cfg.items() if k not in {"api_key", "access_token", "refresh_token"}}
+    safe = {
+        k: v for k, v in cfg.items()
+        if k not in {"api_key", "access_token", "refresh_token", "user_id"}
+    }
     safe["has_key"] = bool(cfg.get("api_key"))
     return safe
 
@@ -690,7 +694,15 @@ def _safe_provider_config(cfg: dict) -> dict:
 @router.get("/providers/manage")
 async def providers_list(include_keys: bool = False, user=Depends(get_current_user)):
     """Lista todos os provedores disponiveis sem expor chaves reais."""
-    return pm_list(include_keys=False)
+    providers = pm_list(include_keys=False)
+    from src.core.antigravity_accounts import list_accounts as antigravity_list_accounts
+
+    antigravity_accounts = antigravity_list_accounts(user.id)
+    for provider in providers:
+        if provider.get("id") == "antigravity":
+            provider["has_key"] = bool(antigravity_accounts)
+            provider["key_source"] = "oauth_pool" if antigravity_accounts else "none"
+    return providers
 
 
 @router.get("/providers/export")
@@ -972,6 +984,19 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
             "model": cfg.get("model_id", ""),
             "source": status.get("key_source", "oauth_pool"),
             "message": "Codex ChatGPT usa pool OAuth; teste via status do pool.",
+        }
+
+    if cfg.get("provider_id") == "antigravity":
+        accounts = antigravity_list_accounts(user.id)
+        return {
+            "ok": bool(accounts),
+            "provider": "antigravity",
+            "model": cfg.get("model_id", ""),
+            "source": "oauth_pool" if accounts else "none",
+            "message": (
+                "Conta Antigravity conectada. Use Sincronizar para validar projeto, modelos e cota."
+                if accounts else "Conecte ou importe uma conta Antigravity."
+            ),
         }
 
     if not cfg.get("api_key"):
@@ -2236,6 +2261,79 @@ async def export_conversation(session_id: str, format: str = "txt", user=Depends
 # ═══════════════════════════════════════════════════════════════
 #  CODEX CHATGPT — Pool de Contas
 # ═══════════════════════════════════════════════════════════════
+
+from src.core.antigravity_accounts import (
+    finish_oauth as antigravity_finish_oauth,
+    import_auth as antigravity_import_auth,
+    list_accounts as antigravity_list_accounts,
+    remove_account as antigravity_remove_account,
+    start_oauth as antigravity_start_oauth,
+    update_account as antigravity_update_account,
+)
+from src.core.antigravity_client import (
+    provider_models_from_account as antigravity_provider_models,
+    sync_account as antigravity_sync_account,
+)
+
+
+@router.get("/antigravity/accounts")
+async def antigravity_accounts_list(user=Depends(get_current_user)):
+    return antigravity_list_accounts(user.id)
+
+
+@router.post("/antigravity/oauth/start")
+async def antigravity_oauth_start(user=Depends(get_current_user)):
+    return antigravity_start_oauth(user.id)
+
+
+@router.post("/antigravity/oauth/finish")
+async def antigravity_oauth_finish(body: dict, user=Depends(get_current_user)):
+    try:
+        account = await antigravity_finish_oauth(
+            user.id,
+            str(body.get("request_id") or ""),
+            str(body.get("callback_url") or ""),
+        )
+        return {"status": "ok", "account": account}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/antigravity/import-auth")
+async def antigravity_auth_import(body: dict, user=Depends(get_current_user)):
+    try:
+        accounts = await antigravity_import_auth(user.id, body)
+        return {"status": "ok", "accounts": accounts}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/antigravity/accounts/{account_id}/select")
+async def antigravity_account_select(account_id: str, user=Depends(get_current_user)):
+    account = antigravity_update_account(user.id, account_id, {"select": True})
+    if not account:
+        raise HTTPException(status_code=404, detail="Conta Antigravity nao encontrada")
+    return {"status": "ok", "account": account}
+
+
+@router.delete("/antigravity/accounts/{account_id}")
+async def antigravity_account_remove(account_id: str, user=Depends(get_current_user)):
+    if not antigravity_remove_account(user.id, account_id):
+        raise HTTPException(status_code=404, detail="Conta Antigravity nao encontrada")
+    return {"deleted": True}
+
+
+@router.post("/antigravity/accounts/{account_id}/sync")
+async def antigravity_account_sync(account_id: str, user=Depends(get_current_user)):
+    try:
+        account = await antigravity_sync_account(user.id, account_id)
+        models = antigravity_provider_models(account)
+        if models:
+            pm_set_dynamic_models("antigravity", models)
+        return {"status": "ok", "account": account, "models": models}
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 from src.core.account_pool import (
     list_accounts as pool_list_accounts,

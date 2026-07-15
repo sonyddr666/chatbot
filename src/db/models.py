@@ -95,6 +95,34 @@ class UserProviderConfig(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class AntigravityAccount(Base):
+    """Google Antigravity OAuth account owned by one chatbot user."""
+
+    __tablename__ = "antigravity_accounts"
+    __table_args__ = (
+        Index("uq_antigravity_user_email", "user_id", "email", unique=True),
+    )
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    email = Column(String(255), nullable=False, default="")
+    label = Column(String(255), nullable=False, default="")
+    access_token_encrypted = Column(Text, nullable=False, default="")
+    refresh_token_encrypted = Column(Text, nullable=False, default="")
+    client_id = Column(String(500), nullable=False, default="")
+    client_secret_encrypted = Column(Text, nullable=False, default="")
+    expires_at = Column(Integer, nullable=False, default=0)
+    project_id = Column(String(255), nullable=False, default="")
+    endpoint = Column(String(500), nullable=False, default="")
+    models_json = Column(Text, nullable=False, default="{}")
+    quota_json = Column(Text, nullable=False, default="[]")
+    account_type = Column(String(255), nullable=False, default="")
+    is_selected = Column(Boolean, nullable=False, default=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

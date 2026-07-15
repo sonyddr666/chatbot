@@ -31,6 +31,10 @@ def _is_codex_provider(provider_id: str) -> bool:
     return provider_id == "codex-chatgpt"
 
 
+def _is_antigravity_provider(provider_id: str) -> bool:
+    return provider_id == "antigravity"
+
+
 def _is_opencode_provider(config: dict) -> bool:
     provider_id = str(config.get("provider_id", "")).lower()
     base_url = str(config.get("base_url", "")).lower()
@@ -545,6 +549,22 @@ async def generate_stream(
         - ("error", str)     → erro (Codex)
     """
     pm_cfg = provider_config or get_active_config()
+
+    if _is_antigravity_provider(pm_cfg.get("provider_id", "")):
+        from src.core.antigravity_client import chat_stream as antigravity_chat_stream
+
+        user_id = int(pm_cfg.get("user_id") or 0)
+        if not user_id:
+            yield ("error", "Antigravity exige uma sessao de usuario autenticada.")
+            return
+        async for chunk in antigravity_chat_stream(
+            user_id,
+            messages,
+            model=str(pm_cfg.get("model_id") or "auto"),
+            reasoning_effort=str(reasoning_effort or "low"),
+        ):
+            yield chunk
+        return
     
     # ─── Codex ChatGPT ───
     if _is_codex_provider(pm_cfg.get("provider_id", "")):

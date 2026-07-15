@@ -11,6 +11,17 @@ from src.core.chat_attachments import inspect_workspace_attachment
 from src.core.classifier import classify_route
 from src.core.file_delivery import requests_file_delivery, resolve_file_delivery
 from src.core.memory import get_session
+from src.core.image_actions import (
+    detect_image_action,
+    execute_image_action,
+    has_antigravity_image_model,
+    has_antigravity_vision_model,
+    build_vision_fallback_context,
+    needs_vision_fallback,
+    plan_image_action,
+    references_previous_image,
+)
+from src.core.chat_attachments import build_model_user_content
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.skill_runtime import (
     requests_conversation_history,
@@ -203,6 +214,67 @@ async def process_chat_job(job_id: str) -> None:
             user_id,
             message,
         )
+
+        effective_attachments = attachments
+        if not attachments and references_previous_image(message):
+            recent_files = await _repo_call(
+                ChatAttachmentRepo.list_owned_for_delivery,
+                user_id,
+                session_id,
+            )
+            previous_image = next((item for item in recent_files if item.get("kind") == "image"), None)
+            if previous_image:
+                effective_attachments = [previous_image]
+                model_message = await _repo_call(
+                    build_model_user_content,
+                    user_id,
+                    message,
+                    effective_attachments,
+                )
+                await _add_event(job_id, "status", "Usando a imagem mais recente desta conversa...")
+
+        image_action = detect_image_action(message, effective_attachments)
+        if image_action and has_antigravity_image_model(user_id):
+            await _add_event(job_id, "status", "Preparando o pedido de imagem com o modelo selecionado...")
+            image_action = await plan_image_action(image_action, provider_config)
+            operation_label = "Editando imagem" if image_action["operation"] == "edit" else "Gerando imagem"
+            await _add_event(job_id, "status", f"{operation_label} com Antigravity...")
+            artifacts = await execute_image_action(user_id, image_action)
+            for artifact in artifacts:
+                delivered = await _repo_call(
+                    ChatAttachmentRepo.prepare_delivery,
+                    job_id,
+                    user_id,
+                    artifact=artifact,
+                )
+                await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
+            response = (
+                "Imagem editada com Antigravity."
+                if image_action["operation"] == "edit"
+                else "Imagem gerada com Antigravity."
+            )
+            await _add_event(job_id, "text_delta", response)
+            memory = _prepare_memory(session_id, message)
+            memory.add_user_message(message)
+            memory.add_ai_message(response)
+            await _repo_call(ChatJobRepo.finish, job_id, "completed")
+            return
+
+        image_for_analysis = next(
+            (item for item in effective_attachments if item.get("kind") == "image"),
+            None,
+        )
+        if (
+            image_for_analysis
+            and needs_vision_fallback(provider_config)
+            and has_antigravity_vision_model(user_id)
+        ):
+            await _add_event(job_id, "status", "Analisando imagem com modelo auxiliar de visao...")
+            model_message = await build_vision_fallback_context(
+                user_id,
+                message,
+                image_for_analysis,
+            )
 
         workspace_request = await model_requests_workspace(
             user_id,

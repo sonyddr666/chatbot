@@ -21,6 +21,7 @@ DEFAULT_PROVIDERS_DATA = {
     "provider_keys": {},  # chaves salvas via UI (built-in ou custom)
     "builtin_provider_overrides": {},  # provider_id -> { enabled }
     "builtin_model_overrides": {},  # provider_id -> model_id -> { enabled/name/context_length }
+    "builtin_dynamic_models": {},  # provider_id -> models discovered from provider APIs
 }
 
 # ─── Helpers ─────────────────────────────────────────────────────────
@@ -251,6 +252,24 @@ BUILTIN_PROVIDERS = {
             {"id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark (Codex)",  "usage": "possivel modelo especifico de Codex ou proxy", "status": "nao confirmado na lista publica atual", "context_length": 400000, "enabled": True},
         ],
     },
+
+    "antigravity": {
+        "name": "Antigravity",
+        "description": "Google Antigravity via OAuth, com chat multimodal e geracao de imagens",
+        "base_url": "https://cloudcode-pa.googleapis.com",
+        "endpoint": "/v1internal:streamGenerateContent",
+        "api_format": "antigravity",
+        "provider_type": "builtin",
+        "enabled": settings.antigravity_enabled,
+        "models": [
+            {
+                "id": "auto",
+                "name": "Automatico (sincronize a conta)",
+                "context_length": 1000000,
+                "enabled": True,
+            },
+        ],
+    },
 }
 
 
@@ -298,6 +317,11 @@ def _codex_has_accounts() -> bool:
         return len(list_accounts("codex-chatgpt")) > 0
     except Exception:
         return False
+
+
+def _antigravity_has_accounts() -> bool:
+    """Global provider data must never reveal another user's OAuth state."""
+    return False
 
 
 def _get_key_source(provider_id: str, current_key: str = "") -> str:
@@ -444,14 +468,38 @@ def _apply_builtin_model_overrides(provider_id: str, models: list[dict], raw: di
     """Aplica overrides salvos para modelos built-in sem editar BUILTIN_PROVIDERS hardcoded."""
     raw = raw or _load_raw()
     overrides = raw.get("builtin_model_overrides", {}).get(provider_id, {})
+    dynamic = raw.get("builtin_dynamic_models", {}).get(provider_id)
+    source_models = dynamic if isinstance(dynamic, list) and dynamic else models
     result = []
-    for model in models:
+    for model in source_models:
         merged = dict(model)
         override = overrides.get(model.get("id"), {})
         if isinstance(override, dict):
             merged.update({k: v for k, v in override.items() if k in {"name", "context_length", "enabled"}})
         result.append(merged)
     return result
+
+
+def set_builtin_dynamic_models(provider_id: str, models: list[dict]) -> list[dict]:
+    """Persist a provider-discovered catalog while retaining built-in semantics."""
+    if provider_id not in BUILTIN_PROVIDERS:
+        raise ValueError("Provider built-in desconhecido")
+    normalized = []
+    for model in models:
+        model_id = str(model.get("id") or "").strip()
+        if not model_id:
+            continue
+        normalized.append({
+            **{k: v for k, v in model.items() if k not in {"api_key", "access_token", "refresh_token"}},
+            "id": model_id,
+            "name": str(model.get("name") or model_id),
+            "context_length": int(model.get("context_length") or 1000000),
+            "enabled": bool(model.get("enabled", True)),
+        })
+    raw = _load_raw()
+    raw.setdefault("builtin_dynamic_models", {})[provider_id] = normalized
+    _save_raw(raw)
+    return normalized
 
 
 def list_providers(include_keys: bool = False) -> list[dict]:
@@ -483,8 +531,8 @@ def list_providers(include_keys: bool = False) -> list[dict]:
         }
         # built-in: API key para providers comuns; OAuth pool para Codex
         actual_key = get_provider_api_key(pid)
-        if pid == "codex-chatgpt":
-            has_accounts = _codex_has_accounts()
+        if pid in {"codex-chatgpt", "antigravity"}:
+            has_accounts = _codex_has_accounts() if pid == "codex-chatgpt" else _antigravity_has_accounts()
             entry["api_key"] = ""
             entry["has_key"] = has_accounts
             entry["key_source"] = "oauth_pool" if has_accounts else "none"
@@ -875,6 +923,9 @@ def get_active_config() -> dict:
             "api_format": pinfo.get("api_format", "chat_completions"),
             "model_id": model_info["id"] if model_info else "",
             "model_name": model_info["name"] if model_info else "",
+            "supports_images": model_info.get("supports_images") if model_info else None,
+            "supports_thinking": model_info.get("supports_thinking") if model_info else None,
+            "image_generation": bool(model_info.get("image_generation")) if model_info else False,
         }
 
     # Tenta custom
@@ -895,6 +946,9 @@ def get_active_config() -> dict:
                 "api_format": cp.get("api_format", "chat_completions"),
                 "model_id": model_info["id"] if model_info else "",
                 "model_name": model_info["name"] if model_info else "",
+                "supports_images": model_info.get("supports_images") if model_info else None,
+                "supports_thinking": model_info.get("supports_thinking") if model_info else None,
+                "image_generation": bool(model_info.get("image_generation")) if model_info else False,
             }
 
     # Fallback para settings existentes
@@ -947,7 +1001,12 @@ def update_model(provider_id: str, model_id: str, data: dict) -> Optional[dict]:
 
     # Built-in: não altera BUILTIN_PROVIDERS; salva override persistente.
     if provider_id in BUILTIN_PROVIDERS:
-        base_models = BUILTIN_PROVIDERS[provider_id].get("models", [])
+        dynamic_models = raw.get("builtin_dynamic_models", {}).get(provider_id)
+        base_models = (
+            dynamic_models
+            if isinstance(dynamic_models, list) and dynamic_models
+            else BUILTIN_PROVIDERS[provider_id].get("models", [])
+        )
         base = next((m for m in base_models if m["id"] == model_id), None)
         if not base:
             return None

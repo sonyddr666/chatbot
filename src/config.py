@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     # Codex SSE v2 keeps the current parser available as an instant rollback.
     codex_sse_enabled: bool = True
     codex_response_mode_default: Literal["normal", "thinking", "live"] = "normal"
+    # Antigravity uses an internal Google endpoint; this flag is an instant
+    # rollback if that non-public protocol changes.
+    antigravity_enabled: bool = True
 
     # ─── Redis ───────────────────────────────────────────────────
     redis_host: str = "localhost"

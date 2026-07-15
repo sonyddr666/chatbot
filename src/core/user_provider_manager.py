@@ -297,7 +297,11 @@ def get_active_config_for_user(user_id: int) -> dict:
             .first()
         )
         if row:
-            return _internal_config(row)
+            config = _internal_config(row)
+            config["user_id"] = user_id
+            return config
     finally:
         db.close()
-    return get_active_config()
+    config = get_active_config()
+    config["user_id"] = user_id
+    return config

@@ -19,6 +19,9 @@ interface ModelInfo {
   context_length: number
   enabled: boolean
   active?: boolean
+  supports_images?: boolean
+  supports_thinking?: boolean
+  recommended?: boolean
 }
 
 interface ProviderInfo {
@@ -1245,7 +1248,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                 <InfoCard label="Endpoint" value={selected.endpoint || 'Padrao do formato'} icon={<Globe size={16} />} />
                 <InfoCard
                   label="API Key"
-                  value={selected.id === 'codex-chatgpt' && selected.has_key ? 'OAuth conectado' : (selected.has_key ? `${(selected.api_key || '').substring(0, 12)}...` : 'Não configurada')}
+                  value={
+                    ['codex-chatgpt', 'antigravity'].includes(selected.id)
+                      ? (selected.has_key ? 'OAuth conectado' : 'OAuth não conectado')
+                      : (selected.has_key ? `${(selected.api_key || '').substring(0, 12)}...` : 'Não configurada')
+                  }
                   icon={<Eye size={16} />}
                   className="cursor-pointer hover:opacity-80"
                   onClick={() => {
@@ -1370,14 +1377,16 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   <h4 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
                     Models ({selected.models.length})
                   </h4>
-                  <button
-                    onClick={() => { setShowAddModel(true); setEditingModelId(null); setModelFormName(''); setModelFormId(''); setModelFormCtx('128000') }}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90"
-                    style={{ background: 'var(--accent)', color: '#fff' }}
-                  >
-                    <Plus size={12} />
-                    Add Model
-                  </button>
+                  {selected.id !== 'antigravity' && (
+                    <button
+                      onClick={() => { setShowAddModel(true); setEditingModelId(null); setModelFormName(''); setModelFormId(''); setModelFormCtx('128000') }}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90"
+                      style={{ background: 'var(--accent)', color: '#fff' }}
+                    >
+                      <Plus size={12} />
+                      Add Model
+                    </button>
+                  )}
                 </div>
 
                 <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
@@ -1391,6 +1400,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         key={model.id}
                         model={model}
                         isBuiltin={selected.provider_type === 'builtin'}
+                        readOnly={selected.id === 'antigravity'}
                         onToggle={() => handleToggleModel(model.id, model.enabled)}
                         onSelect={() => handleSelectModel(model.id, selected.id)}
                         onEdit={() => handleEditModel(model)}
@@ -1403,6 +1413,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
 
               {/* ─── Codex ChatGPT: Pool de Contas ─── */}
               {selected.id === 'codex-chatgpt' && <CodexAccountPanel providerId={selected.id} />}
+              {selected.id === 'antigravity' && <AntigravityAccountPanel onModelsUpdated={loadProviders} />}
 
               {/* Add Model Form */}
               {showAddModel && (
@@ -1631,10 +1642,11 @@ function ProviderItem({
 }
 
 function ModelRow({
-  model, isBuiltin, onToggle, onSelect, onEdit, onDelete,
+  model, isBuiltin, readOnly = false, onToggle, onSelect, onEdit, onDelete,
 }: {
   model: ModelInfo
   isBuiltin: boolean
+  readOnly?: boolean
   onToggle: () => void
   onSelect: () => void
   onEdit: () => void
@@ -1682,6 +1694,21 @@ function ModelRow({
                 {status.label}
               </span>
             )}
+            {model.recommended && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
+                Recomendado
+              </span>
+            )}
+            {model.supports_images && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#f3e8ff', color: '#7e22ce' }}>
+                Visão
+              </span>
+            )}
+            {model.supports_thinking && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#ffedd5', color: '#c2410c' }}>
+                Thinking
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
             <span className="font-mono">{model.id}</span>
@@ -1716,23 +1743,27 @@ function ModelRow({
             {isActive ? '✓ Ativo' : 'Usar'}
           </button>
         )}
-        <button
-          onClick={onToggle}
-          className={`p-1.5 rounded-lg transition-colors ${model.enabled ? 'hover:bg-red-100 dark:hover:bg-red-900/30' : 'hover:bg-green-100 dark:hover:bg-green-900/30'}`}
-          title={model.enabled ? 'Disable' : 'Enable'}
-        >
-          {model.enabled
-            ? <Power size={14} style={{ color: '#16a34a' }} />
-            : <PowerOff size={14} style={{ color: 'var(--text-tertiary)' }} />
-          }
-        </button>
-        <button
-          onClick={onEdit}
-          className="p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-          title="Edit model"
-        >
-          <Pencil size={14} style={{ color: 'var(--text-secondary)' }} />
-        </button>
+        {!readOnly && (
+          <>
+            <button
+              onClick={onToggle}
+              className={`p-1.5 rounded-lg transition-colors ${model.enabled ? 'hover:bg-red-100 dark:hover:bg-red-900/30' : 'hover:bg-green-100 dark:hover:bg-green-900/30'}`}
+              title={model.enabled ? 'Disable' : 'Enable'}
+            >
+              {model.enabled
+                ? <Power size={14} style={{ color: '#16a34a' }} />
+                : <PowerOff size={14} style={{ color: 'var(--text-tertiary)' }} />
+              }
+            </button>
+            <button
+              onClick={onEdit}
+              className="p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              title="Edit model"
+            >
+              <Pencil size={14} style={{ color: 'var(--text-secondary)' }} />
+            </button>
+          </>
+        )}
         {!isBuiltin && (
           <button
             onClick={onDelete}
@@ -1770,6 +1801,202 @@ function InfoCard({ label, value, icon, className, onClick }: {
 }
 
 // ─── Type for Codex Account ─────────────────────────────────────
+
+interface AntigravityAccountInfo {
+  id: string
+  email: string
+  label: string
+  account_type?: string
+  selected: boolean
+  enabled: boolean
+  model_count: number
+  quotas?: Array<{ remaining_fraction?: number; reset_time?: string; models?: string[] }>
+}
+
+function AntigravityAccountPanel({ onModelsUpdated }: { onModelsUpdated: () => void }) {
+  const [accounts, setAccounts] = useState<AntigravityAccountInfo[]>([])
+  const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState<string | null>(null)
+  const [oauth, setOauth] = useState<{ requestId: string; authUrl: string } | null>(null)
+  const [callbackUrl, setCallbackUrl] = useState('')
+  const [finishing, setFinishing] = useState(false)
+  const [importing, setImporting] = useState(false)
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true)
+    try {
+      setAccounts(await apiReq<AntigravityAccountInfo[]>(`${API}/antigravity/accounts`))
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void loadAccounts() }, [loadAccounts])
+
+  const startLogin = async () => {
+    try {
+      const result = await apiReq<{ request_id: string; auth_url: string }>(`${API}/antigravity/oauth/start`, { method: 'POST' })
+      setOauth({ requestId: result.request_id, authUrl: result.auth_url })
+      setCallbackUrl('')
+      window.open(result.auth_url, '_blank', 'noopener,noreferrer')
+    } catch (err: any) {
+      toast.error(err.message)
+    }
+  }
+
+  const finishLogin = async () => {
+    if (!oauth || !callbackUrl.trim()) return
+    setFinishing(true)
+    try {
+      await apiReq(`${API}/antigravity/oauth/finish`, {
+        method: 'POST',
+        body: JSON.stringify({ request_id: oauth.requestId, callback_url: callbackUrl.trim() }),
+      })
+      setOauth(null)
+      setCallbackUrl('')
+      await loadAccounts()
+      toast.success('Conta Antigravity conectada')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setFinishing(false)
+    }
+  }
+
+  const importAuth = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    input.onchange = async event => {
+      const file = (event.target as HTMLInputElement).files?.[0]
+      if (!file) return
+      setImporting(true)
+      try {
+        await apiReq(`${API}/antigravity/import-auth`, {
+          method: 'POST',
+          body: JSON.stringify(JSON.parse(await file.text())),
+        })
+        await loadAccounts()
+        toast.success('auth.json do Antigravity importado')
+      } catch (err: any) {
+        toast.error(err.message || 'JSON invalido')
+      } finally {
+        setImporting(false)
+      }
+    }
+    input.click()
+  }
+
+  const sync = async (accountId: string) => {
+    setSyncing(accountId)
+    try {
+      const result = await apiReq<{ models: ModelInfo[] }>(`${API}/antigravity/accounts/${accountId}/sync`, { method: 'POST' })
+      await loadAccounts()
+      onModelsUpdated()
+      toast.success(`${result.models?.length || 0} modelos sincronizados`)
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setSyncing(null)
+    }
+  }
+
+  const select = async (accountId: string) => {
+    try {
+      await apiReq(`${API}/antigravity/accounts/${accountId}/select`, { method: 'POST' })
+      await loadAccounts()
+      toast.success('Conta selecionada')
+    } catch (err: any) {
+      toast.error(err.message)
+    }
+  }
+
+  const remove = async (accountId: string) => {
+    if (!confirm('Remover esta conta Antigravity?')) return
+    try {
+      await apiReq(`${API}/antigravity/accounts/${accountId}`, { method: 'DELETE' })
+      await loadAccounts()
+      toast.success('Conta removida')
+    } catch (err: any) {
+      toast.error(err.message)
+    }
+  }
+
+  return (
+    <div className="mt-6 overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+        <div className="flex items-center gap-2">
+          <User size={16} style={{ color: 'var(--accent)' }} />
+          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Antigravity Accounts</h4>
+          <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: accounts.length ? '#dcfce7' : '#fef2f2', color: accounts.length ? '#16a34a' : '#dc2626' }}>
+            {accounts.length} conta{accounts.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={importAuth} disabled={importing} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+            {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Import auth.json
+          </button>
+          <button onClick={startLogin} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium text-white" style={{ background: '#16a34a' }}>
+            <Plus size={12} /> Conectar Google
+          </button>
+        </div>
+      </div>
+
+      {loading && <div className="p-8 text-center"><Loader2 size={20} className="inline animate-spin" /></div>}
+      {!loading && !accounts.length && (
+        <div className="px-4 py-8 text-center" style={{ color: 'var(--text-tertiary)' }}>
+          <User size={32} className="mx-auto mb-2" />
+          <p className="text-sm">Conecte sua conta Google ou importe o auth.json do antigravity_terminal.</p>
+        </div>
+      )}
+      {!loading && accounts.map(account => {
+        const quota = account.quotas?.find(item => typeof item.remaining_fraction === 'number')
+        const quotaPct = Math.round((quota?.remaining_fraction || 0) * 100)
+        return (
+          <div key={account.id} className="border-b px-4 py-3 last:border-b-0" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full" style={{ background: account.selected ? '#16a34a' : 'var(--text-tertiary)' }} />
+                  <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{account.label || account.email}</span>
+                  {account.selected && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-bold text-green-700">ATIVA</span>}
+                </div>
+                <p className="mt-1 truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>{account.email}</p>
+                <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{account.account_type || 'Plano nao sincronizado'} · {account.model_count} modelos</p>
+                {quota && <div className="mt-2 w-72 max-w-full"><QuotaBar label="Cota" value={quotaPct} maxValue={100} color="#3b82f6" /></div>}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {!account.selected && <button onClick={() => select(account.id)} className="rounded-lg px-2 py-1 text-xs font-semibold" style={{ background: 'var(--accent)', color: '#fff' }}>Usar</button>}
+                <button onClick={() => sync(account.id)} disabled={syncing === account.id} className="grid h-8 w-8 place-items-center rounded-lg hover:bg-black/10 dark:hover:bg-white/10" title="Sincronizar modelos e cota">
+                  <RefreshCw size={14} className={syncing === account.id ? 'animate-spin' : ''} />
+                </button>
+                <button onClick={() => remove(account.id)} className="grid h-8 w-8 place-items-center rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30" title="Remover conta"><Trash2 size={14} className="text-red-600" /></button>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+
+      {oauth && (
+        <div className="border-t p-4" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+          <p className="mb-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Concluir login Google</p>
+          <p className="mb-3 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            Depois de autorizar, localhost pode nao abrir. Copie a URL completa da barra do navegador e cole abaixo.
+          </p>
+          <a href={oauth.authUrl} target="_blank" rel="noopener noreferrer" className="mb-3 inline-block text-xs underline" style={{ color: 'var(--accent)' }}>Abrir login novamente</a>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input value={callbackUrl} onChange={event => setCallbackUrl(event.target.value)} placeholder="http://localhost:51121/oauth-callback?code=..." className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+            <button onClick={finishLogin} disabled={finishing || !callbackUrl.trim()} className="rounded-lg px-4 py-2 text-xs font-semibold text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
+              {finishing ? 'Conectando...' : 'Concluir'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 interface CodexAccountInfo {
   id: string
