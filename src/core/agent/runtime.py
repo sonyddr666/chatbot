@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from src.core.agent.planner import decide_tool_calls
+from src.core.agent.policy import authorize_tool
 from src.core.agent.schemas import ToolResult
 from src.core.agent.tool_registry import available_tools
 
@@ -43,6 +44,7 @@ class AgentContext:
     request: str
     attachments: list[dict[str, Any]]
     provider_config: dict[str, Any]
+    job_id: str = ""
     current_call_id: str = ""
     event_sink: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
@@ -138,6 +140,7 @@ async def run_agent_tools(context: AgentContext) -> AgentRunOutcome:
                     "name": call.name,
                 })
             try:
+                authorize_tool(context.user_id, registered_tool.definition)
                 result = await registered_tool.handler(context, call.arguments)
             except Exception as exc:
                 result = ToolResult(

@@ -25,6 +25,7 @@ from src.core.response_modes import (
     normalize_reasoning_effort,
     normalize_response_mode,
 )
+from src.core.model_capabilities import adapt_reasoning_effort
 
 
 def _is_codex_provider(provider_id: str) -> bool:
@@ -154,13 +155,6 @@ def _provider_reasoning_style(provider_config: dict) -> str:
     return "adaptive"
 
 
-def _compatible_reasoning_effort(provider_config: dict, effort: str) -> str:
-    hostname = urlparse(str(provider_config.get("base_url", ""))).hostname or ""
-    if "morphllm.com" in hostname and effort in {"max", "xhigh"}:
-        return "high"
-    return effort
-
-
 def _openai_request_variants(
     messages: list[BaseMessage],
     provider_config: dict,
@@ -168,8 +162,8 @@ def _openai_request_variants(
     reasoning_effort: str | None,
 ) -> list[dict]:
     mode = normalize_response_mode(response_mode, default=settings.codex_response_mode_default)
-    effort = normalize_reasoning_effort(reasoning_effort, mode=mode)
-    effort = _compatible_reasoning_effort(provider_config, effort)
+    requested_effort = normalize_reasoning_effort(reasoning_effort, mode=mode)
+    effort = adapt_reasoning_effort(provider_config, requested_effort)
     base_payload = {
         "model": str(provider_config.get("model_id", "")).strip(),
         "messages": _messages_for_openai(messages),
@@ -178,16 +172,16 @@ def _openai_request_variants(
     }
     style = _provider_reasoning_style(provider_config)
     extras: list[dict]
-    if style == "reasoning_object":
+    if not effort:
+        extras = [{}]
+    elif style == "reasoning_object":
         extras = [{"reasoning": {"effort": effort}}, {}]
     elif style == "reasoning_effort":
-        extras = [{"reasoning_effort": effort}, {}]
-    elif style == "adaptive":
-        extras = [
-            {"reasoning": {"effort": effort}},
-            {"reasoning_effort": effort},
-            {},
-        ]
+        extra = {"reasoning_effort": effort}
+        hostname = (urlparse(str(provider_config.get("base_url", ""))).hostname or "").lower()
+        if hostname == "api.groq.com" and effort != "none":
+            extra["reasoning_format"] = "parsed"
+        extras = [extra, {}]
     else:
         extras = [{}]
 
@@ -218,6 +212,9 @@ def _can_retry_without_reasoning(status_code: int, detail: str) -> bool:
             "additional propert",
             "invalid parameter",
             "invalid field",
+            "invalid value",
+            "expected one of",
+            "must be one of",
         )
     )
 
@@ -290,6 +287,13 @@ async def generate_openai_compatible_stream(
     api_key = str(provider_config.get("api_key", "")).strip()
     if not base_url or not model:
         raise _provider_error(provider_config, "URL ou modelo ausente")
+    lowered_url = base_url.lower()
+    if any(marker in lowered_url for marker in ("coloque_seu_account_id", "{account_id}", "<account_id>")):
+        raise _provider_error(
+            provider_config,
+            "Base URL ainda contem o placeholder do Account ID. Edite o provider e substitua "
+            "COLOQUE_SEU_ACCOUNT_ID pelo Account ID real da sua conta Cloudflare.",
+        )
 
     endpoint = _chat_completions_url(provider_config)
     headers = {
@@ -325,6 +329,7 @@ async def generate_openai_compatible_stream(
                     )
 
                 received_text = False
+                received_content = False
                 pending_type = ""
                 pending_text = ""
                 async for raw in _iter_openai_payloads(response):
@@ -341,6 +346,8 @@ async def generate_openai_compatible_stream(
                         raise _provider_error(provider_config, f"erro no stream: {event['error']}")
                     for typ, text in _openai_event_parts(event):
                         received_text = True
+                        if typ == "content":
+                            received_content = True
                         if pending_type and pending_type != typ and pending_text:
                             for piece in _smooth_stream_parts(pending_text):
                                 yield (pending_type, piece)
@@ -360,6 +367,11 @@ async def generate_openai_compatible_stream(
                         yield (pending_type, piece)
                 if not received_text:
                     raise _provider_error(provider_config, "stream encerrado sem conteúdo")
+                if not received_content:
+                    raise _provider_error(
+                        provider_config,
+                        "o provider enviou raciocinio, mas encerrou o stream sem resposta final",
+                    )
                 return
 
 

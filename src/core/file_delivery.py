@@ -176,9 +176,18 @@ def _candidate_score(message: str, candidate: FileDeliverySelection) -> int:
     return score
 
 
-def resolve_file_delivery(user_id: int, session_id: str, message: str) -> FileDeliverySelection | None:
+def resolve_file_delivery(
+    user_id: int,
+    session_id: str,
+    message: str,
+    *,
+    require_intent: bool = True,
+    require_skill: bool = True,
+) -> FileDeliverySelection | None:
     """Choose one safe file, preferring an explicitly named path and current-chat uploads."""
-    if not requests_file_delivery(message) or not _skill_enabled(user_id):
+    if require_intent and not requests_file_delivery(message):
+        return None
+    if require_skill and not _skill_enabled(user_id):
         return None
 
     uploads = _attachment_candidates(user_id, session_id)

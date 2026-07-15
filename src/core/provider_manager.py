@@ -545,7 +545,8 @@ def list_providers(include_keys: bool = False) -> list[dict]:
 
     # Custom
     for cp in custom_providers:
-        models = cp.get("models", [])
+        from src.core.model_catalog import enrich_builtin_models
+        models = enrich_builtin_models(cp["id"], cp.get("models", []))
         marked_models = _mark_active_model(models, active_model_id, cp["id"] == active_id)
         effective_model_id = next((m["id"] for m in marked_models if m.get("active")), None)
         cp_key = get_provider_api_key(cp["id"])
@@ -563,6 +564,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "active_model_id": effective_model_id if cp["id"] == active_id else None,
             "has_key": bool(cp_key),
             "key_source": _get_key_source(cp["id"], cp_key),
+            "reasoning_style": cp.get("reasoning_style", ""),
         }
         result.append(entry)
 
@@ -915,7 +917,7 @@ def get_active_config() -> dict:
             model_info = next((m for m in models if m["id"] == active_model_id and m.get("enabled", True)), None)
         if not model_info and models:
             model_info = next((m for m in models if m.get("enabled", True)), None)
-        return {
+        config = {
             "provider_id": active_id,
             "name": pinfo["name"],
             "base_url": pinfo.get("base_url", ""),
@@ -927,18 +929,23 @@ def get_active_config() -> dict:
             "supports_images": model_info.get("supports_images") if model_info else None,
             "supports_thinking": model_info.get("supports_thinking") if model_info else None,
             "image_generation": bool(model_info.get("image_generation")) if model_info else False,
+            "supports_tools": model_info.get("supports_tools") if model_info else None,
+            "reasoning_style": pinfo.get("reasoning_style", ""),
         }
+        from src.core.model_capabilities import with_reasoning_capabilities
+        return with_reasoning_capabilities(config)
 
     # Tenta custom
     for cp in raw.get("custom_providers", []):
         if cp["id"] == active_id:
-            models = cp.get("models", [])
+            from src.core.model_catalog import enrich_builtin_models
+            models = enrich_builtin_models(active_id, cp.get("models", []))
             model_info = None
             if active_model_id:
                 model_info = next((m for m in models if m["id"] == active_model_id and m.get("enabled", True)), None)
             if not model_info and models:
                 model_info = next((m for m in models if m.get("enabled", True)), None)
-            return {
+            config = {
                 "provider_id": active_id,
                 "name": cp.get("name", active_id),
                 "base_url": cp.get("base_url", ""),
@@ -950,7 +957,12 @@ def get_active_config() -> dict:
                 "supports_images": model_info.get("supports_images") if model_info else None,
                 "supports_thinking": model_info.get("supports_thinking") if model_info else None,
                 "image_generation": bool(model_info.get("image_generation")) if model_info else False,
+                "supports_tools": model_info.get("supports_tools") if model_info else None,
+                "reasoning_style": cp.get("reasoning_style", ""),
+                "reasoning_options": model_info.get("reasoning_options", []) if model_info else [],
             }
+            from src.core.model_capabilities import with_reasoning_capabilities
+            return with_reasoning_capabilities(config)
 
     # Fallback para settings existentes
     return {

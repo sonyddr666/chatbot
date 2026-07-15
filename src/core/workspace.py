@@ -139,6 +139,52 @@ def search_files(user_id: int, query: str, limit: int = 25) -> list[WorkspaceNod
     return [node for _, _, node in matches[:max(1, min(limit, 100))]]
 
 
+def grep_workspace(
+    user_id: int,
+    query: str,
+    path: str = "",
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    """Search literal text only inside bounded, user-owned Workspace files."""
+    needle = (query or "").strip()
+    if not needle:
+        raise ValueError("Texto de busca nao pode ser vazio")
+    if len(needle) > 500:
+        raise ValueError("Texto de busca muito grande")
+    root = _workspace_path(user_id, path).resolve()
+    workspace_root = _workspace_path(user_id).resolve()
+    if not root.exists():
+        raise FileNotFoundError(path)
+    if root != workspace_root and workspace_root not in root.parents:
+        raise ValueError("Caminho fora do Workspace")
+    candidates = [root] if root.is_file() else root.rglob("*")
+    folded_needle = _fold(needle)
+    results: list[dict] = []
+    visited = 0
+    for candidate in candidates:
+        visited += 1
+        if visited > MAX_SEARCH_VISITS or len(results) >= max(1, min(limit, 200)):
+            break
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        relative = candidate.resolve().relative_to(workspace_root).as_posix()
+        if any(part in IGNORED_SEARCH_PARTS or part.startswith(".") for part in Path(relative).parts):
+            continue
+        try:
+            if candidate.stat().st_size > MAX_TEXT_FILE_BYTES:
+                continue
+            lines = candidate.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for number, line in enumerate(lines, 1):
+            if folded_needle in _fold(line):
+                results.append({"path": relative, "line": number, "text": line.strip()[:500]})
+                if len(results) >= max(1, min(limit, 200)):
+                    break
+    return results
+
+
 def read_text_file(user_id: int, path: str) -> str:
     _require_relative_path(path, "Caminho do arquivo nao pode ser vazio")
     file_path = _workspace_path(user_id, path)

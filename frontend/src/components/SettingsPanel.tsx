@@ -363,11 +363,12 @@ export function SettingsPanel({ open, onClose }: Props) {
                   className="w-full rounded-lg border px-3 py-2 text-sm font-semibold outline-none"
                   style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                 >
-                  <option value="low">Leve</option>
-                  <option value="medium">Medio</option>
-                  <option value="high">Alto</option>
-                  <option value="xhigh">Extra alto</option>
-                  <option value="max">Maximo (usa o teto xhigh do Codex)</option>
+                  {(config?.reasoning_efforts?.length ? config.reasoning_efforts : ['auto' as ReasoningEffort]).map(value => (
+                    <option key={value} value={value}>{({
+                      auto: 'Automatico', none: 'Sem raciocinio', default: 'Padrao', low: 'Leve',
+                      medium: 'Medio', high: 'Alto', xhigh: 'Extra alto', max: 'Maximo',
+                    } as Record<ReasoningEffort, string>)[value]}</option>
+                  ))}
                 </select>
               </div>
 

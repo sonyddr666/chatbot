@@ -155,7 +155,10 @@ const RESPONSE_MODE_OPTIONS: HeaderSelectOption<ResponseMode>[] = [
   { value: 'live', label: 'Live' },
 ]
 
-const REASONING_EFFORT_OPTIONS: HeaderSelectOption<ReasoningEffort>[] = [
+const ALL_REASONING_EFFORT_OPTIONS: HeaderSelectOption<ReasoningEffort>[] = [
+  { value: 'auto', label: 'Automatico' },
+  { value: 'none', label: 'Sem raciocinio' },
+  { value: 'default', label: 'Padrao' },
   { value: 'low', label: 'Leve' },
   { value: 'medium', label: 'Medio' },
   { value: 'high', label: 'Alto' },
@@ -178,6 +181,12 @@ export default function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [documentsOpen, setDocumentsOpen] = useState(false)
   const [adminUsersOpen, setAdminUsersOpen] = useState(false)
+  const allowedReasoningEfforts = config?.reasoning_efforts?.length
+    ? config.reasoning_efforts
+    : ['auto' as ReasoningEffort]
+  const reasoningEffortOptions = ALL_REASONING_EFFORT_OPTIONS.filter(option => (
+    allowedReasoningEfforts.includes(option.value)
+  ))
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
@@ -534,7 +543,7 @@ export default function App() {
             />
             <HeaderSelect
               value={reasoningEffort}
-              options={REASONING_EFFORT_OPTIONS}
+              options={reasoningEffortOptions}
               onChange={setReasoningEffort}
               icon={<Brain size={14} aria-hidden="true" />}
               label="Esforco de raciocinio do modelo"

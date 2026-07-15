@@ -107,7 +107,9 @@ function loadResponseMode(): ResponseMode {
 
 function loadReasoningEffort(): ReasoningEffort {
   const saved = localStorage.getItem('chatbot_reasoning_effort')
-  return saved === 'medium' || saved === 'high' || saved === 'xhigh' || saved === 'max' ? saved : 'low'
+  return ['auto', 'none', 'default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(saved || '')
+    ? saved as ReasoningEffort
+    : 'auto'
 }
 
 // ─── Tipos locais ───
@@ -270,15 +272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setWsReconnecting: (v) => set({ wsReconnecting: v }),
   setResponseMode: (mode) => {
     localStorage.setItem('chatbot_response_mode', mode)
-    if (mode === 'thinking') {
-      localStorage.setItem('chatbot_reasoning_effort', 'high')
-      set({ responseMode: mode, reasoningEffort: 'high' })
-    } else if (mode === 'live') {
-      localStorage.setItem('chatbot_reasoning_effort', 'low')
-      set({ responseMode: mode, reasoningEffort: 'low' })
-    } else {
-      set({ responseMode: mode })
-    }
+    set({ responseMode: mode })
   },
   setReasoningEffort: (effort) => {
     localStorage.setItem('chatbot_reasoning_effort', effort)
@@ -592,7 +586,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadConfig: async () => {
     try {
       const config = await api.getConfig()
-      set({ config, selectedProfile: config.profile })
+      const allowed = config.reasoning_efforts?.length ? config.reasoning_efforts : ['auto' as ReasoningEffort]
+      const current = get().reasoningEffort
+      const reasoningEffort = allowed.includes(current)
+        ? current
+        : allowed.includes('default') ? 'default' : allowed.includes('medium') ? 'medium' : allowed[0]
+      localStorage.setItem('chatbot_reasoning_effort', reasoningEffort)
+      set({ config, selectedProfile: config.profile, reasoningEffort })
     } catch { /* silêncio */ }
   },
 

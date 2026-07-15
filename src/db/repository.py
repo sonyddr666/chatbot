@@ -27,6 +27,7 @@ from src.db.models import (
     ChatAttachment,
     ChatJob,
     ChatJobEvent,
+    ScheduledAgentTask,
 )
 
 
@@ -821,6 +822,9 @@ class ChatAttachmentRepo:
             "size": attachment.file_size,
             "checksum": attachment.checksum,
             "is_truncated": bool(attachment.is_truncated),
+            "vision_description": attachment.vision_description or "",
+            "vision_model": attachment.vision_model or "",
+            "vision_updated_at": utc_isoformat(attachment.vision_updated_at) if attachment.vision_updated_at else None,
             "status": attachment.status,
             "created_at": utc_isoformat(attachment.created_at),
         }
@@ -865,6 +869,34 @@ class ChatAttachmentRepo:
                 ChatAttachment.user_id == user_id,
             ).first()
             return ChatAttachmentRepo._public(row) if row else None
+        finally:
+            db.close()
+
+    @staticmethod
+    def save_vision_description(
+        attachment_id: str,
+        user_id: int,
+        description: str,
+        vision_model: str,
+    ) -> dict | None:
+        db = get_session_db()
+        try:
+            row = db.query(ChatAttachment).filter(
+                ChatAttachment.id == attachment_id,
+                ChatAttachment.user_id == user_id,
+                ChatAttachment.kind == "image",
+            ).first()
+            if not row:
+                return None
+            row.vision_description = str(description or "").strip()
+            row.vision_model = str(vision_model or "").strip()
+            row.vision_updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(row)
+            return ChatAttachmentRepo._public(row)
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -1239,6 +1271,21 @@ class ChatJobRepo:
             db.close()
 
     @staticmethod
+    def list_for_user(user_id: int, limit: int = 25) -> list[dict]:
+        db = get_session_db()
+        try:
+            jobs = (
+                db.query(ChatJob)
+                .filter(ChatJob.user_id == user_id)
+                .order_by(ChatJob.created_at.desc(), ChatJob.id.desc())
+                .limit(max(1, min(int(limit), 100)))
+                .all()
+            )
+            return [ChatJobRepo._snapshot(db, job) for job in jobs]
+        finally:
+            db.close()
+
+    @staticmethod
     def set_running(job_id: str) -> None:
         db = get_session_db()
         try:
@@ -1369,6 +1416,147 @@ class ChatJobRepo:
         db = get_session_db()
         try:
             return [job_id for (job_id,) in db.query(ChatJob.id).filter(ChatJob.status == "queued").all()]
+        finally:
+            db.close()
+
+
+class ScheduledTaskRepo:
+    @staticmethod
+    def _public(row: ScheduledAgentTask) -> dict:
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "session_id": row.session_id,
+            "prompt": row.prompt,
+            "run_at": utc_isoformat(row.run_at),
+            "status": row.status,
+            "job_id": row.job_id or "",
+            "error": row.error or "",
+            "created_at": utc_isoformat(row.created_at),
+            "completed_at": utc_isoformat(row.completed_at) if row.completed_at else None,
+        }
+
+    @staticmethod
+    def create(user_id: int, session_id: str, prompt: str, run_at: datetime) -> dict:
+        normalized_prompt = (prompt or "").strip()
+        if not normalized_prompt:
+            raise ValueError("Prompt agendado nao pode ser vazio")
+        if len(normalized_prompt) > 8000:
+            raise ValueError("Prompt agendado excede 8000 caracteres")
+        utc_run_at = run_at.astimezone(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if utc_run_at <= now:
+            raise ValueError("O horario agendado precisa estar no futuro")
+        task_id = f"schedule_{uuid4().hex}"
+        db = get_session_db()
+        try:
+            row = ScheduledAgentTask(
+                id=task_id,
+                user_id=user_id,
+                session_id=(session_id or "").strip(),
+                prompt=normalized_prompt,
+                run_at=utc_run_at,
+                status="scheduled",
+            )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return ScheduledTaskRepo._public(row)
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_for_user(user_id: int, limit: int = 50) -> list[dict]:
+        db = get_session_db()
+        try:
+            rows = (
+                db.query(ScheduledAgentTask)
+                .filter(ScheduledAgentTask.user_id == user_id)
+                .order_by(ScheduledAgentTask.run_at.desc(), ScheduledAgentTask.id.desc())
+                .limit(max(1, min(int(limit), 100)))
+                .all()
+            )
+            return [ScheduledTaskRepo._public(row) for row in rows]
+        finally:
+            db.close()
+
+    @staticmethod
+    def claim_due(limit: int = 20) -> list[dict]:
+        db = get_session_db()
+        try:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            ids = [
+                task_id
+                for (task_id,) in (
+                    db.query(ScheduledAgentTask.id)
+                    .filter(
+                        ScheduledAgentTask.status == "scheduled",
+                        ScheduledAgentTask.run_at <= now,
+                    )
+                    .order_by(ScheduledAgentTask.run_at.asc())
+                    .limit(max(1, min(int(limit), 100)))
+                    .all()
+                )
+            ]
+            claimed: list[dict] = []
+            for task_id in ids:
+                updated = db.query(ScheduledAgentTask).filter(
+                    ScheduledAgentTask.id == task_id,
+                    ScheduledAgentTask.status == "scheduled",
+                ).update({ScheduledAgentTask.status: "running"}, synchronize_session=False)
+                if updated:
+                    row = db.query(ScheduledAgentTask).filter(ScheduledAgentTask.id == task_id).first()
+                    if row:
+                        claimed.append(ScheduledTaskRepo._public(row))
+            db.commit()
+            return claimed
+        finally:
+            db.close()
+
+    @staticmethod
+    def finish(task_id: str, status: str, *, job_id: str = "", error: str = "") -> bool:
+        if status not in {"completed", "failed", "cancelled"}:
+            raise ValueError("Status final invalido")
+        db = get_session_db()
+        try:
+            row = db.query(ScheduledAgentTask).filter(ScheduledAgentTask.id == task_id).first()
+            if not row:
+                return False
+            row.status = status
+            row.job_id = job_id
+            row.error = error[:4000]
+            row.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
+            return True
+        finally:
+            db.close()
+
+    @staticmethod
+    def cancel(task_id: str, user_id: int) -> bool:
+        db = get_session_db()
+        try:
+            updated = db.query(ScheduledAgentTask).filter(
+                ScheduledAgentTask.id == task_id,
+                ScheduledAgentTask.user_id == user_id,
+                ScheduledAgentTask.status == "scheduled",
+            ).update({
+                ScheduledAgentTask.status: "cancelled",
+                ScheduledAgentTask.completed_at: datetime.now(timezone.utc).replace(tzinfo=None),
+            }, synchronize_session=False)
+            db.commit()
+            return updated == 1
+        finally:
+            db.close()
+
+    @staticmethod
+    def recover_running() -> int:
+        db = get_session_db()
+        try:
+            updated = db.query(ScheduledAgentTask).filter(
+                ScheduledAgentTask.status == "running",
+            ).update({ScheduledAgentTask.status: "scheduled"}, synchronize_session=False)
+            db.commit()
+            return int(updated)
         finally:
             db.close()
 

@@ -261,6 +261,7 @@ async def process_chat_job(job_id: str) -> None:
                 request=message,
                 attachments=agent_attachments,
                 provider_config=provider_config,
+                job_id=job_id,
                 event_sink=agent_event_sink,
             ))
         except Exception as exc:
@@ -291,6 +292,30 @@ async def process_chat_job(job_id: str) -> None:
                 if isinstance(workspace_plan, dict):
                     await _add_event(job_id, "workspace_plan", json.dumps(workspace_plan, ensure_ascii=False))
                 delivered_attachments = []
+                file_delivery = result.data.get("file_delivery")
+                if isinstance(file_delivery, dict):
+                    attachment_id = str(file_delivery.get("attachment_id") or "")
+                    if attachment_id:
+                        delivered = await _repo_call(
+                            ChatAttachmentRepo.prepare_delivery,
+                            job_id,
+                            user_id,
+                            attachment_id=attachment_id,
+                        )
+                    else:
+                        artifact = await asyncio.to_thread(
+                            inspect_workspace_attachment,
+                            user_id,
+                            str(file_delivery.get("relative_path") or ""),
+                        )
+                        delivered = await _repo_call(
+                            ChatAttachmentRepo.prepare_delivery,
+                            job_id,
+                            user_id,
+                            artifact=artifact,
+                        )
+                    delivered_attachments.append(delivered)
+                    await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
                 for artifact in result.attachments:
                     delivered = await _repo_call(
                         ChatAttachmentRepo.prepare_delivery,
@@ -330,22 +355,25 @@ async def process_chat_job(job_id: str) -> None:
             await _repo_call(ChatJobRepo.finish, job_id, "completed")
             return
 
-        image_for_analysis = next(
-            (item for item in effective_attachments if item.get("kind") == "image"),
-            None,
-        )
+        images_for_analysis = [
+            item for item in effective_attachments if item.get("kind") == "image"
+        ]
         if (
             not agent_outcome.executed
             and
-            image_for_analysis
+            images_for_analysis
             and needs_vision_fallback(provider_config)
-            and has_antigravity_vision_model(user_id)
         ):
+            if not has_antigravity_vision_model(user_id):
+                raise RuntimeError(
+                    "O modelo selecionado nao aceita imagens e nao ha um modelo auxiliar de visao configurado. "
+                    "Conecte o Antigravity ou escolha um modelo com a etiqueta Visao."
+                )
             await _add_event(job_id, "status", "Analisando imagem com modelo auxiliar de visao...")
             model_message = await build_vision_fallback_context(
                 user_id,
                 message,
-                image_for_analysis,
+                images_for_analysis,
             )
 
         workspace_request = False

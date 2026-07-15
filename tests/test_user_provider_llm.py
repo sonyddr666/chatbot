@@ -201,7 +201,7 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[0]["url"], "https://openrouter.ai/api/v1/chat/completions")
         self.assertEqual(requests[0]["json"]["reasoning"], {"effort": "high"})
 
-    async def test_unknown_provider_retries_alternate_reasoning_shape(self):
+    async def test_unknown_provider_omits_unverified_reasoning_fields(self):
         from src.core.llm import generate_openai_compatible_stream
 
         payloads = []
@@ -209,8 +209,6 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             payloads.append(payload)
-            if "reasoning" in payload:
-                return httpx.Response(400, json={"error": "unsupported reasoning field"})
             stream = (
                 "data: {\"choices\":[{\"delta\":{\"reasoning\":\"pensando\"}}]}\n\n"
                 "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"
@@ -246,8 +244,62 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
             ("reasoning", "pensando"),
             ("content", "ok"),
         ])
-        self.assertIn("reasoning", payloads[0])
-        self.assertEqual(payloads[1]["reasoning_effort"], "medium")
+        self.assertEqual(len(payloads), 1)
+        self.assertNotIn("reasoning", payloads[0])
+        self.assertNotIn("reasoning_effort", payloads[0])
+
+    def test_groq_qwen_uses_binary_reasoning_contract(self):
+        from src.core.llm import _openai_request_variants
+
+        variants = _openai_request_variants(
+            [HumanMessage(content="oi")],
+            {
+                "provider_id": "groq",
+                "base_url": "https://api.groq.com/openai/v1",
+                "model_id": "qwen/qwen3-32b",
+                "reasoning_style": "reasoning_effort",
+                "supports_thinking": True,
+            },
+            response_mode="thinking",
+            reasoning_effort="low",
+        )
+
+        self.assertEqual(variants[0]["reasoning_effort"], "default")
+        self.assertEqual(variants[0]["reasoning_format"], "parsed")
+
+    def test_groq_gpt_oss_clamps_reasoning_to_supported_scale(self):
+        from src.core.llm import _openai_request_variants
+
+        variants = _openai_request_variants(
+            [HumanMessage(content="oi")],
+            {
+                "provider_id": "groq",
+                "base_url": "https://api.groq.com/openai/v1",
+                "model_id": "openai/gpt-oss-120b",
+                "reasoning_style": "reasoning_effort",
+                "supports_thinking": True,
+            },
+            response_mode="thinking",
+            reasoning_effort="max",
+        )
+
+        self.assertEqual(variants[0]["reasoning_effort"], "high")
+
+    async def test_cloudflare_placeholder_is_rejected_before_network(self):
+        from src.core.llm import generate_openai_compatible_stream
+
+        with self.assertRaisesRegex(RuntimeError, "Account ID"):
+            async for _ in generate_openai_compatible_stream(
+                [HumanMessage(content="oi")],
+                {
+                    "provider_id": "cloudflare-workers-ai",
+                    "name": "Cloudflare Workers AI",
+                    "base_url": "https://api.cloudflare.com/client/v4/accounts/COLOQUE_SEU_ACCOUNT_ID/ai/v1",
+                    "model_id": "@cf/openai/gpt-oss-120b",
+                    "api_key": "test-key",
+                },
+            ):
+                pass
 
     async def test_chat_engine_passes_provider_config_to_generate_stream(self):
         from src.core.chat import ChatEngine

@@ -169,7 +169,7 @@ def _candidate_ids(model: dict) -> list[str]:
 
 
 def _find_metadata(provider_id: str, model: dict, catalog: dict) -> dict:
-    for source_id in PROVIDER_CATALOG_IDS.get(provider_id, ()):
+    for source_id in PROVIDER_CATALOG_IDS.get(provider_id, (provider_id,)):
         models = (catalog.get(source_id) or {}).get("models") or {}
         for candidate in _candidate_ids(model):
             value = models.get(candidate)
@@ -198,8 +198,6 @@ def enrich_builtin_models(provider_id: str, models: list[dict]) -> list[dict]:
                 model.setdefault("thinking_stream", "extra-low" not in str(model.get("id", "")).lower())
             result.append(model)
         return result
-    if provider_id not in PROVIDER_CATALOG_IDS:
-        return [dict(model) for model in models]
     catalog = get_catalog()
     result = []
     for original in models:
@@ -214,6 +212,9 @@ def enrich_builtin_models(provider_id: str, models: list[dict]) -> list[dict]:
             model.setdefault("supports_pdf", "pdf" in inputs)
             model.setdefault("supports_thinking", bool(metadata.get("reasoning")))
             model.setdefault("supports_tools", bool(metadata.get("tool_call")))
+            reasoning_options = metadata.get("reasoning_options")
+            if isinstance(reasoning_options, list) and reasoning_options:
+                model.setdefault("reasoning_options", reasoning_options)
             model.setdefault("catalog_source", "models.dev")
         else:
             fallback = next(

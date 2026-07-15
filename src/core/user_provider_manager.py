@@ -8,7 +8,7 @@ internal active config that can later be wired into the LLM hot path.
 import base64
 from datetime import datetime, timezone
 
-from src.core.provider_manager import get_active_config
+from src.core.provider_manager import get_active_config, get_provider
 from src.core.time_utils import utc_isoformat
 from src.db.models import UserProviderConfig, get_session_db
 
@@ -60,7 +60,7 @@ def _public_config(row: UserProviderConfig) -> dict:
 
 
 def _internal_config(row: UserProviderConfig) -> dict:
-    return {
+    config = {
         "provider_id": row.provider_id,
         "name": row.display_name or row.provider_id,
         "base_url": row.base_url,
@@ -69,6 +69,25 @@ def _internal_config(row: UserProviderConfig) -> dict:
         "model_id": row.model,
         "model_name": row.model,
     }
+    provider = get_provider(row.provider_id)
+    model = {}
+    if provider:
+        model = next((item for item in provider.get("models", []) if item.get("id") == row.model), {})
+    if not model:
+        from src.core.model_catalog import enrich_builtin_models
+        model = enrich_builtin_models(row.provider_id, [{"id": row.model, "name": row.model}])[0]
+    if model:
+        config.update({
+            "model_name": model.get("name", row.model),
+            "supports_images": model.get("supports_images"),
+            "supports_thinking": model.get("supports_thinking"),
+            "supports_tools": model.get("supports_tools"),
+            "image_generation": bool(model.get("image_generation")),
+            "reasoning_options": model.get("reasoning_options", []),
+            "reasoning_style": provider.get("reasoning_style", "") if provider else "",
+        })
+    from src.core.model_capabilities import with_reasoning_capabilities
+    return with_reasoning_capabilities(config)
 
 
 def metadata_from_config(config: dict) -> dict:

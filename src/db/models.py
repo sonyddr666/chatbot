@@ -180,6 +180,9 @@ class ChatAttachment(Base):
     file_size = Column(Integer, nullable=False, default=0)
     checksum = Column(String(128), nullable=False, default="")
     extracted_text = Column(Text, nullable=False, default="")
+    vision_description = Column(Text, nullable=False, default="")
+    vision_model = Column(String(255), nullable=False, default="")
+    vision_updated_at = Column(DateTime, nullable=True)
     is_truncated = Column(Boolean, nullable=False, default=False)
     status = Column(String(30), nullable=False, default="ready", index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -221,6 +224,21 @@ class ChatJobEvent(Base):
     type = Column(String(40), nullable=False, index=True)
     payload = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ScheduledAgentTask(Base):
+    __tablename__ = "scheduled_agent_tasks"
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    session_id = Column(String(255), nullable=False, default="")
+    prompt = Column(Text, nullable=False)
+    run_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String(30), nullable=False, default="scheduled", index=True)
+    job_id = Column(String(64), nullable=False, default="")
+    error = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
 
 
 class KnowledgeDocument(Base):
@@ -344,6 +362,15 @@ def init_db():
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_jobs_user_client_request "
                 "ON chat_jobs (user_id, client_request_id)"
             ))
+
+            attachment_cols = _sqlite_columns(conn, "chat_attachments")
+            for name, ddl in {
+                "vision_description": "ALTER TABLE chat_attachments ADD COLUMN vision_description TEXT NOT NULL DEFAULT ''",
+                "vision_model": "ALTER TABLE chat_attachments ADD COLUMN vision_model VARCHAR(255) NOT NULL DEFAULT ''",
+                "vision_updated_at": "ALTER TABLE chat_attachments ADD COLUMN vision_updated_at DATETIME",
+            }.items():
+                if name not in attachment_cols:
+                    conn.execute(text(ddl))
 
             document_cols = _sqlite_columns(conn, "knowledge_documents")
             for name, ddl in {

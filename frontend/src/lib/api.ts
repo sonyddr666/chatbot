@@ -35,7 +35,7 @@ export interface SkillActivity {
   query?: string | null
 }
 export type ResponseMode = 'normal' | 'thinking' | 'live'
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ReasoningEffort = 'auto' | 'none' | 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export interface ChatAttachmentInfo {
   id: string
   filename: string
@@ -102,6 +102,11 @@ export interface AppConfig {
   provider: string; profile: string; model: string
   model_id?: string; provider_id?: string
   moderation: boolean; multilang: boolean; rag: boolean; max_upload_mb: number
+  supports_images?: boolean | null
+  supports_thinking?: boolean | null
+  supports_tools?: boolean | null
+  reasoning_control?: 'automatic' | 'binary' | 'scale'
+  reasoning_efforts?: ReasoningEffort[]
 }
 
 export interface UserInfo {

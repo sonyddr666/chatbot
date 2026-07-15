@@ -15,6 +15,7 @@ from src.core.chat_attachments import build_model_user_content, save_chat_attach
 from src.core.chat import ChatEngine
 from src.core.chat_jobs import process_chat_job
 from src.core.file_delivery import requests_file_delivery, resolve_file_delivery
+from src.core.image_actions import build_vision_fallback_context
 from src.core.llm import _convert_messages_to_codex
 from src.core.workspace import write_text_file
 from src.db.models import init_db
@@ -56,6 +57,31 @@ class ChatAttachmentTest(unittest.TestCase):
         self.assertTrue((Path(settings.user_data_dir) / str(self.user.id) / "workspace" / artifact.relative_path).is_file())
         self.assertTrue(expected_root.is_dir())
         self.assertIn("Dados do usuario", artifact.extracted_text)
+
+    def test_visual_fallback_description_is_persisted_and_reused(self):
+        artifact = save_chat_attachment(self.user.id, "photo.png", b"fake-png", "image/png")
+        attachment = ChatAttachmentRepo.create_many(self.user.id, "vision", [artifact])[0]
+
+        with patch(
+            "src.core.image_actions.describe_image",
+            new=AsyncMock(return_value="Um carro preto com o farol direito quebrado."),
+        ) as describe:
+            first = asyncio.run(build_vision_fallback_context(
+                self.user.id,
+                "Qual e o problema?",
+                attachment,
+            ))
+            persisted = ChatAttachmentRepo.get_owned(attachment["id"], self.user.id)
+            second = asyncio.run(build_vision_fallback_context(
+                self.user.id,
+                "E caro consertar?",
+                persisted,
+            ))
+
+        self.assertEqual(describe.await_count, 1)
+        self.assertIn("farol direito quebrado", first)
+        self.assertIn("farol direito quebrado", second)
+        self.assertEqual(persisted["vision_model"], "antigravity:auto")
 
     def test_svg_and_arbitrary_binary_are_accepted_without_automatic_rag(self):
         svg = self.client.post(

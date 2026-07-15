@@ -4,9 +4,9 @@ from typing import Literal
 
 
 ResponseMode = Literal["normal", "thinking", "live"]
-ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+ReasoningEffort = Literal["auto", "none", "default", "low", "medium", "high", "xhigh", "max"]
 VALID_RESPONSE_MODES = {"normal", "thinking", "live"}
-VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+VALID_REASONING_EFFORTS = {"auto", "none", "default", "low", "medium", "high", "xhigh", "max"}
 
 CODEX_MODE_PROFILES: dict[ResponseMode, dict[str, str | int]] = {
     "normal": {
@@ -61,4 +61,8 @@ def normalize_reasoning_effort(
 
 def codex_wire_reasoning_effort(effort: ReasoningEffort) -> str:
     """OpenClaw-compatible maximum: the Codex wire ceiling is xhigh."""
+    if effort in {"auto", "default"}:
+        return "medium"
+    if effort == "none":
+        return "low"
     return "xhigh" if effort == "max" else effort
