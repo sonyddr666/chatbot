@@ -1332,7 +1332,16 @@ class ChatJobRepo:
             elif message and event_type == "skill":
                 try:
                     activities = json.loads(message.skill_activities_json or "[]")
-                    activities.append(json.loads(payload))
+                    incoming = json.loads(payload)
+                    call_id = incoming.get("call_id") if isinstance(incoming, dict) else None
+                    replace_at = next((
+                        index for index, activity in enumerate(activities)
+                        if call_id and isinstance(activity, dict) and activity.get("call_id") == call_id
+                    ), None)
+                    if replace_at is None:
+                        activities.append(incoming)
+                    else:
+                        activities[replace_at] = {**activities[replace_at], **incoming}
                     message.skill_activities_json = json.dumps(activities, ensure_ascii=False)
                 except (TypeError, json.JSONDecodeError):
                     pass

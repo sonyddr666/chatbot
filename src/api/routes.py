@@ -877,6 +877,43 @@ async def provider_create(body: dict, user=Depends(get_admin_user)):
 @router.put("/providers/manage/{provider_id}")
 async def provider_update(provider_id: str, body: dict, user=Depends(get_admin_user)):
     """Atualiza um provedor."""
+    existing = pm_get(provider_id, include_keys=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Provider nao encontrado")
+
+    candidate_base_url = str(body.get("base_url") or existing.get("base_url") or "")
+    is_cloudflare = (
+        "cloudflare" in provider_id.lower()
+        or "api.cloudflare.com" in candidate_base_url.lower()
+    )
+    placeholder = any(marker in candidate_base_url.lower() for marker in (
+        "coloque_seu_account_id",
+        "{account_id}",
+        "<account_id>",
+    ))
+    # The generic edit form can also replace API keys. Cloudflare needs the
+    # account ID in the URL, so resolve it before persisting either a new key
+    # or a still-placeholder URL.
+    if is_cloudflare and ("api_key" in body or placeholder):
+        from src.core.cloudflare_provider import discover_cloudflare_accounts, workers_ai_base_url
+
+        token = str(body.get("api_key") or pm_get_api_key(provider_id) or "").strip()
+        try:
+            accounts = await discover_cloudflare_accounts(token)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not accounts:
+            raise HTTPException(
+                status_code=400,
+                detail="O token e valido, mas nao permitiu detectar nenhuma conta Cloudflare.",
+            )
+        if len(accounts) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="O token acessa varias contas. Use Detectar contas e escolha a conta correta.",
+            )
+        body = {**body, "base_url": workers_ai_base_url(accounts[0]["id"])}
+
     try:
         p = pm_update(provider_id, body)
     except ValueError as e:
@@ -892,6 +929,80 @@ async def provider_set_api_key(provider_id: str, body: dict, user=Depends(get_ad
     api_key = body.get("api_key", "")
     pm_set_api_key(provider_id, api_key)
     return {"status": "ok", "provider_id": provider_id}
+
+
+@router.post("/providers/manage/{provider_id}/cloudflare/accounts")
+async def provider_cloudflare_accounts(provider_id: str, body: dict, user=Depends(get_admin_user)):
+    """Discover accessible Cloudflare accounts and optionally configure Workers AI."""
+    from src.core.cloudflare_provider import discover_cloudflare_accounts, workers_ai_base_url
+
+    provider = pm_get(provider_id, include_keys=True)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider nao encontrado")
+    base_url = str(provider.get("base_url") or "").lower()
+    if "api.cloudflare.com" not in base_url and "cloudflare" not in provider_id.lower():
+        raise HTTPException(status_code=400, detail="Este provider nao e Cloudflare")
+
+    supplied_token = str(body.get("api_token") or "").strip()
+    token = supplied_token or pm_get_api_key(provider_id)
+    requested_id = str(body.get("account_id") or "").strip()
+    if body.get("manual_account_id") is True:
+        if not token:
+            raise HTTPException(status_code=400, detail="Informe o API Token da Cloudflare")
+        try:
+            configured_url = workers_ai_base_url(requested_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if supplied_token:
+            pm_set_api_key(provider_id, supplied_token)
+        updated = pm_update(provider_id, {"base_url": configured_url})
+        if not updated:
+            raise HTTPException(status_code=400, detail="Nao foi possivel atualizar a Base URL do provider")
+        return {
+            "status": "configured",
+            "configured": True,
+            "account": {"id": requested_id, "name": "Conta informada manualmente"},
+            "accounts": [],
+            "base_url": configured_url,
+        }
+
+    try:
+        accounts = await discover_cloudflare_accounts(token)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not accounts:
+        raise HTTPException(
+            status_code=400,
+            detail="O token e valido, mas nenhuma conta Cloudflare acessivel foi encontrada.",
+        )
+
+    selected_account = None
+    if requested_id:
+        selected_account = next((item for item in accounts if item["id"] == requested_id), None)
+        if not selected_account:
+            raise HTTPException(status_code=400, detail="A conta escolhida nao esta acessivel por este token")
+    elif len(accounts) == 1:
+        selected_account = accounts[0]
+
+    if selected_account:
+        if supplied_token:
+            pm_set_api_key(provider_id, supplied_token)
+        updated = pm_update(provider_id, {"base_url": workers_ai_base_url(selected_account["id"])})
+        if not updated:
+            raise HTTPException(status_code=400, detail="Nao foi possivel atualizar a Base URL do provider")
+        return {
+            "status": "configured",
+            "configured": True,
+            "account": selected_account,
+            "accounts": accounts,
+            "base_url": workers_ai_base_url(selected_account["id"]),
+        }
+
+    return {
+        "status": "selection_required",
+        "configured": False,
+        "accounts": accounts,
+    }
 
 
 @router.delete("/providers/manage/{provider_id}")
@@ -1104,6 +1215,141 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
             "error_type": "connection_error",
             "message": str(e),
         }
+
+
+@router.post("/providers/benchmark")
+async def providers_benchmark(body: dict | None = None, user=Depends(get_current_user)):
+    """Mede um modelo diretamente, sem agente, skills, RAG ou historico."""
+    body = body or {}
+    provider_id = str(body.get("provider_id") or "").strip()
+    model_id = str(body.get("model_id") or "").strip()
+    if not provider_id or not model_id:
+        raise HTTPException(status_code=400, detail="provider_id e model_id sao obrigatorios")
+
+    provider = pm_get(provider_id, include_keys=True)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider nao encontrado")
+    model = next(
+        (item for item in provider.get("models", []) if item.get("id") == model_id),
+        None,
+    )
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo nao encontrado")
+    if not model.get("enabled", True):
+        return {
+            "ok": False,
+            "provider": provider_id,
+            "model": model_id,
+            "model_name": model.get("name", model_id),
+            "message": "Modelo desativado",
+        }
+
+    from langchain_core.messages import HumanMessage
+    from src.core.llm import generate_stream
+    from src.core.model_capabilities import with_reasoning_capabilities
+    from src.core.provider_manager import get_provider_api_key
+
+    cfg = {
+        "provider_id": provider_id,
+        "name": provider.get("name", provider_id),
+        "base_url": provider.get("base_url", ""),
+        "endpoint": provider.get("endpoint", ""),
+        "api_key": provider.get("api_key", "") or get_provider_api_key(provider_id),
+        "api_format": provider.get("api_format", "chat_completions"),
+        "model_id": model_id,
+        "model_name": model.get("name", model_id),
+        "supports_images": model.get("supports_images"),
+        "supports_thinking": model.get("supports_thinking"),
+        "supports_tools": model.get("supports_tools"),
+        "reasoning_style": provider.get("reasoning_style", ""),
+        "reasoning_options": model.get("reasoning_options", []),
+        "user_id": user.id,
+    }
+    cfg = with_reasoning_capabilities(cfg)
+
+    started = time.perf_counter()
+    first_chunk_at: float | None = None
+    content = ""
+    reasoning = ""
+    stream_error = ""
+
+    async def consume() -> None:
+        nonlocal first_chunk_at, content, reasoning, stream_error
+        prompt = (
+            "Teste curto de velocidade. Responda em exatamente 30 palavras simples "
+            "sobre velocidade, sem lista e sem explicacoes extras."
+        )
+        async for chunk_type, text in generate_stream(
+            [HumanMessage(content=prompt)],
+            provider_config=cfg,
+            response_mode="normal",
+            reasoning_effort=None,
+        ):
+            if not text:
+                continue
+            if chunk_type == "error":
+                stream_error += text
+                continue
+            if chunk_type not in {"content", "reasoning"}:
+                continue
+            if first_chunk_at is None:
+                first_chunk_at = time.perf_counter()
+            if chunk_type == "content":
+                content += text
+            else:
+                reasoning += text
+
+    try:
+        await asyncio.wait_for(consume(), timeout=90.0)
+    except asyncio.TimeoutError:
+        total_ms = round((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "provider": provider_id,
+            "model": model_id,
+            "model_name": model.get("name", model_id),
+            "total_ms": total_ms,
+            "message": "Tempo limite de 90 segundos excedido",
+        }
+    except Exception as exc:
+        total_ms = round((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "provider": provider_id,
+            "model": model_id,
+            "model_name": model.get("name", model_id),
+            "total_ms": total_ms,
+            "message": str(exc),
+        }
+
+    finished = time.perf_counter()
+    total_ms = round((finished - started) * 1000)
+    ttft_ms = round(((first_chunk_at or finished) - started) * 1000)
+    generated_chars = len(content)
+    generation_seconds = max((finished - (first_chunk_at or started)), 0.001)
+    chars_per_second = round(generated_chars / generation_seconds, 1)
+    if stream_error or not (content or reasoning):
+        return {
+            "ok": False,
+            "provider": provider_id,
+            "model": model_id,
+            "model_name": model.get("name", model_id),
+            "ttft_ms": ttft_ms,
+            "total_ms": total_ms,
+            "message": stream_error or "O modelo terminou sem devolver texto",
+        }
+
+    return {
+        "ok": True,
+        "provider": provider_id,
+        "model": model_id,
+        "model_name": model.get("name", model_id),
+        "ttft_ms": ttft_ms,
+        "total_ms": total_ms,
+        "output_chars": generated_chars,
+        "chars_per_second": chars_per_second,
+        "had_reasoning": bool(reasoning),
+    }
 
 
 def _detect_key_source(provider_id: str, key: str) -> str:

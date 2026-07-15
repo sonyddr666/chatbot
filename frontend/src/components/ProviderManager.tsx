@@ -2,11 +2,11 @@ import { memo, useState, useEffect, useCallback, useRef } from 'react'
 import {
   X, Plus, Trash2, Check,
   Server, Globe, Cpu, Eye, EyeOff, Power, PowerOff,
-  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft,
+  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft, Gauge,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { api, getAuthToken, type UserProviderInfo } from '../lib/api'
+import { api, formatApiError, getAuthToken, type UserProviderInfo } from '../lib/api'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -41,6 +41,23 @@ interface ProviderInfo {
   key_source?: string
 }
 
+interface CloudflareAccountInfo {
+  id: string
+  name: string
+}
+
+interface BenchmarkResult {
+  ok: boolean
+  model: string
+  model_name: string
+  ttft_ms?: number
+  total_ms?: number
+  output_chars?: number
+  chars_per_second?: number
+  had_reasoning?: boolean
+  message?: string
+}
+
 interface Props {
   open: boolean
   onClose: () => void
@@ -62,7 +79,7 @@ async function apiReq<T>(url: string, opts?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || 'Erro na requisição')
+    throw new Error(formatApiError(err, 'Erro na requisicao'))
   }
   return res.json()
 }
@@ -138,6 +155,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   }, [open, loadProviders])
 
   const selected = providers.find(p => p.id === selectedId) || null
+  const isCloudflareSelected = !!selected && (
+    selected.id.toLowerCase().includes('cloudflare')
+    || selected.base_url.toLowerCase().includes('api.cloudflare.com')
+  )
   const builtinProviders = providers.filter(p => p.provider_type === 'builtin')
   const customProviders = providers.filter(p => p.provider_type === 'custom')
 
@@ -283,6 +304,49 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     }
   }
 
+  const handleDetectCloudflareAccounts = async (accountId = '', manual = false) => {
+    if (!selectedId || (!localApiKey.trim() && !selected?.has_key)) {
+      toast.error('Insira o API Token da Cloudflare')
+      return
+    }
+    if (manual && !accountId.trim()) {
+      toast.error('Informe o Account ID da Cloudflare')
+      return
+    }
+    setDetectingCloudflare(true)
+    try {
+      const result = await apiReq<{
+        configured: boolean
+        accounts: CloudflareAccountInfo[]
+        account?: CloudflareAccountInfo
+        base_url?: string
+      }>(`${API}/providers/manage/${selectedId}/cloudflare/accounts`, {
+        method: 'POST',
+        body: JSON.stringify({
+          api_token: localApiKey.trim() || undefined,
+          account_id: accountId.trim() || undefined,
+          manual_account_id: manual,
+        }),
+      })
+      setCloudflareAccounts(result.accounts || [])
+      if (result.configured) {
+        await loadProviders()
+        loadConfig()
+        setShowApiKey(false)
+        setLocalApiKey('')
+        setCloudflareAccountId('')
+        toast.success(`Cloudflare configurado: ${result.account?.name || 'conta selecionada'}`)
+      } else {
+        setCloudflareAccountId(result.accounts[0]?.id || '')
+        toast.success(`${result.accounts.length} contas encontradas. Escolha uma para continuar.`)
+      }
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setDetectingCloudflare(false)
+    }
+  }
+
   // ─── Testar provider ───────────────────────────────────────────
 
   const handleTestProvider = async () => {
@@ -310,6 +374,60 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       toast.error(err.message)
     } finally {
       setTestingProvider(false)
+    }
+  }
+
+  const runModelBenchmark = async (modelId: string, notify = true) => {
+    if (!selectedId) return null
+    setBenchmarkingModels(prev => ({ ...prev, [modelId]: true }))
+    try {
+      const result = await apiReq<BenchmarkResult>(`${API}/providers/benchmark`, {
+        method: 'POST',
+        body: JSON.stringify({ provider_id: selectedId, model_id: modelId }),
+      })
+      setBenchmarkResults(prev => ({ ...prev, [modelId]: result }))
+      if (notify) {
+        if (result.ok) toast.success(`${result.model_name}: ${result.ttft_ms}ms ate o primeiro texto`)
+        else toast.error(`${result.model_name}: ${result.message || 'falhou'}`)
+      }
+      return result
+    } catch (err: any) {
+      const failed: BenchmarkResult = {
+        ok: false,
+        model: modelId,
+        model_name: modelId,
+        message: err.message,
+      }
+      setBenchmarkResults(prev => ({ ...prev, [modelId]: failed }))
+      if (notify) toast.error(err.message)
+      return failed
+    } finally {
+      setBenchmarkingModels(prev => ({ ...prev, [modelId]: false }))
+    }
+  }
+
+  const handleBenchmarkAll = async () => {
+    if (!selected) return
+    const enabledModels = selected.models.filter(model => model.enabled)
+    if (!enabledModels.length) {
+      toast.error('Nenhum modelo habilitado para testar')
+      return
+    }
+    const confirmed = window.confirm(
+      `Testar ${enabledModels.length} modelo(s) de ${selected.name}?\n\n` +
+      'Sera feita uma chamada real por modelo, em sequencia. Isso pode demorar e consumir creditos.'
+    )
+    if (!confirmed) return
+
+    setBenchmarkResults({})
+    setBenchmarkingAll(true)
+    try {
+      for (const model of enabledModels) {
+        await runModelBenchmark(model.id, false)
+      }
+      toast.success('Teste de velocidade concluido')
+    } finally {
+      setBenchmarkingAll(false)
     }
   }
 
@@ -374,6 +492,20 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const [showApiKey, setShowApiKey] = useState(false)
   const [testingProvider, setTestingProvider] = useState(false)
   const [testResult, setTestResult] = useState<{ok: boolean; latency_ms?: number; message?: string; source?: string} | null>(null)
+  const [benchmarkResults, setBenchmarkResults] = useState<Record<string, BenchmarkResult>>({})
+  const [benchmarkingModels, setBenchmarkingModels] = useState<Record<string, boolean>>({})
+  const [benchmarkingAll, setBenchmarkingAll] = useState(false)
+  const [cloudflareAccounts, setCloudflareAccounts] = useState<CloudflareAccountInfo[]>([])
+  const [cloudflareAccountId, setCloudflareAccountId] = useState('')
+  const [detectingCloudflare, setDetectingCloudflare] = useState(false)
+
+  useEffect(() => {
+    setCloudflareAccounts([])
+    setCloudflareAccountId('')
+    setBenchmarkResults({})
+    setBenchmarkingModels({})
+    setBenchmarkingAll(false)
+  }, [selectedId])
 
   useEffect(() => {
     if (!open) return
@@ -626,6 +758,13 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     responses: 'Responses API',
     openai: 'OpenAI Compatible',
   }
+
+  const benchmarkRanking = Object.values(benchmarkResults)
+    .filter(result => result.ok && typeof result.ttft_ms === 'number')
+    .sort((a, b) => (a.ttft_ms || 0) - (b.ttft_ms || 0))
+  const benchmarkRankByModel = new Map(
+    benchmarkRanking.map((result, index) => [result.model, index + 1])
+  )
 
   // ─── Render ─────────────────────────────────────────────────────
 
@@ -1035,19 +1174,27 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
 
                   {/* Base URL */}
                   <div>
-                    <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Base URL</label>
+                    <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                      {editing && isCloudflareSelected ? 'Base URL (automatica)' : 'Base URL'}
+                    </label>
                     <input
                       type="url"
                       value={formBaseUrl}
                       onChange={e => setFormBaseUrl(e.target.value)}
+                      disabled={editing && isCloudflareSelected}
                       placeholder="https://api.example.com/v1"
-                      className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                      className="w-full px-3 py-2 rounded-xl border text-sm font-mono disabled:cursor-not-allowed disabled:opacity-60"
                       style={{
                         background: 'var(--bg-primary)',
                         color: 'var(--text-primary)',
                         borderColor: 'var(--border)',
                       }}
                     />
+                    {editing && isCloudflareSelected && (
+                      <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                        Ao salvar uma chave nova, o Account ID e detectado e esta URL e atualizada automaticamente.
+                      </p>
+                    )}
                   </div>
 
                   {/* API Key */}
@@ -1271,6 +1418,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   className="cursor-pointer hover:opacity-80"
                   onClick={() => {
                     setLocalApiKey('')
+                    setCloudflareAccounts([])
+                    setCloudflareAccountId('')
                     setShowApiKey(true)
                   }}
                 />
@@ -1299,7 +1448,9 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                       type="password"
                       value={localApiKey}
                       onChange={e => setLocalApiKey(e.target.value)}
-                      placeholder={selected?.has_key ? 'Digite uma nova chave para substituir' : 'sk-...'}
+                      placeholder={selected?.has_key
+                        ? 'Digite uma nova chave para substituir'
+                        : isCloudflareSelected ? 'API Token da Cloudflare' : 'sk-...'}
                       className="w-full px-3 py-2 rounded-xl text-sm mb-4 outline-none transition-all border"
                       style={{
                         background: 'var(--bg-primary)',
@@ -1308,6 +1459,51 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                       }}
                       autoFocus
                     />
+                    {isCloudflareSelected && (
+                      <div className="mb-4 space-y-3 rounded-xl border p-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+                        <div>
+                          <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Conta Cloudflare</p>
+                          <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                            O chatbot consulta as contas permitidas pelo token e monta a Base URL do Workers AI.
+                          </p>
+                        </div>
+                        {cloudflareAccounts.length > 1 && (
+                          <select
+                            value={cloudflareAccountId}
+                            onChange={event => setCloudflareAccountId(event.target.value)}
+                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                          >
+                            {cloudflareAccounts.map(account => (
+                              <option key={account.id} value={account.id}>{account.name} · {account.id}</option>
+                            ))}
+                          </select>
+                        )}
+                        <div>
+                          <label className="mb-1 block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                            Account ID manual (fallback)
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              value={cloudflareAccountId}
+                              onChange={event => setCloudflareAccountId(event.target.value.trim())}
+                              placeholder="a1b2c3d4..."
+                              className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs outline-none"
+                              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleDetectCloudflareAccounts(cloudflareAccountId, true)}
+                              disabled={detectingCloudflare || !cloudflareAccountId.trim()}
+                              className="rounded-lg px-3 py-2 text-xs font-semibold"
+                              style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                            >
+                              Usar ID
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <button
                         onClick={() => setShowApiKey(false)}
@@ -1321,14 +1517,22 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         Cancelar
                       </button>
                       <button
-                        onClick={handleSaveApiKey}
-                        disabled={savingKey || !localApiKey.trim()}
+                        onClick={() => isCloudflareSelected
+                          ? handleDetectCloudflareAccounts(cloudflareAccounts.length > 1 ? cloudflareAccountId : '')
+                          : handleSaveApiKey()}
+                        disabled={isCloudflareSelected
+                          ? detectingCloudflare || (!localApiKey.trim() && !selected?.has_key)
+                          : savingKey || !localApiKey.trim()}
                         className="flex-1 px-3 py-2 rounded-xl text-sm font-medium text-white transition-all"
                         style={{
-                          background: savingKey || !localApiKey.trim() ? 'var(--border)' : 'var(--accent)',
+                          background: (isCloudflareSelected
+                            ? detectingCloudflare || (!localApiKey.trim() && !selected?.has_key)
+                            : savingKey || !localApiKey.trim()) ? 'var(--border)' : 'var(--accent)',
                         }}
                       >
-                        {savingKey ? 'Salvando...' : 'Salvar'}
+                        {isCloudflareSelected
+                          ? detectingCloudflare ? 'Detectando...' : cloudflareAccounts.length > 1 ? 'Usar conta' : 'Detectar contas'
+                          : savingKey ? 'Salvando...' : 'Salvar'}
                       </button>
                     </div>
                   </div>
@@ -1388,20 +1592,48 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
               {/* ─── Modelos ─── */}
               <div className="border rounded-xl overflow-hidden" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
-                  <h4 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                    Models ({selected.models.length})
-                  </h4>
-                  {selected.id !== 'antigravity' && (
+                  <div>
+                    <h4 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+                      Models ({selected.models.length})
+                    </h4>
+                    <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                      Medicao direta, sem agente, skills, RAG ou historico
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
-                      onClick={() => { setShowAddModel(true); setEditingModelId(null); setModelFormName(''); setModelFormId(''); setModelFormCtx('128000') }}
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90"
-                      style={{ background: 'var(--accent)', color: '#fff' }}
+                      onClick={handleBenchmarkAll}
+                      disabled={benchmarkingAll || !selected.models.some(model => model.enabled)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
+                      style={{ background: '#f97316', color: '#fff' }}
+                      title="Faz uma chamada real por modelo, em sequencia"
                     >
-                      <Plus size={12} />
-                      Add Model
+                      {benchmarkingAll ? <Loader2 size={12} className="animate-spin" /> : <Gauge size={12} />}
+                      {benchmarkingAll ? 'Testando todos...' : 'Testar todos'}
                     </button>
-                  )}
+                    {selected.id !== 'antigravity' && (
+                      <button
+                        onClick={() => { setShowAddModel(true); setEditingModelId(null); setModelFormName(''); setModelFormId(''); setModelFormCtx('128000') }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90"
+                        style={{ background: 'var(--accent)', color: '#fff' }}
+                      >
+                        <Plus size={12} />
+                        Add Model
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {benchmarkRanking.length > 0 && (
+                  <div className="border-b px-4 py-2 text-xs" style={{ borderColor: 'var(--border)', background: 'rgba(249,115,22,0.08)', color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: '#f97316' }}>Mais rapido:</strong>{' '}
+                    {benchmarkRanking.slice(0, 3).map((result, index) => (
+                      <span key={result.model} className="mr-3">
+                        #{index + 1} {result.model_name} ({result.ttft_ms}ms)
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                   {selected.models.length === 0 ? (
@@ -1419,6 +1651,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         onSelect={() => handleSelectModel(model.id, selected.id)}
                         onEdit={() => handleEditModel(model)}
                         onDelete={() => handleDeleteModel(model.id)}
+                        onBenchmark={() => runModelBenchmark(model.id)}
+                        benchmarking={!!benchmarkingModels[model.id]}
+                        benchmark={benchmarkResults[model.id]}
+                        benchmarkRank={benchmarkRankByModel.get(model.id)}
                       />
                     ))
                   )}
@@ -1657,6 +1893,7 @@ function ProviderItem({
 
 function ModelRow({
   model, isBuiltin, readOnly = false, onToggle, onSelect, onEdit, onDelete,
+  onBenchmark, benchmarking = false, benchmark, benchmarkRank,
 }: {
   model: ModelInfo
   isBuiltin: boolean
@@ -1665,6 +1902,10 @@ function ModelRow({
   onSelect: () => void
   onEdit: () => void
   onDelete: () => void
+  onBenchmark: () => void
+  benchmarking?: boolean
+  benchmark?: BenchmarkResult
+  benchmarkRank?: number
 }) {
   const ctxLabel = model.context_length >= 1000000
     ? `${(model.context_length / 1000000).toFixed(0)}M`
@@ -1742,6 +1983,25 @@ function ModelRow({
               {model.usage}
             </p>
           )}
+          {benchmarking && (
+            <div className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: '#f97316' }}>
+              <Loader2 size={12} className="animate-spin" />
+              Medindo chamada direta...
+            </div>
+          )}
+          {!benchmarking && benchmark?.ok && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ color: '#16a34a' }}>
+              {benchmarkRank && <strong>#{benchmarkRank}{benchmarkRank === 1 ? ' mais rapido' : ''}</strong>}
+              <span>Primeiro texto: <strong>{benchmark.ttft_ms}ms</strong></span>
+              <span>Total: <strong>{benchmark.total_ms}ms</strong></span>
+              <span>Saida: <strong>{benchmark.chars_per_second} chars/s</strong></span>
+            </div>
+          )}
+          {!benchmarking && benchmark && !benchmark.ok && (
+            <p className="mt-1 break-words text-xs" style={{ color: '#dc2626' }}>
+              Falhou: {benchmark.message || 'erro desconhecido'}
+            </p>
+          )}
         </div>
         <span
           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-mono"
@@ -1751,6 +2011,18 @@ function ModelRow({
         </span>
       </div>
       <div className="flex items-center justify-end gap-1 border-t pt-2 sm:border-0 sm:pt-0" style={{ borderColor: 'var(--border)' }}>
+        {model.enabled && (
+          <button
+            onClick={onBenchmark}
+            disabled={benchmarking}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
+            style={{ background: 'rgba(249,115,22,0.14)', color: '#f97316' }}
+            title="Medir este modelo sem passar pelo agente"
+          >
+            {benchmarking ? <Loader2 size={12} className="animate-spin" /> : <Gauge size={12} />}
+            Testar
+          </button>
+        )}
         {model.enabled && (
           <button
             onClick={onSelect}

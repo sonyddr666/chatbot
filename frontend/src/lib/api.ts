@@ -27,12 +27,26 @@ export interface SkillSource {
   url: string
 }
 export interface SkillActivity {
+  call_id?: string
   name: string
   status: 'completed' | 'failed' | 'running'
   label: string
   source_count: number
   sources: SkillSource[]
   query?: string | null
+  provider?: string | null
+}
+
+export function upsertSkillActivity(existing: SkillActivity[], incoming: SkillActivity): SkillActivity[] {
+  const index = existing.findIndex(activity =>
+    incoming.call_id
+      ? activity.call_id === incoming.call_id
+      : activity.name === incoming.name && activity.status === 'running'
+  )
+  if (index < 0) return [...existing, incoming]
+  const next = [...existing]
+  next[index] = { ...next[index], ...incoming }
+  return next
 }
 export type ResponseMode = 'normal' | 'thinking' | 'live'
 export type ReasoningEffort = 'auto' | 'none' | 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -358,6 +372,28 @@ export interface ChatJobInfo {
   assistant_attachments: ChatAttachmentInfo[]
 }
 
+export function formatApiError(payload: unknown, fallback = 'Erro na requisicao'): string {
+  if (typeof payload === 'string' && payload.trim()) return payload
+  if (Array.isArray(payload)) {
+    const messages = payload.map(item => formatApiError(item, '')).filter(Boolean)
+    return messages.join('; ') || fallback
+  }
+  if (payload && typeof payload === 'object') {
+    const value = payload as Record<string, unknown>
+    const detail = value.detail ?? value.message ?? value.msg ?? value.error
+    if (detail !== undefined && detail !== payload) {
+      const message = formatApiError(detail, '')
+      const location = Array.isArray(value.loc) ? value.loc.slice(1).join('.') : ''
+      if (message) return location ? `${location}: ${message}` : message
+    }
+    try {
+      const serialized = JSON.stringify(payload)
+      if (serialized && serialized !== '{}') return serialized
+    } catch { /* objeto nao serializavel */ }
+  }
+  return fallback
+}
+
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(API + url, {
     headers: authHeaders({ 'Content-Type': 'application/json', ...opts?.headers }),
@@ -365,7 +401,7 @@ async function req<T>(url: string, opts?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
-    throw new Error(err.detail || err.message || `Erro ${res.status}`)
+    throw new Error(formatApiError(err, `Erro ${res.status}`))
   }
   return res.json()
 }
@@ -906,7 +942,7 @@ export const api = {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
-      throw new Error(err.detail || `Falha no TTS Inworld (${res.status})`)
+      throw new Error(formatApiError(err, `Falha no TTS Inworld (${res.status})`))
     }
     return res.blob()
   },

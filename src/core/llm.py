@@ -275,6 +275,45 @@ def _provider_error(provider_config: dict, message: str) -> RuntimeError:
     return RuntimeError(f"{label}: {message}")
 
 
+async def resolve_provider_config(provider_config: dict) -> dict:
+    """Resolve provider-specific configuration before any outbound model request."""
+    base_url = str(provider_config.get("base_url") or "").strip()
+    lowered = base_url.lower()
+    if not any(marker in lowered for marker in ("coloque_seu_account_id", "{account_id}", "<account_id>")):
+        return provider_config
+
+    api_key = str(provider_config.get("api_key") or "").strip()
+    if not api_key:
+        raise _provider_error(provider_config, "API Token da Cloudflare nao configurado")
+
+    from src.core.cloudflare_provider import discover_cloudflare_accounts, workers_ai_base_url
+
+    try:
+        accounts = await discover_cloudflare_accounts(api_key)
+    except (ValueError, RuntimeError) as exc:
+        raise _provider_error(provider_config, str(exc)) from exc
+    if not accounts:
+        raise _provider_error(
+            provider_config,
+            "o token nao conseguiu listar nenhuma conta. Abra Providers > Cloudflare Workers AI > API Key "
+            "e informe o Account ID manualmente, ou use um token com Account Settings: Read.",
+        )
+    if len(accounts) > 1:
+        raise _provider_error(
+            provider_config,
+            f"o token acessa {len(accounts)} contas. Abra Providers > Cloudflare Workers AI > API Key "
+            "e escolha a conta correta.",
+        )
+
+    resolved_url = workers_ai_base_url(accounts[0]["id"])
+    resolved = {**provider_config, "base_url": resolved_url}
+    provider_id = str(provider_config.get("provider_id") or "")
+    if provider_id:
+        from src.core.provider_manager import update_provider
+        await asyncio.to_thread(update_provider, provider_id, {"base_url": resolved_url})
+    return resolved
+
+
 async def generate_openai_compatible_stream(
     messages: list[BaseMessage],
     provider_config: dict,
@@ -282,19 +321,12 @@ async def generate_openai_compatible_stream(
     reasoning_effort: str | None = None,
 ) -> AsyncGenerator[Tuple[str, str], None]:
     """Stream any Chat Completions-compatible provider without losing reasoning fields."""
+    provider_config = await resolve_provider_config(provider_config)
     base_url = str(provider_config.get("base_url", "")).strip()
     model = str(provider_config.get("model_id", "")).strip()
     api_key = str(provider_config.get("api_key", "")).strip()
     if not base_url or not model:
         raise _provider_error(provider_config, "URL ou modelo ausente")
-    lowered_url = base_url.lower()
-    if any(marker in lowered_url for marker in ("coloque_seu_account_id", "{account_id}", "<account_id>")):
-        raise _provider_error(
-            provider_config,
-            "Base URL ainda contem o placeholder do Account ID. Edite o provider e substitua "
-            "COLOQUE_SEU_ACCOUNT_ID pelo Account ID real da sua conta Cloudflare.",
-        )
-
     endpoint = _chat_completions_url(provider_config)
     headers = {
         "Accept": "text/event-stream",

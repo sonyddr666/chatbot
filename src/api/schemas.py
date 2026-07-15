@@ -5,7 +5,7 @@ from typing import Optional, Any, Literal
 
 
 ResponseMode = Literal["normal", "thinking", "live"]
-ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+ReasoningEffort = Literal["auto", "none", "default", "low", "medium", "high", "xhigh", "max"]
 
 
 class ChatRequest(BaseModel):

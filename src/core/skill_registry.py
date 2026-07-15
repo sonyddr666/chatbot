@@ -7,6 +7,31 @@ from typing import Any
 
 DEFAULT_SKILLS: tuple[dict[str, Any], ...] = (
     {
+        "name": "image_generation",
+        "description": "Gera ou edita imagens no chat usando a conta Antigravity conectada.",
+        "kind": "media_generation",
+        "definition": {
+            "inputs": {"prompt": "string", "reference_image": "optional"},
+            "permissions": {
+                "network": True,
+                "workspace_read": True,
+                "workspace_write": True,
+                "shell": False,
+            },
+            "default_enabled": True,
+            "executor": "image_generate",
+            "provider": "Antigravity",
+            "examples": [
+                "gere uma imagem de um pato no concreto",
+                "crie um papel de parede com a data de hoje",
+                "melhore esta foto",
+            ],
+        },
+        "requires_network": True,
+        "requires_shell": False,
+        "risk_level": 1,
+    },
+    {
         "name": "perplexo_search",
         "description": "Pesquisa atual, profunda ou academica com respostas completas e fontes pelo Perplexo.",
         "kind": "external_research",

@@ -23,7 +23,9 @@ async def web_search(query: str, max_results: int = 3) -> Optional[str]:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; Chatbot/1.0)"}
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:
+            # DuckDuckGo HTML sometimes returns 202 while still serving the
+            # result document. Parse both successful representations.
+            if resp.status_code not in {200, 202}:
                 return f"Erro na busca: HTTP {resp.status_code}"
 
             # Parse simples de resultados

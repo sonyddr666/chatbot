@@ -27,7 +27,8 @@ _GENERATE_TERMS = re.compile(
 )
 _IMAGE_NOUNS = re.compile(
     r"\b(imagem|imagens|fotos?|fotografias?|ilustra(c|ç)(a|ã)o|ilustracoes|ilustrações|desenhos?|"
-    r"posters?|capas?|banners?|logos?|images?|photos?|pictures?|illustrations?)\b",
+    r"posters?|capas?|banners?|logos?|wallpapers?|papel(?:\s+de|\s+e)?\s+pare(?:de|e)?|"
+    r"papeis\s+de\s+parede|images?|photos?|pictures?|illustrations?)\b",
     re.IGNORECASE,
 )
 _IMAGE_REFERENCE = re.compile(
@@ -75,6 +76,16 @@ def has_antigravity_image_model(user_id: int) -> bool:
     return any(
         "image" in model_id.lower() or "imagen" in model_id.lower()
         for model_id in (account.get("models") or {})
+    )
+
+
+def image_generation_enabled(user_id: int) -> bool:
+    """Whether this user enabled the visible Antigravity image skill."""
+    from src.db.repository import SkillRepo
+
+    return any(
+        skill.get("name") == "image_generation" and skill.get("enabled")
+        for skill in SkillRepo.list_for_user(user_id)
     )
 
 

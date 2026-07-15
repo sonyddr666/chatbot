@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from langchain_core.messages import HumanMessage
@@ -285,21 +285,48 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(variants[0]["reasoning_effort"], "high")
 
-    async def test_cloudflare_placeholder_is_rejected_before_network(self):
+    async def test_cloudflare_placeholder_attempts_account_discovery(self):
         from src.core.llm import generate_openai_compatible_stream
 
-        with self.assertRaisesRegex(RuntimeError, "Account ID"):
-            async for _ in generate_openai_compatible_stream(
-                [HumanMessage(content="oi")],
-                {
-                    "provider_id": "cloudflare-workers-ai",
-                    "name": "Cloudflare Workers AI",
-                    "base_url": "https://api.cloudflare.com/client/v4/accounts/COLOQUE_SEU_ACCOUNT_ID/ai/v1",
-                    "model_id": "@cf/openai/gpt-oss-120b",
-                    "api_key": "test-key",
-                },
-            ):
-                pass
+        with patch(
+            "src.core.cloudflare_provider.discover_cloudflare_accounts",
+            new=AsyncMock(return_value=[]),
+        ) as discover:
+            with self.assertRaisesRegex(RuntimeError, "nenhuma conta"):
+                async for _ in generate_openai_compatible_stream(
+                    [HumanMessage(content="oi")],
+                    {
+                        "provider_id": "cloudflare-workers-ai",
+                        "name": "Cloudflare Workers AI",
+                        "base_url": "https://api.cloudflare.com/client/v4/accounts/COLOQUE_SEU_ACCOUNT_ID/ai/v1",
+                        "model_id": "@cf/openai/gpt-oss-120b",
+                        "api_key": "test-key",
+                    },
+                ):
+                    pass
+        discover.assert_awaited_once_with("test-key")
+
+    async def test_cloudflare_single_account_replaces_placeholder(self):
+        from src.core.llm import resolve_provider_config
+
+        config = {
+            "provider_id": "cloudflare-workers-ai",
+            "name": "Cloudflare Workers AI",
+            "base_url": "https://api.cloudflare.com/client/v4/accounts/COLOQUE_SEU_ACCOUNT_ID/ai/v1",
+            "api_key": "test-key",
+        }
+        with (
+            patch(
+                "src.core.cloudflare_provider.discover_cloudflare_accounts",
+                new=AsyncMock(return_value=[{"id": "a1b2c3d4", "name": "Pessoal"}]),
+            ),
+            patch("src.core.provider_manager.update_provider") as update,
+        ):
+            resolved = await resolve_provider_config(config)
+
+        expected = "https://api.cloudflare.com/client/v4/accounts/a1b2c3d4/ai/v1"
+        self.assertEqual(resolved["base_url"], expected)
+        update.assert_called_once_with("cloudflare-workers-ai", {"base_url": expected})
 
     async def test_chat_engine_passes_provider_config_to_generate_stream(self):
         from src.core.chat import ChatEngine

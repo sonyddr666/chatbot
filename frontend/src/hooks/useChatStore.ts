@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ChatAttachmentInfo, ChatMessage, Conversation, Profile, AppConfig, DocumentInfo, Stats, ReasoningEffort, ResponseMode } from '../lib/api'
-import { api, getAuthToken, parseApiTimestamp } from '../lib/api'
+import { api, getAuthToken, parseApiTimestamp, upsertSkillActivity } from '../lib/api'
 
 let activeStreamController: AbortController | null = null
 let activeJobId: string | null = null
@@ -693,7 +693,7 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
         deltaBuffer.flush()
         updateAssistantForJob(jobId, message => ({
           ...message,
-          skillActivities: [...(message.skillActivities || []), chunk.skillActivity!],
+          skillActivities: upsertSkillActivity(message.skillActivities || [], chunk.skillActivity!),
         }))
       } else if (chunk.type === 'attachment' && chunk.attachment) {
         deltaBuffer.flush()
@@ -795,7 +795,7 @@ async function httpStream(
         if (last?.role === 'assistant') {
           msgs[msgs.length - 1] = {
             ...last,
-            skillActivities: [...(last.skillActivities || []), chunk.skillActivity],
+            skillActivities: upsertSkillActivity(last.skillActivities || [], chunk.skillActivity),
           }
           useChatStore.setState({ messages: msgs })
         }

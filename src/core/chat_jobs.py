@@ -16,6 +16,7 @@ from src.core.image_actions import (
     detect_image_action,
     execute_image_action,
     has_antigravity_image_model,
+    image_generation_enabled,
     has_antigravity_vision_model,
     build_vision_fallback_context,
     needs_vision_fallback,
@@ -200,6 +201,10 @@ async def process_chat_job(job_id: str) -> None:
             return
 
         provider_config = get_active_config_for_user(user_id)
+        # Resolve account-specific endpoints before the agent planner or any
+        # other subsystem can make an outbound provider request.
+        from src.core.llm import resolve_provider_config
+        provider_config = await resolve_provider_config(provider_config)
         route = classify_route(message or "analisar arquivos anexados")
 
         attachments = job.get("attachments") or []
@@ -237,42 +242,68 @@ async def process_chat_job(job_id: str) -> None:
                     )
                     await _add_event(job_id, "status", "Usando a imagem mais recente desta conversa...")
 
+        tool_event_arguments: dict[str, dict] = {}
+
         async def agent_event_sink(event_name: str, payload: dict) -> None:
             await _add_event(job_id, "tool", json.dumps({
                 "event": event_name,
                 **payload,
             }, ensure_ascii=False))
+            call_id = str(payload.get("id") or "")
+            if event_name == "tool.requested" and call_id:
+                tool_event_arguments[call_id] = payload.get("arguments") or {}
             if event_name == "tool.started":
                 labels = {
                     "image_generate": "Gerando imagem com Antigravity...",
                     "image_edit": "Editando imagem com Antigravity...",
                 }
-                await _add_event(
-                    job_id,
-                    "status",
-                    labels.get(str(payload.get("name") or ""), "Executando ferramenta do agente..."),
-                )
+                tool_name = str(payload.get("name") or "")
+                arguments = tool_event_arguments.get(call_id, {})
+                query = next((
+                    str(arguments.get(key) or "").strip()
+                    for key in ("prompt", "query", "instruction", "path")
+                    if str(arguments.get(key) or "").strip()
+                ), "")
+                await _add_event(job_id, "skill", json.dumps({
+                    "call_id": call_id,
+                    "provider": "Antigravity" if tool_name in {"image_generate", "image_edit"} else None,
+                    "name": tool_name,
+                    "status": "running",
+                    "label": labels.get(tool_name, f"Executando {tool_name}"),
+                    "source_count": 0,
+                    "sources": [],
+                    "query": query or None,
+                }, ensure_ascii=False))
+
+        direct_image_action = detect_image_action(message, effective_attachments)
+        simple_direct_image_request = (
+            direct_image_action is not None
+            and not requests_web_search(message)
+            and not requests_conversation_history(message)
+            and not requests_file_delivery(message)
+        )
 
         agent_outcome = AgentRunOutcome()
-        try:
-            agent_outcome = await run_agent_tools(AgentContext(
-                user_id=user_id,
-                session_id=session_id,
-                request=message,
-                attachments=agent_attachments,
-                provider_config=provider_config,
-                job_id=job_id,
-                event_sink=agent_event_sink,
-            ))
-        except Exception as exc:
-            # A decisao semantica e uma camada adaptativa. Se o provider nao
-            # conseguir produzi-la, os roteadores conservadores ainda protegem
-            # os fluxos existentes durante a migracao.
-            await _add_event(job_id, "tool", json.dumps({
-                "event": "agent.fallback",
-                "error": str(exc)[:500],
-            }, ensure_ascii=False))
-            agent_outcome = AgentRunOutcome()
+        if not simple_direct_image_request:
+            try:
+                agent_outcome = await run_agent_tools(AgentContext(
+                    user_id=user_id,
+                    session_id=session_id,
+                    request=message,
+                    attachments=agent_attachments,
+                    provider_config=provider_config,
+                    job_id=job_id,
+                    event_sink=agent_event_sink,
+                ))
+            except Exception as exc:
+                # A decisao semantica e uma camada adaptativa. Se o provider nao
+                # conseguir produzi-la, os roteadores conservadores ainda protegem
+                # os fluxos existentes durante a migracao.
+                await _add_event(job_id, "tool", json.dumps({
+                    "event": "agent.fallback",
+                    "error": str(exc)[:500],
+                }, ensure_ascii=False))
+                agent_outcome = AgentRunOutcome()
 
         if agent_outcome.executed:
             for result in agent_outcome.results:
@@ -287,7 +318,15 @@ async def process_chat_job(job_id: str) -> None:
                         error_message=result.error,
                     )
                 if result.activity:
-                    await _add_event(job_id, "skill", json.dumps(result.activity, ensure_ascii=False))
+                    activity = {**result.activity, "call_id": result.call_id}
+                    arguments = tool_event_arguments.get(result.call_id, {})
+                    if not activity.get("query"):
+                        activity["query"] = next((
+                            str(arguments.get(key) or "").strip()
+                            for key in ("prompt", "query", "instruction", "path")
+                            if str(arguments.get(key) or "").strip()
+                        ), None)
+                    await _add_event(job_id, "skill", json.dumps(activity, ensure_ascii=False))
                 workspace_plan = result.data.get("workspace_plan")
                 if isinstance(workspace_plan, dict):
                     await _add_event(job_id, "workspace_plan", json.dumps(workspace_plan, ensure_ascii=False))
@@ -328,13 +367,58 @@ async def process_chat_job(job_id: str) -> None:
                 if delivered_attachments:
                     result.attachments = delivered_attachments
 
-        image_action = None if agent_outcome.executed else detect_image_action(message, effective_attachments)
-        if image_action and has_antigravity_image_model(user_id):
+        image_tool_completed = any(
+            result.name in {"image_generate", "image_edit"} and result.status == "completed"
+            for result in agent_outcome.results
+        )
+        image_action = None if image_tool_completed else direct_image_action
+        if image_action and agent_outcome.executed:
+            supporting_context = "\n\n".join(
+                result.content[:2500]
+                for result in agent_outcome.results
+                if result.status == "completed"
+                and result.name not in {"image_generate", "image_edit"}
+                and result.content
+            )[:6000]
+            if supporting_context:
+                image_action = {
+                    **image_action,
+                    "prompt": (
+                        f"{image_action.get('prompt', '')}\n\n"
+                        "Informacoes de apoio verificadas pelas etapas anteriores:\n"
+                        f"{supporting_context}"
+                    ),
+                }
+        if image_action and image_generation_enabled(user_id) and has_antigravity_image_model(user_id):
+            fallback_call_id = f"image_{job_id}"
             await _add_event(job_id, "status", "Preparando o pedido de imagem com o modelo selecionado...")
             image_action = await plan_image_action(image_action, provider_config)
             operation_label = "Editando imagem" if image_action["operation"] == "edit" else "Gerando imagem"
-            await _add_event(job_id, "status", f"{operation_label} com Antigravity...")
-            artifacts = await execute_image_action(user_id, image_action)
+            tool_name = "image_edit" if image_action["operation"] == "edit" else "image_generate"
+            await _add_event(job_id, "skill", json.dumps({
+                "call_id": fallback_call_id,
+                "provider": "Antigravity",
+                "name": tool_name,
+                "status": "running",
+                "label": f"{operation_label} com Antigravity...",
+                "source_count": 0,
+                "sources": [],
+                "query": image_action.get("prompt"),
+            }, ensure_ascii=False))
+            try:
+                artifacts = await execute_image_action(user_id, image_action)
+            except Exception:
+                await _add_event(job_id, "skill", json.dumps({
+                    "call_id": fallback_call_id,
+                    "provider": "Antigravity",
+                    "name": tool_name,
+                    "status": "failed",
+                    "label": "Falha ao gerar imagem" if tool_name == "image_generate" else "Falha ao editar imagem",
+                    "source_count": 0,
+                    "sources": [],
+                    "query": image_action.get("prompt"),
+                }, ensure_ascii=False))
+                raise
             for artifact in artifacts:
                 delivered = await _repo_call(
                     ChatAttachmentRepo.prepare_delivery,
@@ -343,6 +427,16 @@ async def process_chat_job(job_id: str) -> None:
                     artifact=artifact,
                 )
                 await _add_event(job_id, "attachment", json.dumps(delivered, ensure_ascii=False))
+            await _add_event(job_id, "skill", json.dumps({
+                "call_id": fallback_call_id,
+                "provider": "Antigravity",
+                "name": tool_name,
+                "status": "completed",
+                "label": f"{len(artifacts)} imagem(ns) gerada(s)" if tool_name == "image_generate" else f"{len(artifacts)} imagem(ns) editada(s)",
+                "source_count": 0,
+                "sources": [],
+                "query": image_action.get("prompt"),
+            }, ensure_ascii=False))
             response = (
                 "Imagem editada com Antigravity."
                 if image_action["operation"] == "edit"

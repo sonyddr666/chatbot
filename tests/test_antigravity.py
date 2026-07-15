@@ -66,6 +66,8 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertEqual(detect_image_action("melhore esta foto", image)["operation"], "edit")
         self.assertEqual(detect_image_action("crie uma imagem de uma cidade", [])["operation"], "generate")
         self.assertEqual(detect_image_action("gera uma imagem de um pato", [])["operation"], "generate")
+        self.assertEqual(detect_image_action("gera um papel de parede com essa data", [])["operation"], "generate")
+        self.assertEqual(detect_image_action("gera um papel e paree com essa data", [])["operation"], "generate")
         self.assertEqual(detect_image_action("crie 4 imagens de uma cidade", [])["count"], 4)
         self.assertIsNone(detect_image_action("o que tem nesta foto?", image))
         self.assertIsNone(detect_image_action("melhore este texto", []))

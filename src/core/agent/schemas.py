@@ -46,6 +46,11 @@ class ToolResult:
     error: str = ""
 
     def model_payload(self) -> dict[str, Any]:
+        def attachment_value(item: Any, key: str, fallback: str = "") -> Any:
+            if isinstance(item, dict):
+                return item.get(key) or (item.get(fallback) if fallback else None)
+            return getattr(item, key, None) or (getattr(item, fallback, None) if fallback else None)
+
         return {
             "tool_call_id": self.call_id,
             "name": self.name,
@@ -53,9 +58,9 @@ class ToolResult:
             "content": self.content,
             "attachments": [
                 {
-                    "filename": item.get("filename"),
-                    "relative_path": item.get("relative_path") or item.get("path"),
-                    "content_type": item.get("content_type"),
+                    "filename": attachment_value(item, "filename"),
+                    "relative_path": attachment_value(item, "relative_path", "path"),
+                    "content_type": attachment_value(item, "content_type"),
                 }
                 for item in self.attachments
             ],

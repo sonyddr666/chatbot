@@ -73,11 +73,13 @@ async def _generate_image(context: Any, arguments: dict) -> ToolResult:
         content=f"{len(artifacts)} imagem(ns) gerada(s) com Antigravity.",
         attachments=artifacts,
         activity={
+            "provider": "Antigravity",
             "name": "image_generate",
             "status": "completed",
             "label": f"{len(artifacts)} imagem(ns) gerada(s)",
             "source_count": 0,
             "sources": [],
+            "query": prompt,
         },
     )
 
@@ -103,11 +105,13 @@ async def _edit_image(context: Any, arguments: dict) -> ToolResult:
         content=f"{len(artifacts)} imagem(ns) editada(s) com Antigravity.",
         attachments=artifacts,
         activity={
+            "provider": "Antigravity",
             "name": "image_edit",
             "status": "completed",
             "label": f"{len(artifacts)} imagem(ns) editada(s)",
             "source_count": 0,
             "sources": [],
+            "query": prompt,
         },
     )
 
@@ -708,6 +712,12 @@ def _admin_tools() -> list[RegisteredTool]:
 
 
 def available_tools(context: Any) -> list[RegisteredTool]:
+    skills = SkillRepo.list_for_user(context.user_id)
+    enabled = {
+        str(skill.get("name")): skill
+        for skill in skills
+        if skill.get("enabled") and can_execute_skill(skill)
+    }
     tools: list[RegisteredTool] = [RegisteredTool(
         definition=ToolDefinition(
             name="get_time",
@@ -726,7 +736,7 @@ def available_tools(context: Any) -> list[RegisteredTool]:
     )]
     if is_active_admin(context.user_id):
         tools.extend(_admin_tools())
-    if has_antigravity_image_model(context.user_id):
+    if "image_generation" in enabled and has_antigravity_image_model(context.user_id):
         common_properties = {
             "prompt": {"type": "string", "description": "Descricao fiel da imagem desejada."},
             "aspect_ratio": {"type": "string", "enum": sorted(_ASPECT_RATIOS), "default": "1:1"},
@@ -767,12 +777,6 @@ def available_tools(context: Any) -> list[RegisteredTool]:
                 ),
                 handler=_edit_image,
             ))
-    skills = SkillRepo.list_for_user(context.user_id)
-    enabled = {
-        str(skill.get("name")): skill
-        for skill in skills
-        if skill.get("enabled") and can_execute_skill(skill)
-    }
     selected_search = next(
         (name for name in ("perplexo_search", "search_and_answer", "simple_search") if name in enabled),
         None,

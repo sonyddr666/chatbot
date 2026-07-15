@@ -15,7 +15,7 @@ import { DocumentsPanel } from './components/DocumentsPanel'
 import { LiveVoiceButton, LiveVoiceDock } from './components/LiveVoiceControl'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { detachActiveChatStreams, useChatStore } from './hooks/useChatStore'
-import { api, getAuthToken, setAuthToken, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
+import { api, getAuthToken, setAuthToken, upsertSkillActivity, type ReasoningEffort, type ResponseMode, type StreamChunk, type UserInfo } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useLiveVoice } from './voice/useLiveVoice'
 
@@ -239,7 +239,7 @@ export default function App() {
         if (last?.role === 'assistant') {
           nextMessages[nextMessages.length - 1] = {
             ...last,
-            skillActivities: [...(last.skillActivities || []), chunk.skillActivity!],
+            skillActivities: upsertSkillActivity(last.skillActivities || [], chunk.skillActivity!),
           }
         }
         return { messages: nextMessages }
