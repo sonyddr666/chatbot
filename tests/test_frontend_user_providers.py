@@ -30,6 +30,8 @@ class FrontendUserProvidersTest(unittest.TestCase):
         self.assertIn("sessionId: `chat-${Date.now()}`", app)
         self.assertIn("initializedChatUserRef", app)
         self.assertNotIn("setSession(useChatStore.getState().sessionId)", app)
+        self.assertIn('<UserRound size={14}', app)
+        self.assertIn('<Brain size={14}', app)
 
 
 if __name__ == "__main__":

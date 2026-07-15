@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
-import { ArrowDown, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, Users, Wifi, WifiOff } from 'lucide-react'
+import { ArrowDown, Brain, FileText, FolderOpen, LogOut, Menu, Server, Settings, Sparkles, UserRound, Users, Wifi, WifiOff } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatMessageBubble } from './components/ChatMessage'
 import { ChatInput } from './components/ChatInput'
@@ -377,31 +377,45 @@ export default function App() {
               )}
             </span>
             <ModelSelector />
-            <select
-              value={liveVoice.enabled ? 'live' : responseMode}
-              onChange={event => setResponseMode(event.target.value as ResponseMode)}
-              disabled={liveVoice.enabled}
-              className="hidden sm:block rounded-lg border px-2 py-1.5 text-xs font-semibold outline-none disabled:opacity-70"
+            <div
+              className="hidden sm:flex items-center rounded-lg border pl-2"
               style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
-              title={liveVoice.enabled ? 'O modo Live esta ativo enquanto o microfone estiver ligado' : 'Modo de resposta'}
+              title={liveVoice.enabled ? 'O modo Live esta ativo enquanto o microfone estiver ligado' : 'Modo do agente'}
             >
-              <option value="normal">Normal</option>
-              <option value="thinking">Pensando</option>
-              <option value="live">Live</option>
-            </select>
-            <select
-              value={reasoningEffort}
-              onChange={event => setReasoningEffort(event.target.value as ReasoningEffort)}
-              className="hidden md:block rounded-lg border px-2 py-1.5 text-xs font-semibold outline-none"
+              <UserRound size={14} aria-hidden="true" />
+              <select
+                value={liveVoice.enabled ? 'live' : responseMode}
+                onChange={event => setResponseMode(event.target.value as ResponseMode)}
+                disabled={liveVoice.enabled}
+                className="border-0 bg-transparent px-1.5 py-1.5 text-xs font-semibold outline-none disabled:opacity-70"
+                style={{ color: 'var(--text-secondary)' }}
+                aria-label="Modo do agente"
+              >
+                <option value="normal">Normal</option>
+                <option value="thinking">Pensando</option>
+                <option value="live">Live</option>
+              </select>
+            </div>
+            <div
+              className="hidden md:flex items-center rounded-lg border pl-2"
               style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
               title="Esforco de raciocinio enviado ao modelo"
             >
-              <option value="low">Leve</option>
-              <option value="medium">Medio</option>
-              <option value="high">Alto</option>
-              <option value="xhigh">Extra alto</option>
-              <option value="max">Maximo</option>
-            </select>
+              <Brain size={14} aria-hidden="true" />
+              <select
+                value={reasoningEffort}
+                onChange={event => setReasoningEffort(event.target.value as ReasoningEffort)}
+                className="border-0 bg-transparent px-1.5 py-1.5 text-xs font-semibold outline-none"
+                style={{ color: 'var(--text-secondary)' }}
+                aria-label="Esforco de raciocinio do modelo"
+              >
+                <option value="low">Leve</option>
+                <option value="medium">Medio</option>
+                <option value="high">Alto</option>
+                <option value="xhigh">Extra alto</option>
+                <option value="max">Maximo</option>
+              </select>
+            </div>
             <LiveVoiceButton controller={liveVoice} />
             {user.is_admin && (
               <button
