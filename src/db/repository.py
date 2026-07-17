@@ -1261,6 +1261,55 @@ class ChatJobRepo:
         }
 
     @staticmethod
+    def retry_failed_as_new(job_id: str, user_id: int, client_request_id: str) -> dict:
+        """Clone a failed request into a new message pair while preserving the original."""
+        original = ChatJobRepo.get(job_id, user_id)
+        if not original:
+            raise ValueError("Job nao encontrado")
+        if original["status"] != "failed":
+            raise ValueError("Somente respostas com falha podem ser tentadas novamente")
+
+        db = get_session_db()
+        try:
+            existing = db.query(ChatJob).filter(
+                ChatJob.user_id == user_id,
+                ChatJob.client_request_id == client_request_id,
+            ).first()
+            if existing:
+                return ChatJobRepo._snapshot(db, existing)
+        finally:
+            db.close()
+
+        provider = {
+            "provider_id": original["provider_id"],
+            "provider_name": original["provider_name"],
+            "model_id": original["model_id"],
+            "model_name": original["model_name"],
+        }
+        retried = ChatJobRepo.create_with_messages(
+            user_id=user_id,
+            session_id=original["session_id"],
+            message=original["message"],
+            provider=provider,
+            response_mode=original["response_mode"],
+            reasoning_effort=original["reasoning_effort"],
+            use_rag=original["use_rag"],
+            client_request_id=client_request_id,
+            attachment_ids=[],
+        )
+        if original.get("attachments"):
+            db = get_session_db()
+            try:
+                message = db.query(Message).filter(Message.id == retried["user_message_id"]).first()
+                if message:
+                    message.attachments_json = json.dumps(original["attachments"], ensure_ascii=False)
+                    db.commit()
+            finally:
+                db.close()
+            retried = ChatJobRepo.get(retried["id"], user_id) or retried
+        return retried
+
+    @staticmethod
     def get(job_id: str, user_id: int | None = None) -> dict | None:
         db = get_session_db()
         try:
@@ -1382,6 +1431,28 @@ class ChatJobRepo:
             db.close()
 
     @staticmethod
+    def update_provider(job_id: str, provider: dict) -> bool:
+        db = get_session_db()
+        try:
+            job = db.query(ChatJob).filter(ChatJob.id == job_id).first()
+            if not job:
+                return False
+            job.provider_id = provider.get("provider_id") or ""
+            job.provider_name = provider.get("provider_name") or provider.get("name") or job.provider_id
+            job.model_id = provider.get("model_id") or job.model_id
+            job.model_name = provider.get("model_name") or job.model_id
+            message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+            if message:
+                message.provider_id = job.provider_id
+                message.provider_name = job.provider_name
+                message.model_id = job.model_id
+                message.model_name = job.model_name
+            db.commit()
+            return True
+        finally:
+            db.close()
+
+    @staticmethod
     def finish(job_id: str, status: str, error: str = "") -> int:
         db = get_session_db()
         try:
@@ -1395,7 +1466,7 @@ class ChatJobRepo:
             if message:
                 message.status = status
             event_type = "done" if status == "completed" else "error"
-            payload = json.dumps({"status": status, "error": error}, ensure_ascii=False)
+            payload = json.dumps({"status": status, "error": error, "retryable": status == "failed"}, ensure_ascii=False)
             event = ChatJobEvent(job_id=job_id, type=event_type, payload=payload)
             db.add(event)
             db.flush()

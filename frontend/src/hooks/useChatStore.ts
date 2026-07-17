@@ -172,6 +172,7 @@ interface ChatState {
     reasoningEffortOverride?: ReasoningEffort,
     files?: File[],
   ) => Promise<boolean>
+  retryFailedJob: (jobId: string) => Promise<void>
   regenerate: () => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
@@ -439,6 +440,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  retryFailedJob: async (jobId: string) => {
+    const { isLoading, sessionId } = get()
+    if (isLoading) return
+    set({ isLoading: true, error: null, streamStatus: 'Criando nova tentativa...' })
+    const controller = new AbortController()
+    try {
+      activeStreamController?.abort()
+      activeStreamController = controller
+      const job = await api.retryChatJob(jobId, crypto.randomUUID())
+      if (get().sessionId !== sessionId) return
+      activeJobId = job.id
+      const userMessage = {
+        ...createUserMsg(job.message, job.attachments || []),
+        messageId: job.user_message_id,
+      }
+      const assistantMessage: ChatMessage = {
+        ...createAssistantMsg(),
+        messageId: job.assistant_message_id,
+        jobId: job.id,
+        jobStatus: job.status,
+        providerId: job.provider_id,
+        providerName: job.provider_name,
+        modelId: job.model_id,
+        modelName: job.model_name,
+      }
+      set(state => ({
+        messages: [...state.messages, userMessage, assistantMessage],
+        streamStatus: 'Tentando novamente...',
+      }))
+      await jobStream(job.id, 0, controller.signal)
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        set({ error: error instanceof Error ? error.message : 'Falha ao criar nova tentativa' })
+      }
+    } finally {
+      if (activeStreamController === controller) activeStreamController = null
+      if (activeJobId && get().messages.some(message => message.jobId === activeJobId)) activeJobId = null
+      if (get().sessionId === sessionId) set({ isLoading: false, streamStatus: null })
+    }
+  },
+
   regenerate: async () => {
     const { messages, sessionId, isLoading, responseMode, reasoningEffort } = get()
     if (messages.length < 2 || isLoading) return
@@ -546,13 +588,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }))
         const restored = await Promise.all(msgs.map(async message => {
           if (message.role !== 'assistant') return message
+          let restoredMessage = message
+          if (message.jobId && message.jobStatus === 'failed') {
+            try {
+              const job = await api.getChatJob(message.jobId)
+              restoredMessage = { ...restoredMessage, error: job.error, retryable: true }
+            } catch { /* mantem a falha visivel mesmo sem detalhes */ }
+          }
           const match = message.content.match(/<!-- workspace-plan:([a-f0-9]{32}) -->/i)
-          if (!match) return message
+          if (!match) return restoredMessage
           try {
             const workspacePlan = await api.workspaceAiGetPlan(match[1])
-            return { ...message, workspacePlan }
+            return { ...restoredMessage, workspacePlan }
           } catch {
-            return message
+            return restoredMessage
           }
         }))
         if (!isCurrentLoad()) return
@@ -677,6 +726,8 @@ async function runPersistedJobResume(jobId: string) {
             attachments: job.assistant_attachments || [],
             jobStatus: job.status,
             messageId: job.assistant_message_id,
+            error: job.error || null,
+            retryable: job.status === 'failed',
           } : message),
           isLoading: job.status === 'queued' || job.status === 'running',
           error: null,
@@ -795,9 +846,11 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal): 
         updateAssistantForJob(jobId, message => ({
           ...message,
           jobStatus: (chunk.jobStatus as ChatMessage['jobStatus']) || 'failed',
+          error: chunk.text || 'O provider nao conseguiu responder.',
+          retryable: chunk.retryable !== false,
         }))
         if (activeJobId === jobId) {
-          useChatStore.setState({ error: chunk.text || null, isLoading: false, streamStatus: null })
+          useChatStore.setState({ isLoading: false, streamStatus: null })
         }
         return true
       }

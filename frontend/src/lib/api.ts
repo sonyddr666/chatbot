@@ -76,6 +76,8 @@ export interface ChatMessage {
   skillActivities?: SkillActivity[]
   jobId?: string | null
   jobStatus?: 'queued' | 'running' | 'completed' | 'interrupted' | 'failed' | 'cancelled'
+  error?: string | null
+  retryable?: boolean
   readAt?: string | null
   attachments?: ChatAttachmentInfo[]
 }
@@ -329,6 +331,7 @@ export interface StreamChunk {
   eventId?: number
   jobId?: string
   jobStatus?: string
+  retryable?: boolean
   messageId?: number
   hasReasoning?: boolean
   route?: 'fast' | 'full'
@@ -365,6 +368,7 @@ export interface ChatJobInfo {
   provider_name: string
   model_id: string
   model_name: string
+  message: string
   content: string
   reasoning: string
   error: string
@@ -596,6 +600,10 @@ export const api = {
     return response.blob()
   },
   getChatJob: (jobId: string) => req<ChatJobInfo>(`/chat/jobs/${encodeURIComponent(jobId)}`),
+  retryChatJob: (jobId: string, clientRequestId: string) => req<ChatJobInfo>(
+    `/chat/jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST', body: JSON.stringify({ client_request_id: clientRequestId }) },
+  ),
   cancelChatJob: (jobId: string) => req<{ status: string; job_id: string }>(
     `/chat/jobs/${encodeURIComponent(jobId)}`,
     { method: 'DELETE' },
@@ -662,7 +670,13 @@ export const api = {
         return
       } else if (event.event === 'job_state') {
         const data = JSON.parse(control)
-        yield { ...base, type: 'job_state', jobStatus: data.status, text: data.error }
+        yield {
+          ...base,
+          type: 'job_state',
+          jobStatus: data.status,
+          text: data.error,
+          retryable: Boolean(data.retryable),
+        }
         return
       }
     }

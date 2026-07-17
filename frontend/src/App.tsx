@@ -169,7 +169,7 @@ const ALL_REASONING_EFFORT_OPTIONS: HeaderSelectOption<ReasoningEffort>[] = [
 export default function App() {
   const {
     messages, isLoading, error, route, streamStatus,
-    sendMessage, regenerate, stopGeneration, loadConfig, loadProfiles,
+    sendMessage, retryFailedJob, regenerate, stopGeneration, loadConfig, loadProfiles,
     toggleSidebar, setError,
     responseMode, setResponseMode, reasoningEffort, setReasoningEffort,
     setWsConnected, lastMetrics, config,
@@ -705,6 +705,7 @@ export default function App() {
                           ? regenerate
                           : undefined
                       }
+                      onRetry={msg.jobId && msg.jobStatus === 'failed' ? () => retryFailedJob(msg.jobId!) : undefined}
                       onSpeak={liveVoice.speakText}
                       onStopSpeaking={liveVoice.stopSpeaking}
                     />

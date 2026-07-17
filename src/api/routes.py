@@ -2057,6 +2057,23 @@ async def get_chat_job(job_id: str, user=Depends(get_current_user)):
     return job
 
 
+@router.post("/chat/jobs/{job_id}/retry", status_code=202)
+async def retry_chat_job(
+    job_id: str,
+    client_request_id: str = Body(embed=True),
+    user=Depends(get_current_user),
+):
+    try:
+        job = await asyncio.to_thread(
+            ChatJobRepo.retry_failed_as_new, job_id, user.id, client_request_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    start_chat_job(job["id"])
+    job["session_id"] = _public_session_id(user.id, job["session_id"])
+    return job
+
+
 @router.delete("/chat/jobs/{job_id}")
 async def stop_chat_job(job_id: str, user=Depends(get_current_user)):
     job = await asyncio.to_thread(ChatJobRepo.get, job_id, user.id)

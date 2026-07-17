@@ -1,6 +1,7 @@
 """Testes do núcleo do chatbot."""
 
 import pytest
+from unittest.mock import patch
 from src.core.memory import ConversationMemory
 from src.core.chat import ChatEngine
 from src.core.prompts import build_system_prompt
@@ -69,3 +70,51 @@ class TestChatEngine:
         # precisaria de mock. Por enquanto é um placeholder.
         assert engine.memory is mem
         assert len(mem.get_messages()) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_uses_only_another_provider_with_same_model(self):
+        calls = []
+
+        async def fake_generate(_messages, provider_config, **_kwargs):
+            calls.append(provider_config["provider_id"])
+            if provider_config["provider_id"] == "primary":
+                raise RuntimeError("upstream failed")
+            yield "content", "ok"
+
+        engine = ChatEngine(
+            ConversationMemory(),
+            {"provider_id": "primary", "name": "Primary", "model_id": "same-model"},
+        )
+        with patch("src.core.chat.generate_stream", new=fake_generate):
+            chunks = [item async for item in engine.chat_stream_with_fallback("oi", [
+                {"provider_id": "wrong", "model_id": "other-model"},
+                {"provider_id": "backup", "name": "Backup", "model_id": "same-model"},
+            ])]
+
+        assert calls == ["primary", "backup"]
+        assert chunks == [("content", "ok")]
+        assert engine.provider_config["provider_id"] == "backup"
+
+    @pytest.mark.asyncio
+    async def test_fallback_does_not_mix_response_after_first_token(self):
+        calls = []
+
+        async def fake_generate(_messages, provider_config, **_kwargs):
+            calls.append(provider_config["provider_id"])
+            yield "content", "parcial"
+            raise RuntimeError("stream caiu")
+
+        engine = ChatEngine(
+            ConversationMemory(),
+            {"provider_id": "primary", "name": "Primary", "model_id": "same-model"},
+        )
+        chunks = []
+        with patch("src.core.chat.generate_stream", new=fake_generate):
+            with pytest.raises(RuntimeError):
+                async for item in engine.chat_stream_with_fallback("oi", [
+                    {"provider_id": "backup", "model_id": "same-model"},
+                ]):
+                    chunks.append(item)
+
+        assert calls == ["primary"]
+        assert chunks == [("content", "parcial")]

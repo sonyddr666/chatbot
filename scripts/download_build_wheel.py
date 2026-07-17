@@ -66,6 +66,16 @@ class ResolvedHTTPSConnection(http.client.HTTPSConnection):
 
 
 def download(url: str, output: Path, expected_sha256: str) -> None:
+    if output.is_file():
+        digest = hashlib.sha256()
+        with output.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        if digest.hexdigest().lower() == expected_sha256.lower():
+            print(f"Using cached and verified {output.name}", flush=True)
+            return
+        output.unlink(missing_ok=True)
+
     parsed = urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("Only HTTPS wheel URLs are supported")
@@ -128,7 +138,7 @@ def main() -> None:
         raise ValueError("A pinned SHA256 is required")
 
     download(args.url, args.output, expected_sha256)
-    print(f"Downloaded and verified {args.output.name}")
+    print(f"Ready and verified {args.output.name}")
 
 
 if __name__ == "__main__":

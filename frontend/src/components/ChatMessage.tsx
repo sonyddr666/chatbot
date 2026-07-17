@@ -18,6 +18,7 @@ interface Props {
   isLoading?: boolean
   status?: string | null
   onRegenerate?: () => void
+  onRetry?: () => void
   onSpeak?: (text: string) => void
   onStopSpeaking?: () => void
 }
@@ -547,7 +548,7 @@ function MessageAttachments({ attachments, isUser }: { attachments: ChatAttachme
   )
 }
 
-export function ChatMessageBubble({ message, isLoading, status, onRegenerate, onSpeak, onStopSpeaking }: Props) {
+export function ChatMessageBubble({ message, isLoading, status, onRegenerate, onRetry, onSpeak, onStopSpeaking }: Props) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<number | null>(message.feedbackScore ?? null)
@@ -659,6 +660,28 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
               )}
 
               {/* Conteúdo da resposta */}
+              {message.jobStatus === 'failed' && (
+                <div
+                  className="mb-3 rounded-xl border p-3 text-sm"
+                  style={{ background: '#fff7ed', borderColor: '#fdba74', color: '#9a3412' }}
+                >
+                  <p className="font-semibold">Nao foi possivel obter a resposta.</p>
+                  <p className="mt-1 break-words text-xs opacity-90">
+                    {message.error || 'Os providers disponiveis para este modelo falharam.'}
+                  </p>
+                  {message.retryable && onRetry && (
+                    <button
+                      type="button"
+                      onClick={onRetry}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors hover:bg-orange-100"
+                      style={{ borderColor: '#fb923c' }}
+                    >
+                      <RefreshCw size={13} />
+                      Tentar novamente em uma nova mensagem
+                    </button>
+                  )}
+                </div>
+              )}
               {memoContent}
               {message.workspacePlan && <WorkspacePlanCard plan={message.workspacePlan} />}
 

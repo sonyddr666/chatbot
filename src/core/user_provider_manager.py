@@ -8,7 +8,7 @@ internal active config that can later be wired into the LLM hot path.
 import base64
 from datetime import datetime, timezone
 
-from src.core.provider_manager import get_active_config, get_provider
+from src.core.provider_manager import get_active_config, get_provider, list_providers
 from src.core.time_utils import utc_isoformat
 from src.db.models import UserProviderConfig, get_session_db
 
@@ -383,3 +383,80 @@ def get_active_config_for_user(user_id: int) -> dict:
     config = get_active_config() if user and user.is_admin else get_active_config("opencode-zen-free")
     config["user_id"] = user_id
     return config
+
+
+def get_provider_config_for_user(user_id: int, provider_id: str, model_id: str) -> dict:
+    """Resolve the exact provider/model recorded by a job without changing models."""
+    db = get_session_db()
+    try:
+        row = db.query(UserProviderConfig).filter(
+            UserProviderConfig.user_id == user_id,
+            UserProviderConfig.provider_id == provider_id,
+            UserProviderConfig.model == model_id,
+            UserProviderConfig.is_enabled == True,
+        ).order_by(
+            UserProviderConfig.is_default.desc(), UserProviderConfig.updated_at.desc()
+        ).first()
+        if row:
+            config = _internal_config(row)
+            config["user_id"] = user_id
+            return config
+    finally:
+        db.close()
+
+    from src.db.repository import UserRepo
+    user = UserRepo.get(user_id)
+    if not user or not user.is_admin:
+        raise ValueError("Provider/modelo do job nao esta mais disponivel para este usuario")
+    config = get_active_config(provider_id, model_id)
+    config["user_id"] = user_id
+    return config
+
+
+def get_same_model_fallback_configs_for_user(user_id: int, primary_config: dict) -> list[dict]:
+    """Return accessible providers for the exact same model id as the primary."""
+    model_id = str(primary_config.get("model_id") or "")
+    seen = {(str(primary_config.get("provider_id") or ""), str(primary_config.get("base_url") or ""))}
+    candidates: list[dict] = []
+    db = get_session_db()
+    try:
+        rows = db.query(UserProviderConfig).filter(
+            UserProviderConfig.user_id == user_id,
+            UserProviderConfig.model == model_id,
+            UserProviderConfig.is_enabled == True,
+        ).order_by(UserProviderConfig.is_default.desc(), UserProviderConfig.updated_at.desc()).all()
+        for row in rows:
+            config = _internal_config(row)
+            key = (str(config.get("provider_id") or ""), str(config.get("base_url") or ""))
+            if key in seen:
+                continue
+            config["user_id"] = user_id
+            candidates.append(config)
+            seen.add(key)
+    finally:
+        db.close()
+
+    from src.db.repository import UserRepo
+    user = UserRepo.get(user_id)
+    if not user or not user.is_admin:
+        return candidates
+    for provider in list_providers(include_keys=True):
+        provider_id = str(provider.get("id") or "")
+        if not provider_id or not provider.get("enabled", True):
+            continue
+        model = next((item for item in provider.get("models", []) if (
+            str(item.get("id") or "") == model_id and item.get("enabled", True)
+        )), None)
+        if not model:
+            continue
+        try:
+            config = get_active_config(provider_id, model_id)
+        except (KeyError, RuntimeError, ValueError):
+            continue
+        key = (str(config.get("provider_id") or ""), str(config.get("base_url") or ""))
+        if key in seen:
+            continue
+        config["user_id"] = user_id
+        candidates.append(config)
+        seen.add(key)
+    return candidates

@@ -1,8 +1,9 @@
+# syntax=docker/dockerfile:1
 # Build
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN set -eu; \
+RUN --mount=type=cache,target=/root/.npm set -eu; \
     for attempt in 1 2 3; do \
         rm -rf node_modules; \
         if npm ci --include=dev --no-audit --no-fund && test -x node_modules/.bin/tsc; then \

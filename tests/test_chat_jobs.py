@@ -57,6 +57,29 @@ class ChatJobPersistenceTest(unittest.TestCase):
         self.assertEqual(events[0]["id"], second)
         self.assertEqual(events[-1]["type"], "done")
 
+    def test_retry_keeps_failed_pair_and_creates_a_new_attempt(self):
+        original = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:retry",
+            message="tente isto",
+            provider={"provider_id": "a", "model_id": "same-model"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+        ChatJobRepo.finish(original["id"], "failed", "upstream failed")
+
+        retried = ChatJobRepo.retry_failed_as_new(
+            original["id"], self.user.id, f"retry-{uuid.uuid4().hex}"
+        )
+        conversation = ConversationRepo.export_for_user(self.user.id)[0]
+
+        self.assertNotEqual(retried["id"], original["id"])
+        self.assertEqual(retried["model_id"], "same-model")
+        self.assertEqual(retried["message"], "tente isto")
+        self.assertEqual(len(conversation["messages"]), 4)
+        self.assertEqual(ChatJobRepo.get(original["id"], self.user.id)["status"], "failed")
+
     def test_conversation_activity_tracks_running_and_unread_completion(self):
         job = ChatJobRepo.create_with_messages(
             user_id=self.user.id,

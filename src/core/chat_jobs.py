@@ -33,7 +33,12 @@ from src.core.skill_runtime import (
     runtime_skill_activity,
     user_has_personal_rag,
 )
-from src.core.user_provider_manager import get_active_config_for_user
+from src.core.user_provider_manager import (
+    get_active_config_for_user,
+    get_provider_config_for_user,
+    get_same_model_fallback_configs_for_user,
+    metadata_from_config,
+)
 from src.core.workspace_agent import (
     create_workspace_plan,
     model_requests_workspace,
@@ -244,7 +249,19 @@ async def process_chat_job(job_id: str) -> None:
             await _repo_call(ChatJobRepo.finish, job_id, "completed")
             return
 
-        provider_config = get_active_config_for_user(user_id)
+        if job.get("provider_id") and job.get("model_id"):
+            try:
+                provider_config = get_provider_config_for_user(
+                    user_id, str(job["provider_id"]), str(job["model_id"])
+                )
+            except ValueError:
+                active_config = get_active_config_for_user(user_id)
+                active_model = str(active_config.get("model_id") or "")
+                if active_model and active_model != str(job["model_id"]):
+                    raise
+                provider_config = active_config
+        else:
+            provider_config = get_active_config_for_user(user_id)
         # Resolve account-specific endpoints before the agent planner or any
         # other subsystem can make an outbound provider request.
         from src.core.llm import resolve_provider_config
@@ -720,7 +737,30 @@ async def process_chat_job(job_id: str) -> None:
             response_mode=str(job.get("response_mode") or "normal"),
             reasoning_effort=str(job.get("reasoning_effort") or "low"),
         )
-        async for typ, text in engine.chat_stream(model_message):
+        fallback_configs = get_same_model_fallback_configs_for_user(user_id, provider_config)
+        resolved_fallbacks = []
+        for fallback_config in fallback_configs:
+            try:
+                resolved_fallbacks.append(await resolve_provider_config(fallback_config))
+            except Exception:
+                continue
+
+        async def on_provider_fallback(failed: dict, next_config: dict, exc: Exception) -> None:
+            failed_name = str(failed.get("name") or failed.get("provider_id") or "Provider")
+            next_name = str(next_config.get("name") or next_config.get("provider_id") or "outro provider")
+            await _add_event(
+                job_id,
+                "status",
+                f"{failed_name} falhou. Tentando {next_name} com o mesmo modelo {provider_config.get('model_id')}...",
+            )
+            await _repo_call(ChatJobRepo.update_provider, job_id, metadata_from_config(next_config))
+
+        stream = (
+            engine.chat_stream_with_fallback(model_message, resolved_fallbacks, on_provider_fallback)
+            if resolved_fallbacks
+            else engine.chat_stream(model_message)
+        )
+        async for typ, text in stream:
             if typ == "reasoning":
                 await _add_event(job_id, "reasoning", text)
             else:
@@ -730,6 +770,12 @@ async def process_chat_job(job_id: str) -> None:
             create_suggestion_from_message(user_id, message)
         except Exception:
             pass
+        if engine.provider_config is not provider_config:
+            await _repo_call(
+                ChatJobRepo.update_provider,
+                job_id,
+                metadata_from_config(engine.provider_config or provider_config),
+            )
         await _repo_call(ChatJobRepo.finish, job_id, "completed")
     except asyncio.CancelledError:
         if job_id in _cancelled_by_user:
