@@ -320,6 +320,43 @@ def use_global_provider(user_id: int) -> bool:
         db.close()
 
 
+def activate_builtin_for_user(user_id: int, provider_id: str, model_id: str = "") -> dict:
+    """Create/update a keyless per-user binding for an OAuth built-in provider."""
+    provider = get_provider(provider_id)
+    if not provider or provider_id not in {"grok-oauth", "antigravity"}:
+        raise ValueError("Provider OAuth por usuario nao suportado")
+    enabled_models = [model for model in provider.get("models", []) if model.get("enabled", True)]
+    selected_model = next((model for model in enabled_models if model.get("id") == model_id), None)
+    if not selected_model:
+        selected_model = next((model for model in enabled_models if model.get("active")), None) or (enabled_models[0] if enabled_models else None)
+    if not selected_model:
+        raise ValueError("Nenhum modelo ativo neste provider")
+
+    db = get_session_db()
+    try:
+        db.query(UserProviderConfig).filter(UserProviderConfig.user_id == user_id).update({"is_default": False})
+        row = db.query(UserProviderConfig).filter(
+            UserProviderConfig.user_id == user_id,
+            UserProviderConfig.provider_id == provider_id,
+        ).order_by(UserProviderConfig.id.desc()).first()
+        if not row:
+            row = UserProviderConfig(user_id=user_id, provider_id=provider_id)
+            db.add(row)
+        row.display_name = str(provider.get("name") or provider_id)
+        row.base_url = str(provider.get("base_url") or "")
+        row.model = str(selected_model.get("id") or "")
+        row.api_format = str(provider.get("api_format") or "openai_responses")
+        row.api_key_encrypted = ""
+        row.is_enabled = True
+        row.is_default = True
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        return _public_config(row)
+    finally:
+        db.close()
+
+
 def get_active_config_for_user(user_id: int) -> dict:
     db = get_session_db()
     try:

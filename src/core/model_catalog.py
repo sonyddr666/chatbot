@@ -20,6 +20,7 @@ CACHE_TTL_SECONDS = 24 * 60 * 60
 
 _lock = threading.Lock()
 _catalog: dict | None = None
+_catalog_loaded_at = 0.0
 
 # Models explicitly recommended in OpenCode's model guide.  models.dev itself
 # describes capabilities but intentionally has no model-level recommendation.
@@ -144,21 +145,125 @@ def _fetch_catalog() -> dict:
 
 
 def get_catalog() -> dict:
-    global _catalog
-    if _catalog is not None:
+    global _catalog, _catalog_loaded_at
+    if _catalog is not None and time.monotonic() - _catalog_loaded_at < CACHE_TTL_SECONDS:
         return _catalog
     with _lock:
-        if _catalog is not None:
+        if _catalog is not None and time.monotonic() - _catalog_loaded_at < CACHE_TTL_SECONDS:
             return _catalog
         fresh = _read_cache(allow_stale=False)
         if fresh:
             _catalog = fresh
+            _catalog_loaded_at = time.monotonic()
             return fresh
         try:
             _catalog = _fetch_catalog()
         except Exception:
             _catalog = _read_cache(allow_stale=True)
+        _catalog_loaded_at = time.monotonic()
         return _catalog
+
+
+def refresh_catalog() -> dict:
+    """Atualiza imediatamente o snapshot do models.dev."""
+    global _catalog, _catalog_loaded_at
+    with _lock:
+        _catalog = _fetch_catalog()
+        _catalog_loaded_at = time.monotonic()
+        return _catalog
+
+
+def catalog_updated_at() -> str | None:
+    """Data ISO do snapshot local, quando disponivel."""
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(os.path.getmtime(CACHE_FILE), timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
+def list_catalog_providers(query: str = "") -> list[dict]:
+    """Lista todo o catalogo mundial sem misturar providers com os configurados."""
+    needle = str(query or "").strip().lower()
+    result = []
+    for provider_id, raw in get_catalog().items():
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or provider_id)
+        models = raw.get("models") or {}
+        model_search_parts: list[str] = []
+        if isinstance(models, dict):
+            for model_id, model_raw in models.items():
+                if isinstance(model_raw, dict):
+                    model_search_parts.extend((
+                        str(model_id),
+                        str(model_raw.get("name") or ""),
+                        str(model_raw.get("family") or ""),
+                    ))
+                else:
+                    model_search_parts.append(str(model_id))
+        model_search_index = " ".join(model_search_parts).lower()
+        if needle and needle not in f"{provider_id} {name} {model_search_index}".lower():
+            continue
+        result.append({
+            "id": str(provider_id),
+            "name": name,
+            "model_count": len(models) if isinstance(models, dict) else 0,
+            # Permite busca global instantanea no frontend sem uma requisicao por tecla.
+            "model_search_index": model_search_index,
+            "doc": str(raw.get("doc") or ""),
+            "env": [str(value) for value in (raw.get("env") or []) if value],
+            "npm": str(raw.get("npm") or ""),
+        })
+    return sorted(result, key=lambda item: (item["name"].lower(), item["id"]))
+
+
+def _normalize_catalog_model(model_id: str, raw: dict) -> dict:
+    modalities = raw.get("modalities") or {}
+    inputs = modalities.get("input") or []
+    limits = raw.get("limit") or {}
+    return {
+        "id": str(model_id),
+        "name": str(raw.get("name") or model_id),
+        "family": str(raw.get("family") or ""),
+        "context_length": int(limits.get("context") or 0),
+        "output_length": int(limits.get("output") or 0),
+        "supports_images": "image" in inputs,
+        "supports_video": "video" in inputs,
+        "supports_audio": "audio" in inputs,
+        "supports_pdf": "pdf" in inputs,
+        "supports_thinking": bool(raw.get("reasoning")),
+        "supports_tools": bool(raw.get("tool_call")),
+        "release_date": str(raw.get("release_date") or ""),
+        "last_updated": str(raw.get("last_updated") or ""),
+        "cost": raw.get("cost") if isinstance(raw.get("cost"), dict) else {},
+        "catalog_source": "models.dev",
+    }
+
+
+def list_catalog_models(provider_id: str, query: str = "") -> list[dict]:
+    provider = get_catalog().get(str(provider_id))
+    if not isinstance(provider, dict):
+        return []
+    needle = str(query or "").strip().lower()
+    result = []
+    for model_id, raw in (provider.get("models") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        model = _normalize_catalog_model(str(model_id), raw)
+        if needle and needle not in f'{model["id"]} {model["name"]} {model["family"]}'.lower():
+            continue
+        result.append(model)
+    return sorted(result, key=lambda item: (item["name"].lower(), item["id"]))
+
+
+def resolve_catalog_provider_id(provider_id: str) -> str | None:
+    """Encontra a fonte preferencial de um provider configurado."""
+    catalog = get_catalog()
+    for candidate in PROVIDER_CATALOG_IDS.get(provider_id, (provider_id,)):
+        if candidate in catalog:
+            return candidate
+    return None
 
 
 def _candidate_ids(model: dict) -> list[str]:

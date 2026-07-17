@@ -121,13 +121,12 @@ class FrontendStreamingUiTest(unittest.TestCase):
 
         self.assertIn("@lobehub/icons", icon)
         self.assertIn("WorkersAI", icon)
-        self.assertIn("Cerebras", icon)
         self.assertIn("Gemini", icon)
-        for official_icon in (
-            "Zhipu", "OpenCode", "Nvidia", "Minimax", "XiaomiMiMo",
-            "Stepfun", "IBM", "Poolside", "Morph", "Codex",
-        ):
-            self.assertIn(f"@lobehub/icons/es/{official_icon}/components/", icon)
+        self.assertIn("import.meta.glob('/node_modules/@lobehub/icons/es/*/components/Color.js'", icon)
+        self.assertIn("import.meta.glob('/node_modules/@lobehub/icons/es/*/components/Mono.js'", icon)
+        self.assertIn("lobeExports.SubModel", icon)
+        self.assertNotIn("models.dev/logos", icon)
+        self.assertNotIn("lucide-react", icon)
         self.assertIn("<AIProviderIcon", selector)
         self.assertIn("displayedModelName", selector)
         self.assertIn("<AIProviderIcon", message)
@@ -143,6 +142,18 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertNotIn('>ACTIVE</span>', manager)
         self.assertIn('Obter chave API', manager)
         self.assertIn('selected.docs_url', manager)
+
+    def test_provider_order_is_per_user_and_disabled_actions_are_blocked(self):
+        manager = (ROOT / "frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+        repository = (ROOT / "src/db/repository.py").read_text(encoding="utf-8")
+
+        self.assertIn("api.setPreference('provider_order', nextOrder)", manager)
+        self.assertIn("preferences.preferences.provider_order?.value", manager)
+        self.assertIn("draggable", manager)
+        self.assertIn("<GripVertical", manager)
+        self.assertIn("providerEnabled={selected.enabled}", manager)
+        self.assertIn("Provider desativado. Habilite-o antes de testar.", manager)
+        self.assertIn('if key in {"provider_order"}:', repository)
 
     def test_stream_rendering_is_batched_and_frontend_errors_are_recoverable(self):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")

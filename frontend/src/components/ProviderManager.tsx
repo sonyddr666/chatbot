@@ -1,8 +1,9 @@
-import { memo, useState, useEffect, useCallback, useRef } from 'react'
+import { memo, useState, useEffect, useCallback, useDeferredValue, useMemo, useRef } from 'react'
 import {
   X, Plus, Trash2, Check,
   Server, Globe, Eye, EyeOff, Power, PowerOff,
   Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft, Gauge, ExternalLink,
+  GripVertical, Search,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
@@ -39,6 +40,7 @@ interface ProviderInfo {
   active_model_id?: string | null
   api_key_url?: string
   docs_url?: string
+  catalog_provider_id?: string
   models: ModelInfo[]
   has_key?: boolean
   key_source?: string
@@ -65,6 +67,24 @@ interface Props {
   open: boolean
   onClose: () => void
   isAdmin?: boolean
+}
+
+interface CatalogProviderInfo {
+  id: string
+  name: string
+  model_count: number
+  doc?: string
+  env?: string[]
+  model_search_index?: string
+}
+
+interface CatalogModelInfo extends ModelInfo {
+  family?: string
+  output_length?: number
+  release_date?: string
+  last_updated?: string
+  supports_tools?: boolean
+  supports_pdf?: boolean
 }
 
 // ─── API helpers ────────────────────────────────────────────────────
@@ -104,6 +124,21 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [userProviders, setUserProviders] = useState<UserProviderInfo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [providerOrder, setProviderOrder] = useState<string[]>([])
+  const [draggedProviderId, setDraggedProviderId] = useState<string | null>(null)
+  const [providerView, setProviderView] = useState<'active' | 'hidden' | 'catalog'>('active')
+  const [catalogProviders, setCatalogProviders] = useState<CatalogProviderInfo[]>([])
+  const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<string | null>(null)
+  const [catalogSearch, setCatalogSearch] = useState('')
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false)
+  const [selectedCatalog, setSelectedCatalog] = useState<CatalogProviderInfo | null>(null)
+  const [catalogModels, setCatalogModels] = useState<CatalogModelInfo[]>([])
+  const [catalogModelSearch, setCatalogModelSearch] = useState('')
+  const [catalogModelsLoading, setCatalogModelsLoading] = useState(false)
+  const catalogModelsCacheRef = useRef(new Map<string, CatalogModelInfo[]>())
+  const [syncingCatalog, setSyncingCatalog] = useState(false)
+  const [modelView, setModelView] = useState<'active' | 'hidden'>('active')
   const [loading, setLoading] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
   const [showPersonalForm, setShowPersonalForm] = useState(false)
@@ -115,6 +150,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   // Form state
   const [formName, setFormName] = useState('')
+  const [formProviderId, setFormProviderId] = useState('')
+  const [formCatalogProviderId, setFormCatalogProviderId] = useState('')
   const [formBaseUrl, setFormBaseUrl] = useState('')
   const [formEndpoint, setFormEndpoint] = useState('')
   const [formApiKey, setFormApiKey] = useState('')
@@ -143,13 +180,18 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     const requestId = ++providerLoadRequestRef.current
     setLoading(true)
     try {
-      const [data, personal] = await Promise.all([
+      const [data, personal, preferences] = await Promise.all([
         apiReq<ProviderInfo[]>(`${API}/providers/manage`),
         api.listUserProviders(),
+        api.listPreferences(),
       ])
       if (requestId !== providerLoadRequestRef.current) return
       setProviders(data)
       setUserProviders(personal.providers)
+      const savedOrder = preferences.preferences.provider_order?.value
+      setProviderOrder(Array.isArray(savedOrder)
+        ? savedOrder.filter((value): value is string => typeof value === 'string')
+        : [])
       setSelectedId(current => {
         if (current && data.some(provider => provider.id === current)) return current
         return data.find(provider => provider.active)?.id || data[0]?.id || null
@@ -162,9 +204,64 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     }
   }, [])
 
+  const loadCatalog = useCallback(async (query = '') => {
+    setCatalogLoading(true)
+    try {
+      const data = await apiReq<{providers: CatalogProviderInfo[]; updated_at: string | null}>(
+        `${API}/providers/catalog${query ? `?q=${encodeURIComponent(query)}` : ''}`
+      )
+      setCatalogProviders(data.providers)
+      setCatalogUpdatedAt(data.updated_at)
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setCatalogLoading(false)
+    }
+  }, [])
+
+  const openCatalogProvider = useCallback(async (provider: CatalogProviderInfo, modelQuery = '') => {
+    setSelectedCatalog(provider)
+    setSelectedId(null)
+    setCatalogModelSearch(modelQuery)
+    const cachedModels = catalogModelsCacheRef.current.get(provider.id)
+    if (cachedModels) {
+      setCatalogModels(cachedModels)
+      setCatalogModelsLoading(false)
+      return
+    }
+    setCatalogModelsLoading(true)
+    try {
+      const data = await apiReq<{models: CatalogModelInfo[]}>(`${API}/providers/catalog/${encodeURIComponent(provider.id)}/models`)
+      catalogModelsCacheRef.current.set(provider.id, data.models)
+      setCatalogModels(data.models)
+    } catch (err: any) {
+      toast.error(err.message)
+      setCatalogModels([])
+    } finally {
+      setCatalogModelsLoading(false)
+    }
+  }, [])
+
+  const refreshWorldCatalog = async () => {
+    setCatalogRefreshing(true)
+    try {
+      const result = await apiReq<{providers: number; models: number}>(`${API}/providers/catalog/refresh`, { method: 'POST' })
+      catalogModelsCacheRef.current.clear()
+      await loadCatalog()
+      if (selectedCatalog) await openCatalogProvider(selectedCatalog)
+      toast.success(`Catalogo atualizado: ${result.providers} providers e ${result.models} modelos`)
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setCatalogRefreshing(false)
+    }
+  }
+
   useEffect(() => {
     if (open) {
       setSelectedId(null)
+      setSelectedCatalog(null)
+      setProviderView('active')
       loadProviders()
       setShowAddForm(false)
       setShowPersonalForm(false)
@@ -173,12 +270,84 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   }, [open, loadProviders])
 
   const selected = providers.find(p => p.id === selectedId) || null
+  const catalogConfiguredProvider = selectedCatalog
+    ? providers.find(provider => provider.id === selectedCatalog.id) || null
+    : null
   const isCloudflareSelected = !!selected && (
     selected.id.toLowerCase().includes('cloudflare')
     || selected.base_url.toLowerCase().includes('api.cloudflare.com')
   )
-  const builtinProviders = providers.filter(p => p.provider_type === 'builtin')
-  const customProviders = providers.filter(p => p.provider_type === 'custom')
+  const providerOrderIndex = new Map(providerOrder.map((id, index) => [id, index]))
+  const sortProviders = (items: ProviderInfo[]) => items
+    .map((provider, originalIndex) => ({ provider, originalIndex }))
+    .sort((left, right) => {
+      const leftIndex = providerOrderIndex.get(left.provider.id)
+      const rightIndex = providerOrderIndex.get(right.provider.id)
+      if (leftIndex === undefined && rightIndex === undefined) return left.originalIndex - right.originalIndex
+      if (leftIndex === undefined) return 1
+      if (rightIndex === undefined) return -1
+      return leftIndex - rightIndex
+    })
+    .map(item => item.provider)
+  const visibleProviders = providers.filter(provider => providerView === 'hidden' ? !provider.enabled : provider.enabled)
+  const visibleUserProviders = userProviders.filter(provider => providerView === 'hidden' ? !provider.is_enabled : provider.is_enabled)
+  const deferredCatalogSearch = useDeferredValue(catalogSearch)
+  const normalizedCatalogSearch = deferredCatalogSearch.trim().toLowerCase()
+  const visibleCatalogProviders = useMemo(() => catalogProviders.filter(provider => (
+    !normalizedCatalogSearch
+    || provider.name.toLowerCase().includes(normalizedCatalogSearch)
+    || provider.id.toLowerCase().includes(normalizedCatalogSearch)
+    || provider.model_search_index?.includes(normalizedCatalogSearch)
+  )), [catalogProviders, normalizedCatalogSearch])
+  const builtinProviders = sortProviders(visibleProviders.filter(p => p.provider_type === 'builtin'))
+  const customProviders = sortProviders(visibleProviders.filter(p => p.provider_type === 'custom'))
+  const displayedModels = selected?.models.filter(model => modelView === 'hidden' ? !model.enabled : model.enabled) || []
+
+  useEffect(() => {
+    if (open && providerView === 'catalog' && catalogProviders.length === 0) void loadCatalog()
+  }, [open, providerView, catalogProviders.length, loadCatalog])
+
+  useEffect(() => {
+    if (providerView !== 'catalog') return
+    if (!normalizedCatalogSearch) {
+      setCatalogModelSearch('')
+      return
+    }
+    const selectedStillVisible = selectedCatalog
+      ? visibleCatalogProviders.find(provider => provider.id === selectedCatalog.id)
+      : undefined
+    const target = selectedStillVisible || visibleCatalogProviders[0]
+    if (!target) {
+      setSelectedCatalog(null)
+      setCatalogModels([])
+      return
+    }
+    const providerItselfMatches = `${target.name} ${target.id}`.toLowerCase().includes(normalizedCatalogSearch)
+    const modelQuery = providerItselfMatches ? '' : deferredCatalogSearch.trim()
+    if (selectedCatalog?.id === target.id) {
+      setCatalogModelSearch(modelQuery)
+    } else {
+      void openCatalogProvider(target, modelQuery)
+    }
+  }, [deferredCatalogSearch, normalizedCatalogSearch, openCatalogProvider, providerView, selectedCatalog, visibleCatalogProviders])
+
+  const handleProviderDrop = async (targetId: string) => {
+    const sourceId = draggedProviderId
+    setDraggedProviderId(null)
+    if (!sourceId || sourceId === targetId) return
+    const currentIds = sortProviders(providers).map(provider => provider.id)
+    const nextOrder = currentIds.filter(id => id !== sourceId)
+    const targetIndex = nextOrder.indexOf(targetId)
+    nextOrder.splice(targetIndex < 0 ? nextOrder.length : targetIndex, 0, sourceId)
+    const previousOrder = providerOrder
+    setProviderOrder(nextOrder)
+    try {
+      await api.setPreference('provider_order', nextOrder)
+    } catch (err) {
+      setProviderOrder(previousOrder)
+      toast.error(err instanceof Error ? err.message : 'Falha ao salvar a ordem dos providers')
+    }
+  }
 
   const resetPersonalForm = () => {
     setPersonalProviderId('')
@@ -329,7 +498,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       await loadProviders()
       await syncChatProvider()
       if (isAdminBackup) {
-        toast.success(`Backup restaurado: ${result.providers?.keys || 0} chave(s), ${result.codex?.accounts || 0} Codex, ${result.antigravity?.accounts || 0} Antigravity`)
+        toast.success(`Backup restaurado: ${result.providers?.keys || 0} chave(s), ${result.codex?.accounts || 0} Codex, ${result.antigravity?.accounts || 0} Antigravity, ${result.grok?.accounts || 0} Grok`)
         return
       }
       const customChanged = (result.custom?.created?.length || 0) + (result.custom?.updated?.length || 0)
@@ -417,6 +586,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   const handleTestProvider = async () => {
     if (!selectedId) return
+    if (!selected?.enabled) {
+      toast.error('Provider desativado. Habilite-o antes de testar.')
+      return
+    }
     setTestingProvider(true)
     setTestResult(null)
     try {
@@ -445,6 +618,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   const runModelBenchmark = async (modelId: string, notify = true) => {
     if (!selectedId) return null
+    if (!selected?.enabled) {
+      if (notify) toast.error('Provider desativado. Habilite-o antes de testar.')
+      return null
+    }
     setBenchmarkingModels(prev => ({ ...prev, [modelId]: true }))
     try {
       const result = await apiReq<BenchmarkResult>(`${API}/providers/benchmark`, {
@@ -474,6 +651,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   const handleBenchmarkAll = async () => {
     if (!selected) return
+    if (!selected.enabled) {
+      toast.error('Provider desativado. Habilite-o antes de testar.')
+      return
+    }
     const enabledModels = selected.models.filter(model => model.enabled)
     if (!enabledModels.length) {
       toast.error('Nenhum modelo habilitado para testar')
@@ -500,9 +681,14 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   // ─── Ativar provider ───────────────────────────────────────────
 
   const handleActivate = async (id: string) => {
+    const provider = providers.find(item => item.id === id)
+    if (provider && !provider.enabled) {
+      toast.error('Provider desativado. Habilite-o antes de ativar.')
+      return
+    }
     try {
       await apiReq(`${API}/providers/manage/${id}/activate`, { method: 'POST' })
-      await api.useGlobalProvider()
+      if (!['grok-oauth', 'antigravity'].includes(id)) await api.useGlobalProvider()
       setProviders(prev => prev.map(p => ({ ...p, active: p.id === id })))
       toast.success(`Provider ativado`)
       await syncChatProvider()
@@ -604,6 +790,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   const resetForm = () => {
     setFormName('')
+    setFormProviderId('')
+    setFormCatalogProviderId('')
     setFormBaseUrl('')
     setFormEndpoint('')
     setFormApiKey('')
@@ -623,6 +811,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       return
     }
     setFormName(p.name)
+    setFormProviderId(p.id)
     setFormBaseUrl(p.base_url)
     setFormEndpoint(p.endpoint || '')
     setFormApiKey('')
@@ -666,6 +855,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           })
         }
         const body = {
+          id: formProviderId.trim(),
+          catalog_provider_id: formCatalogProviderId.trim(),
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
           endpoint: formEndpoint.trim(),
@@ -799,6 +990,23 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     }
   }
 
+  const handleSyncCatalog = async (providerId: string, catalogProviderId = '') => {
+    setSyncingCatalog(true)
+    try {
+      const result = await apiReq<{total: number; added_hidden: number}>(
+        `${API}/providers/manage/${encodeURIComponent(providerId)}/sync-catalog`,
+        { method: 'POST', body: JSON.stringify({ catalog_provider_id: catalogProviderId }) },
+      )
+      await loadProviders()
+      setModelView('hidden')
+      toast.success(`${result.total} modelos sincronizados; ${result.added_hidden} novos em Ocultos`)
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setSyncingCatalog(false)
+    }
+  }
+
   // ─── Selecionar modelo ativo (1 clique: ativa provider + modelo) ─
 
   const handleSelectModel = async (modelId: string, providerId?: string) => {
@@ -806,6 +1014,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     if (!targetProviderId) return
     try {
       const provider = providers.find(p => p.id === targetProviderId)
+      if (provider && !provider.enabled) {
+        toast.error('Provider desativado. Habilite-o antes de usar um modelo.')
+        return
+      }
       // Se provider não estiver ativo, ativa primeiro
       if (!provider?.active) {
         await apiReq(`${API}/providers/manage/${targetProviderId}/activate`, { method: 'POST' })
@@ -840,6 +1052,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     chat_completions: 'Chat Completions',
     anthropic_messages: 'Anthropic Messages',
     responses: 'Responses API',
+    openai_responses: 'OpenAI Responses',
     openai: 'OpenAI Compatible',
   }
 
@@ -868,7 +1081,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       >
         {/* ─── Sidebar ─── */}
         <div
-          className={`${showPersonalForm || showAddForm || selected ? 'hidden md:flex' : 'flex'} w-full flex-shrink-0 flex-col overflow-hidden border-r md:w-72`}
+          className={`${showPersonalForm || showAddForm || selected || selectedCatalog ? 'hidden md:flex' : 'flex'} w-full flex-shrink-0 flex-col overflow-hidden border-r md:w-72`}
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
           {/* Header */}
@@ -900,11 +1113,81 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               </button>
 
             </div>
+            <div className="mt-3 grid grid-cols-3 gap-1 rounded-xl p-1" style={{ background: 'var(--bg-tertiary)' }}>
+              {([
+                ['active', 'Ativos'],
+                ['hidden', 'Ocultos'],
+                ['catalog', 'Mundo'],
+              ] as const).map(([view, label]) => (
+                <button
+                  key={view}
+                  onClick={() => {
+                    setProviderView(view)
+                    setSelectedId(null)
+                    setSelectedCatalog(null)
+                    setShowAddForm(false)
+                    setShowPersonalForm(false)
+                  }}
+                  className="rounded-lg px-1 py-1.5 text-[11px] font-semibold"
+                  style={{
+                    background: providerView === view ? 'var(--bg-primary)' : 'transparent',
+                    color: providerView === view ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Lista */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {loading && providers.length === 0 ? (
+            {providerView === 'catalog' ? (
+              <>
+                <div className="sticky top-0 z-10 space-y-2 pb-2" style={{ background: 'var(--bg-secondary)' }}>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-2.5" style={{ color: 'var(--text-tertiary)' }} />
+                    <input
+                      value={catalogSearch}
+                      onChange={event => setCatalogSearch(event.target.value)}
+                      placeholder="Buscar no mundo..."
+                      className="w-full rounded-xl border py-2 pl-9 pr-3 text-xs"
+                      style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between px-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>{visibleCatalogProviders.length} de {catalogProviders.length} providers</span>
+                    {catalogUpdatedAt && <span>{new Date(catalogUpdatedAt).toLocaleDateString('pt-BR')}</span>}
+                  </div>
+                </div>
+                {catalogLoading ? (
+                  <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin" /></div>
+                ) : visibleCatalogProviders.length === 0 ? (
+                  <p className="px-3 py-8 text-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    Nenhum provider encontrado para “{catalogSearch}”.
+                  </p>
+                ) : visibleCatalogProviders.map(provider => (
+                  <button
+                    key={provider.id}
+                    onClick={() => {
+                      const providerItselfMatches = `${provider.name} ${provider.id}`.toLowerCase().includes(normalizedCatalogSearch)
+                      void openCatalogProvider(provider, providerItselfMatches ? '' : deferredCatalogSearch.trim())
+                    }}
+                    className="flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left"
+                    style={{
+                      borderColor: selectedCatalog?.id === provider.id ? 'var(--accent)' : 'transparent',
+                      background: selectedCatalog?.id === provider.id ? 'var(--accent-light)' : 'transparent',
+                    }}
+                  >
+                    <ProviderVisualIcon provider={`${provider.name} ${provider.id}`} size={19} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{provider.name}</span>
+                      <span className="block truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>{provider.model_count} modelos · {provider.id}</span>
+                    </span>
+                  </button>
+                ))}
+              </>
+            ) : loading && providers.length === 0 ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 size={20} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
               </div>
@@ -921,6 +1204,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     key={p.id}
                     provider={p}
                     selected={selectedId === p.id}
+                    dragging={draggedProviderId === p.id}
+                    onDragStart={() => setDraggedProviderId(p.id)}
+                    onDragEnd={() => setDraggedProviderId(null)}
+                    onDrop={() => void handleProviderDrop(p.id)}
                     onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
                     onEdit={() => handleEditProvider(p)}
                   />
@@ -939,6 +1226,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                         key={p.id}
                         provider={p}
                         selected={selectedId === p.id}
+                        dragging={draggedProviderId === p.id}
+                        onDragStart={() => setDraggedProviderId(p.id)}
+                        onDragEnd={() => setDraggedProviderId(null)}
+                        onDrop={() => void handleProviderDrop(p.id)}
                         onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
                         onEdit={() => handleEditProvider(p)}
                         onDelete={() => handleDelete(p.id)}
@@ -965,12 +1256,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   </div>
                 </div>
                 <div className="space-y-1">
-                  {userProviders.length === 0 ? (
+                  {visibleUserProviders.length === 0 ? (
                     <p className="px-3 py-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                      Nenhum provider pessoal ainda.
+                      {providerView === 'hidden' ? 'Nenhum provider pessoal oculto.' : 'Nenhum provider pessoal ativo.'}
                     </p>
                   ) : (
-                    userProviders.map(provider => (
+                    visibleUserProviders.map(provider => (
                       <div
                         key={provider.id}
                         className="px-3 py-2 rounded-xl border"
@@ -1073,7 +1364,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
         </div>
 
         {/* ─── Main Area ─── */}
-        <div className={`${showPersonalForm || showAddForm || selected ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col overflow-hidden`}>
+        <div className={`${showPersonalForm || showAddForm || selected || selectedCatalog ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col overflow-hidden`}>
           <div className="flex items-center justify-between border-b px-3 py-3 md:hidden" style={{ borderColor: 'var(--border)' }}>
             <button
               type="button"
@@ -1260,6 +1551,19 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 </h3>
 
                 <div className="space-y-4">
+                  {!editing && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider ID</label>
+                      <input
+                        type="text"
+                        value={formProviderId}
+                        onChange={e => setFormProviderId(e.target.value)}
+                        placeholder="anthropic"
+                        className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                        style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+                      />
+                    </div>
+                  )}
                   {/* Nome */}
                   <div>
                     <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
@@ -1431,6 +1735,34 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 </div>
               </div>
             </div>
+          ) : selectedCatalog ? (
+            <CatalogProviderPanel
+              provider={selectedCatalog}
+              models={catalogModels}
+              loading={catalogModelsLoading}
+              query={catalogModelSearch}
+              onQueryChange={setCatalogModelSearch}
+              configuredProvider={catalogConfiguredProvider}
+              isAdmin={isAdmin}
+              refreshing={catalogRefreshing}
+              syncing={syncingCatalog}
+              onRefresh={() => void refreshWorldCatalog()}
+              onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
+              onConfigure={() => {
+                resetForm()
+                setFormProviderId(selectedCatalog.id)
+                setFormCatalogProviderId(selectedCatalog.id)
+                setFormName(selectedCatalog.name)
+                const firstModel = catalogModels[0]
+                if (firstModel) {
+                  setFormModelId(firstModel.id)
+                  setFormModelName(firstModel.name)
+                  setFormModelCtx(String(firstModel.context_length || 128000))
+                }
+                setSelectedCatalog(null)
+                setShowAddForm(true)
+              }}
+            />
           ) : selected ? (
             /* ─── Detalhes do Provider ─── */
             <div className="flex-1 overflow-y-auto p-4 sm:p-6">
@@ -1438,7 +1770,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                    <AIProviderIcon provider={`${selected.name} ${selected.id}`} size={24} className="flex-shrink-0" />
+                    <ProviderVisualIcon provider={`${selected.name} ${selected.id}`} size={24} className="flex-shrink-0" />
                     <h3 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{selected.name}</h3>
                     {selected.active && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -1493,7 +1825,9 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   {!selected.active && (
                     <button
                       onClick={() => handleActivate(selected.id)}
-                      className="px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-90"
+                      disabled={!selected.enabled}
+                      title={selected.enabled ? 'Ativar provider' : 'Habilite o provider primeiro'}
+                      className="px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
                       style={{ background: '#dcfce7', color: '#16a34a' }}
                     >
                       <Power size={12} />
@@ -1540,13 +1874,14 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 <InfoCard
                   label="API Key"
                   value={
-                    ['codex-chatgpt', 'antigravity'].includes(selected.id)
+                    ['codex-chatgpt', 'antigravity', 'grok-oauth'].includes(selected.id)
                       ? (selected.has_key ? 'OAuth conectado' : 'OAuth não conectado')
                       : (selected.has_key ? `${(selected.api_key || '').substring(0, 12)}...` : 'Não configurada')
                   }
                   icon={<Eye size={16} />}
                   className="cursor-pointer hover:opacity-80"
                   onClick={() => {
+                    if (['codex-chatgpt', 'antigravity', 'grok-oauth'].includes(selected.id)) return
                     setLocalApiKey('')
                     setCloudflareAccounts([])
                     setCloudflareAccountId('')
@@ -1685,12 +2020,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               <div className="flex gap-2 mb-4">
                 <button
                   onClick={handleTestProvider}
-                  disabled={testingProvider}
+                  disabled={testingProvider || !selected.enabled || !selected.has_key}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all hover:opacity-90"
                   style={{
                     background: selected.has_key ? 'var(--accent)' : 'var(--border)',
                     color: selected.has_key ? '#fff' : 'var(--text-tertiary)',
-                    cursor: selected.has_key ? 'pointer' : 'not-allowed',
+                    cursor: selected.enabled && selected.has_key ? 'pointer' : 'not-allowed',
                   }}
                 >
                   {testingProvider ? (
@@ -1736,16 +2071,35 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
                   <div>
                     <h4 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                      Models ({selected.models.length})
+                      Modelos ({displayedModels.length}/{selected.models.length})
                     </h4>
                     <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                       Medicao direta, sem agente, skills, RAG ou historico
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex rounded-lg p-0.5" style={{ background: 'var(--bg-tertiary)' }}>
+                      <button onClick={() => setModelView('active')} className="rounded-md px-2 py-1 text-[10px] font-semibold" style={{ background: modelView === 'active' ? 'var(--bg-primary)' : 'transparent', color: 'var(--text-primary)' }}>
+                        Ativos ({selected.models.filter(model => model.enabled).length})
+                      </button>
+                      <button onClick={() => setModelView('hidden')} className="rounded-md px-2 py-1 text-[10px] font-semibold" style={{ background: modelView === 'hidden' ? 'var(--bg-primary)' : 'transparent', color: 'var(--text-primary)' }}>
+                        Ocultos ({selected.models.filter(model => !model.enabled).length})
+                      </button>
+                    </div>
+                    {isAdmin && !['antigravity', 'codex-chatgpt', 'grok-oauth'].includes(selected.id) && (
+                      <button
+                        onClick={() => void handleSyncCatalog(selected.id)}
+                        disabled={syncingCatalog}
+                        className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
+                        style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                        title="Buscar a lista atual no Models.dev; novos entram em Ocultos"
+                      >
+                        <RefreshCw size={12} className={syncingCatalog ? 'animate-spin' : ''} /> Sincronizar
+                      </button>
+                    )}
                     <button
                       onClick={handleBenchmarkAll}
-                      disabled={benchmarkingAll || !selected.models.some(model => model.enabled)}
+                      disabled={!selected.enabled || benchmarkingAll || !selected.models.some(model => model.enabled)}
                       className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
                       style={{ background: '#f97316', color: '#fff' }}
                       title="Faz uma chamada real por modelo, em sequencia"
@@ -1779,18 +2133,19 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 )}
 
                 <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                  {selected.models.length === 0 ? (
+                  {displayedModels.length === 0 ? (
                     <div className="px-4 py-6 text-center text-sm" style={{ color: 'var(--text-tertiary)' }}>
-                      No models configured. Click "Add Model" to add one.
+                      {modelView === 'hidden' ? 'Nenhum modelo oculto.' : 'Nenhum modelo ativo. Abra Ocultos para habilitar um.'}
                     </div>
                   ) : (
-                    selected.models.map(model => (
+                    displayedModels.map(model => (
                       <ModelRow
                         key={model.id}
                         model={model}
                         provider={`${selected.name} ${selected.id}`}
                         isBuiltin={selected.provider_type === 'builtin'}
                         readOnly={selected.id === 'antigravity'}
+                        providerEnabled={selected.enabled}
                         onToggle={() => handleToggleModel(model.id, model.enabled)}
                         onSelect={() => handleSelectModel(model.id, selected.id)}
                         onEdit={() => handleEditModel(model)}
@@ -1808,6 +2163,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               {/* ─── Codex ChatGPT: Pool de Contas ─── */}
               {selected.id === 'codex-chatgpt' && isAdmin && <CodexAccountPanel providerId={selected.id} />}
               {selected.id === 'antigravity' && <AntigravityAccountPanel onModelsUpdated={loadProviders} />}
+              {selected.id === 'grok-oauth' && <GrokAccountPanel onModelsUpdated={loadProviders} />}
 
               {/* Add Model Form */}
               {showAddModel && (
@@ -1998,35 +2354,176 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
 // ─── Componentes auxiliares ─────────────────────────────────────────
 
+function ProviderVisualIcon({ provider, model, size = 18, className }: {
+  provider: string
+  model?: string
+  size?: number
+  className?: string
+}) {
+  return (
+    <span className={`inline-flex shrink-0 items-center justify-center ${className || ''}`} style={{ width: size, height: size }}>
+      <AIProviderIcon provider={provider} model={model} size={size} />
+    </span>
+  )
+}
+
+function CatalogProviderPanel({
+  provider, models, loading, query, onQueryChange, configuredProvider, isAdmin,
+  refreshing, syncing, onRefresh, onSync, onConfigure,
+}: {
+  provider: CatalogProviderInfo
+  models: CatalogModelInfo[]
+  loading: boolean
+  query: string
+  onQueryChange: (value: string) => void
+  configuredProvider: ProviderInfo | null
+  isAdmin: boolean
+  refreshing: boolean
+  syncing: boolean
+  onRefresh: () => void
+  onSync: () => void
+  onConfigure: () => void
+}) {
+  const needle = query.trim().toLowerCase()
+  const visible = models.filter(model => !needle || `${model.name} ${model.id} ${model.family || ''}`.toLowerCase().includes(needle))
+  return (
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderVisualIcon provider={`${provider.name} ${provider.id}`} size={32} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{provider.name}</h3>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>CATALOGO</span>
+            </div>
+            <p className="font-mono text-xs" style={{ color: 'var(--text-tertiary)' }}>{provider.id} · {provider.model_count} modelos</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {provider.doc && (
+            <a href={provider.doc} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold" style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+              <ExternalLink size={13} /> Documentacao
+            </a>
+          )}
+          {isAdmin && (
+            <button onClick={onRefresh} disabled={refreshing} className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold disabled:opacity-50" style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} /> Atualizar catalogo
+            </button>
+          )}
+          {isAdmin && configuredProvider && (
+            <button onClick={onSync} disabled={syncing} className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
+              {syncing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Sincronizar modelos
+            </button>
+          )}
+          {isAdmin && !configuredProvider && (
+            <button onClick={onConfigure} className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: 'var(--accent)' }}>
+              <Plus size={13} /> Configurar provider
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-xl border p-3 text-xs" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+        <strong style={{ color: 'var(--text-primary)' }}>Biblioteca mundial:</strong>{' '}
+        estes modelos sao referencias do Models.dev. Eles nao entram no chat ate o provider estar configurado e o modelo ser habilitado.
+        {!configuredProvider && <span className="mt-1 block" style={{ color: '#d97706' }}>Este provider ainda nao esta configurado neste sistema.</span>}
+      </div>
+
+      <div className="relative mb-3">
+        <Search size={15} className="absolute left-3 top-2.5" style={{ color: 'var(--text-tertiary)' }} />
+        <input value={query} onChange={event => onQueryChange(event.target.value)} placeholder="Buscar modelo, familia ou ID..." className="w-full rounded-xl border py-2 pl-9 pr-3 text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+      </div>
+
+      <div className="overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+        <div className="border-b px-4 py-3 text-sm font-semibold" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+          Modelos no mundo ({visible.length})
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-10"><Loader2 size={22} className="animate-spin" /></div>
+        ) : visible.length === 0 ? (
+          <p className="p-6 text-center text-sm" style={{ color: 'var(--text-tertiary)' }}>Nenhum modelo encontrado.</p>
+        ) : (
+          <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+            {visible.map(model => (
+              <div key={model.id} className="flex items-start gap-3 px-4 py-3">
+                <ProviderVisualIcon provider={`${provider.name} ${provider.id}`} model={`${model.name} ${model.id}`} size={18} className="mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
+                    {model.supports_images && <span className="rounded px-1.5 py-0.5 text-[10px]" style={{ background: '#f3e8ff', color: '#7e22ce' }}>Visao</span>}
+                    {model.supports_thinking && <span className="rounded px-1.5 py-0.5 text-[10px]" style={{ background: '#ffedd5', color: '#c2410c' }}>Thinking</span>}
+                    {model.supports_tools && <span className="rounded px-1.5 py-0.5 text-[10px]" style={{ background: '#dbeafe', color: '#1d4ed8' }}>Tools</span>}
+                  </div>
+                  <p className="break-all font-mono text-xs" style={{ color: 'var(--text-tertiary)' }}>{model.id}</p>
+                </div>
+                <div className="shrink-0 text-right text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {model.context_length > 0 && <div>{Math.round(model.context_length / 1000)}K ctx</div>}
+                  {model.last_updated && <div>{model.last_updated}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ProviderItem({
-  provider, selected, onClick, onEdit, onDelete,
+  provider, selected, dragging = false, onClick, onEdit, onDelete, onDragStart, onDragEnd, onDrop,
 }: {
   provider: ProviderInfo
   selected: boolean
+  dragging?: boolean
   onClick: () => void
   onEdit?: () => void
   onDelete?: () => void
+  onDragStart?: () => void
+  onDragEnd?: () => void
+  onDrop?: () => void
 }) {
   return (
     <div
+      draggable
+      onDragStart={event => {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', provider.id)
+        onDragStart?.()
+      }}
+      onDragOver={event => {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={event => {
+        event.preventDefault()
+        onDrop?.()
+      }}
+      onDragEnd={onDragEnd}
       onClick={onClick}
-      className="flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer transition-colors group"
+      className="group flex cursor-pointer items-center gap-1.5 rounded-xl border px-2 py-2 transition-all"
       style={{
         background: provider.active ? 'rgba(22, 163, 74, 0.10)' : selected ? 'var(--accent-light)' : 'transparent',
         borderColor: provider.active ? '#16a34a' : 'transparent',
         boxShadow: provider.active ? '0 0 0 1px rgba(22, 163, 74, 0.18)' : 'none',
         color: provider.active ? 'var(--text-primary)' : selected ? 'var(--accent)' : 'var(--text-primary)',
+        opacity: dragging ? 0.45 : 1,
       }}
       onMouseEnter={e => { if (!selected && !provider.active) (e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)' }}
       onMouseLeave={e => { if (!selected && !provider.active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
     >
+      <GripVertical
+        size={14}
+        className="shrink-0 cursor-grab opacity-35 transition-opacity group-hover:opacity-80 active:cursor-grabbing"
+        style={{ color: 'var(--text-tertiary)' }}
+        aria-label="Arrastar para reordenar"
+      />
       {/* Status dot */}
       <span
         className="w-2 h-2 rounded-full flex-shrink-0"
         style={{ background: provider.enabled ? '#16a34a' : '#a1a1aa' }}
       />
 
-      <AIProviderIcon provider={`${provider.name} ${provider.id}`} size={19} className="flex-shrink-0" />
+      <ProviderVisualIcon provider={`${provider.name} ${provider.id}`} size={19} className="flex-shrink-0" />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
@@ -2054,13 +2551,14 @@ function ProviderItem({
 }
 
 function ModelRow({
-  model, provider, isBuiltin, readOnly = false, onToggle, onSelect, onEdit, onDelete,
+  model, provider, isBuiltin, readOnly = false, providerEnabled = true, onToggle, onSelect, onEdit, onDelete,
   onBenchmark, benchmarking = false, benchmark, benchmarkRank,
 }: {
   model: ModelInfo
   provider: string
   isBuiltin: boolean
   readOnly?: boolean
+  providerEnabled?: boolean
   onToggle: () => void
   onSelect: () => void
   onEdit: () => void
@@ -2091,7 +2589,7 @@ function ModelRow({
         borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
       }}>
       <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
-        <AIProviderIcon
+        <ProviderVisualIcon
           provider={provider}
           model={`${model.name} ${model.id}`}
           size={18}
@@ -2182,7 +2680,7 @@ function ModelRow({
         {model.enabled && (
           <button
             onClick={onBenchmark}
-            disabled={benchmarking}
+            disabled={benchmarking || !providerEnabled}
             className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-all hover:opacity-90 disabled:opacity-50"
             style={{ background: 'rgba(249,115,22,0.14)', color: '#f97316' }}
             title="Medir este modelo sem passar pelo agente"
@@ -2198,10 +2696,11 @@ function ModelRow({
             style={{
               background: isActive ? '#16a34a' : 'var(--accent)',
               color: '#fff',
-              opacity: isActive ? 0.6 : 1,
+              opacity: isActive || !providerEnabled ? 0.45 : 1,
+              cursor: !providerEnabled ? 'not-allowed' : 'pointer',
             }}
             title={isActive ? 'Já está ativo' : 'Usar este modelo'}
-            disabled={isActive}
+            disabled={isActive || !providerEnabled}
           >
             {isActive ? '✓ Ativo' : 'Usar'}
           </button>
@@ -2457,6 +2956,237 @@ function AntigravityAccountPanel({ onModelsUpdated }: { onModelsUpdated: () => v
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+interface GrokAccountInfo {
+  id: string
+  email: string
+  label: string
+  expires_at: number
+  access_status: 'unknown' | 'confirmed' | 'blocked' | 'rate_limited' | 'error'
+  last_error?: string
+  selected: boolean
+  enabled: boolean
+  has_refresh_token: boolean
+}
+
+function GrokAccountPanel({ onModelsUpdated }: { onModelsUpdated: () => void }) {
+  const [accounts, setAccounts] = useState<GrokAccountInfo[]>([])
+  const [loading, setLoading] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [workingId, setWorkingId] = useState<string | null>(null)
+  const [device, setDevice] = useState<{
+    requestId: string
+    userCode: string
+    verificationUri: string
+    verificationUriComplete: string
+    interval: number
+  } | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true)
+    try {
+      setAccounts(await apiReq<GrokAccountInfo[]>(`${API}/grok/accounts`))
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadAccounts()
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    }
+  }, [loadAccounts])
+
+  const schedulePoll = useCallback((requestId: string, delaySeconds: number) => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    pollTimerRef.current = setTimeout(async () => {
+      try {
+        const result = await apiReq<{ status: string; retry_after?: number; message?: string }>(`${API}/grok/oauth/device/poll/${requestId}`, { method: 'POST' })
+        if (result.status === 'saved') {
+          setDevice(null)
+          setConnecting(false)
+          await loadAccounts()
+          toast.success('Conta Grok conectada. Teste o acesso aos modelos.')
+          return
+        }
+        if (result.status === 'pending') {
+          schedulePoll(requestId, result.retry_after || delaySeconds)
+          return
+        }
+        setDevice(null)
+        setConnecting(false)
+        toast.error(result.message || 'Login do Grok nao concluido')
+      } catch (err: any) {
+        setDevice(null)
+        setConnecting(false)
+        toast.error(err.message)
+      }
+    }, Math.max(3, delaySeconds) * 1000)
+  }, [loadAccounts])
+
+  const connect = async () => {
+    setConnecting(true)
+    try {
+      const result = await apiReq<{
+        request_id: string
+        user_code: string
+        verification_uri: string
+        verification_uri_complete?: string
+        interval: number
+      }>(`${API}/grok/oauth/device/start`, { method: 'POST' })
+      const next = {
+        requestId: result.request_id,
+        userCode: result.user_code,
+        verificationUri: result.verification_uri,
+        verificationUriComplete: result.verification_uri_complete || '',
+        interval: result.interval || 5,
+      }
+      setDevice(next)
+      window.open(next.verificationUriComplete || next.verificationUri, '_blank', 'noopener,noreferrer')
+      schedulePoll(next.requestId, next.interval)
+    } catch (err: any) {
+      setConnecting(false)
+      toast.error(err.message)
+    }
+  }
+
+  const select = async (accountId: string) => {
+    setWorkingId(accountId)
+    try {
+      await apiReq(`${API}/grok/accounts/${accountId}/select`, { method: 'POST' })
+      await loadAccounts()
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
+  const testAccess = async (accountId: string) => {
+    setWorkingId(accountId)
+    try {
+      const result = await apiReq<{ models: string[]; access_status?: string; message?: string }>(`${API}/grok/accounts/${accountId}/test`, { method: 'POST' })
+      await Promise.all([loadAccounts(), onModelsUpdated()])
+      if (result.access_status === 'rate_limited') toast(result.message || 'Grok temporariamente sem capacidade')
+      else toast.success(result.message || 'Acesso ao Grok confirmado')
+    } catch (err: any) {
+      await loadAccounts()
+      toast.error(err.message)
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
+  const refresh = async (accountId: string) => {
+    setWorkingId(accountId)
+    try {
+      await apiReq(`${API}/grok/accounts/${accountId}/refresh`, { method: 'POST' })
+      await loadAccounts()
+      toast.success('Token Grok renovado')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
+  const remove = async (accountId: string) => {
+    if (!confirm('Remover esta conta Grok?')) return
+    setWorkingId(accountId)
+    try {
+      await apiReq(`${API}/grok/accounts/${accountId}`, { method: 'DELETE' })
+      await loadAccounts()
+      toast.success('Conta Grok removida')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
+  const accessLabel = (status: GrokAccountInfo['access_status']) => ({
+    confirmed: ['Acesso confirmado', '#16a34a', '#dcfce7'],
+    blocked: ['Bloqueado pela xAI', '#dc2626', '#fef2f2'],
+    rate_limited: ['Limite temporario', '#d97706', '#ffedd5'],
+    error: ['Erro de acesso', '#dc2626', '#fef2f2'],
+    unknown: ['Acesso nao testado', '#64748b', '#e2e8f0'],
+  }[status] || ['Acesso nao testado', '#64748b', '#e2e8f0'])
+
+  return (
+    <div className="mt-6 overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+        <div className="flex items-center gap-2">
+          <AIProviderIcon provider="xAI Grok" size={19} />
+          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Contas Grok OAuth</h4>
+          <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: accounts.length ? '#dcfce7' : '#fef2f2', color: accounts.length ? '#16a34a' : '#dc2626' }}>
+            {accounts.length} conta{accounts.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <button onClick={connect} disabled={connecting} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
+          {connecting ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Conectar conta Grok
+        </button>
+      </div>
+
+      {device && (
+        <div className="border-b p-4" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Autorize sua conta na xAI</p>
+          <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>Abra a pagina e informe este codigo. O painel verifica automaticamente quando terminar.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button onClick={() => void navigator.clipboard.writeText(device.userCode)} className="rounded-xl border px-4 py-2 font-mono text-lg font-bold tracking-[0.25em]" style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'var(--bg-primary)' }} title="Copiar codigo">
+              {device.userCode}
+            </button>
+            <a href={device.verificationUriComplete || device.verificationUri} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: 'var(--accent)' }}>
+              <ExternalLink size={13} /> Abrir autorizacao
+            </a>
+            <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-tertiary)' }}><Loader2 size={13} className="animate-spin" /> Aguardando autorizacao</span>
+          </div>
+        </div>
+      )}
+
+      {loading && <div className="p-8 text-center"><Loader2 size={20} className="inline animate-spin" /></div>}
+      {!loading && !accounts.length && !device && (
+        <div className="px-4 py-8 text-center" style={{ color: 'var(--text-tertiary)' }}>
+          <User size={32} className="mx-auto mb-2" />
+          <p className="text-sm">Nenhuma conta Grok conectada.</p>
+          <p className="mt-1 text-xs">A autenticacao pode funcionar mesmo quando a xAI nao libera inferencia; teste o acesso depois de conectar.</p>
+        </div>
+      )}
+      {!loading && accounts.map(account => {
+        const [statusText, statusColor, statusBackground] = accessLabel(account.access_status)
+        const busy = workingId === account.id
+        return (
+          <div key={account.id} className="border-b px-4 py-3 last:border-b-0" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="h-2 w-2 rounded-full" style={{ background: account.selected ? '#16a34a' : 'var(--text-tertiary)' }} />
+                  <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{account.label || account.email || 'Conta Grok'}</span>
+                  {account.selected && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-bold text-green-700">ATIVA</span>}
+                  <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: statusColor, background: statusBackground }}>{statusText}</span>
+                </div>
+                {account.email && <p className="mt-1 truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>{account.email}</p>}
+                <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  OAuth conectado · {account.has_refresh_token ? 'renovacao automatica' : 'sem refresh token'}
+                </p>
+                {account.last_error && <p className="mt-1 max-w-2xl truncate text-[11px] text-red-600" title={account.last_error}>{account.last_error}</p>}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {!account.selected && <button onClick={() => select(account.id)} disabled={busy} className="rounded-lg px-2 py-1 text-xs font-semibold text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>Usar</button>}
+                <button onClick={() => testAccess(account.id)} disabled={busy} className="rounded-lg px-2 py-1 text-xs font-semibold disabled:opacity-50" style={{ background: '#16a34a', color: '#fff' }}>{busy ? 'Aguarde...' : 'Testar acesso'}</button>
+                <button onClick={() => refresh(account.id)} disabled={busy || !account.has_refresh_token} className="grid h-8 w-8 place-items-center rounded-lg disabled:opacity-40" title="Renovar token"><RefreshCw size={14} className={busy ? 'animate-spin' : ''} /></button>
+                <button onClick={() => remove(account.id)} disabled={busy} className="grid h-8 w-8 place-items-center rounded-lg text-red-600 disabled:opacity-40" title="Remover conta"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

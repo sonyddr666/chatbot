@@ -403,6 +403,8 @@ class UserPreferenceRepo:
 
         lines = ["Preferencias pessoais do usuario:"]
         for key in sorted(preferences):
+            if key in {"provider_order"}:
+                continue
             info = preferences[key]
             value = json.dumps(info.get("value"), ensure_ascii=False, sort_keys=True)
             source = info.get("source", "manual")

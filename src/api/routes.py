@@ -5,6 +5,7 @@ import json
 import hashlib
 import asyncio
 import time
+import httpx
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -35,6 +36,7 @@ from src.core.skill_runtime import run_enabled_skill_context, runtime_skill_acti
 from src.core.workspace_agent import create_workspace_plan, model_requests_workspace, workspace_plan_message, workspace_plan_status_context
 from src.core.preference_suggestions import create_suggestion_from_message
 from src.core.user_provider_manager import (
+    activate_builtin_for_user,
     activate_user_provider,
     create_user_provider,
     export_user_providers,
@@ -691,6 +693,7 @@ from src.core.provider_manager import (
     export_complete_state as pm_export_complete_state,
     import_complete_state as pm_import_complete_state,
     set_builtin_dynamic_models as pm_set_dynamic_models,
+    sync_models_from_catalog as pm_sync_catalog,
 )
 
 
@@ -709,19 +712,88 @@ async def providers_list(include_keys: bool = False, user=Depends(get_current_us
     """Lista todos os provedores disponiveis sem expor chaves reais."""
     providers = pm_list(include_keys=False)
     from src.core.antigravity_accounts import list_accounts as antigravity_list_accounts
+    from src.core.grok_oauth import list_accounts as grok_list_accounts
 
     antigravity_accounts = antigravity_list_accounts(user.id)
+    grok_accounts = grok_list_accounts(user.id)
     is_admin = bool(getattr(user, "is_admin", False))
+    user_active_provider = str(get_active_config_for_user(user.id).get("provider_id") or "")
     for provider in providers:
         if provider.get("id") == "antigravity":
             provider["has_key"] = bool(antigravity_accounts)
             provider["key_source"] = "oauth_pool" if antigravity_accounts else "none"
+        if provider.get("id") == "grok-oauth":
+            provider["has_key"] = bool(grok_accounts)
+            provider["key_source"] = "oauth_pool" if grok_accounts else "none"
+        if user_active_provider in {"antigravity", "grok-oauth"}:
+            provider["active"] = provider.get("id") == user_active_provider
         if not is_admin:
-            provider["active"] = provider.get("id") == "opencode-zen-free"
-            if provider.get("id") != "opencode-zen-free" and provider.get("id") != "antigravity":
+            provider["active"] = provider.get("id") == user_active_provider
+            if provider.get("id") not in {"opencode-zen-free", "antigravity", "grok-oauth"}:
                 provider["has_key"] = False
                 provider["key_source"] = "none"
     return providers
+
+
+@router.get("/providers/catalog")
+async def providers_catalog(q: str = "", user=Depends(get_current_user)):
+    """Catalogo mundial de providers do snapshot diario do models.dev."""
+    from src.core.model_catalog import catalog_updated_at, list_catalog_providers
+
+    providers = list_catalog_providers(q)
+    return {
+        "source": "models.dev",
+        "updated_at": catalog_updated_at(),
+        "total": len(providers),
+        "providers": providers,
+    }
+
+
+@router.get("/providers/catalog/{catalog_provider_id}/models")
+async def providers_catalog_models(
+    catalog_provider_id: str,
+    q: str = "",
+    user=Depends(get_current_user),
+):
+    """Modelos publicados para um provider no models.dev."""
+    from src.core.model_catalog import get_catalog, list_catalog_models
+
+    if catalog_provider_id not in get_catalog():
+        raise HTTPException(status_code=404, detail="Provider nao encontrado no catalogo mundial")
+    models = list_catalog_models(catalog_provider_id, q)
+    return {
+        "provider_id": catalog_provider_id,
+        "total": len(models),
+        "models": models,
+    }
+
+
+@router.post("/providers/catalog/refresh")
+async def providers_catalog_refresh(user=Depends(get_admin_user)):
+    """Forca uma consulta nova ao models.dev; somente o admin altera o cache."""
+    from src.core.model_catalog import catalog_updated_at, list_catalog_providers, refresh_catalog
+
+    try:
+        refresh_catalog()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Falha ao atualizar models.dev: {exc}") from exc
+    providers = list_catalog_providers()
+    return {
+        "status": "ok",
+        "source": "models.dev",
+        "updated_at": catalog_updated_at(),
+        "providers": len(providers),
+        "models": sum(provider["model_count"] for provider in providers),
+    }
+
+
+@router.post("/providers/manage/{provider_id}/sync-catalog")
+async def provider_sync_catalog(provider_id: str, body: dict, user=Depends(get_admin_user)):
+    """Importa o catalogo escolhido; novos modelos ficam ocultos/desativados."""
+    try:
+        return pm_sync_catalog(provider_id, str(body.get("catalog_provider_id") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/providers/export")
@@ -747,10 +819,11 @@ async def providers_export(
 
 
 @router.get("/providers/admin-backup")
-async def providers_admin_backup(admin=Depends(get_admin_user)):
+async def providers_admin_backup(user=Depends(get_admin_user)):
     """Backup completo e sensivel, disponivel exclusivamente ao administrador."""
     from src.core.account_pool import export_accounts as export_pool_accounts
     from src.core.antigravity_accounts import export_accounts as export_antigravity_accounts
+    from src.core.grok_oauth import export_accounts as export_grok_accounts
 
     return {
         "format": "chatbot-admin-complete-backup",
@@ -758,28 +831,31 @@ async def providers_admin_backup(admin=Depends(get_admin_user)):
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "warning": "CONTEM CHAVES DE API E TOKENS OAUTH EM TEXTO LEGIVEL",
         "provider_state": pm_export_complete_state(),
-        "personal_providers": export_user_providers(admin.id, include_api_keys=True),
+        "personal_providers": export_user_providers(user.id, include_api_keys=True),
         "codex_auth": export_pool_accounts("codex-chatgpt"),
-        "antigravity_auth": export_antigravity_accounts(admin.id),
+        "antigravity_auth": export_antigravity_accounts(user.id),
+        "grok_auth": export_grok_accounts(user.id),
     }
 
 
 @router.post("/providers/admin-backup")
 async def providers_admin_backup_import(
     body: dict = Body(..., media_type="application/json"),
-    admin=Depends(get_admin_user),
+    user=Depends(get_admin_user),
 ):
     """Restaura o backup completo na conta administrativa atual."""
     if body.get("format") != "chatbot-admin-complete-backup" or body.get("version") != 1:
         raise HTTPException(status_code=400, detail="Backup administrativo invalido ou nao suportado")
     from src.core.account_pool import import_accounts as import_pool_accounts
     from src.core.antigravity_accounts import import_accounts as import_antigravity_accounts
+    from src.core.grok_oauth import import_accounts as import_grok_accounts
 
     try:
         provider_result = pm_import_complete_state(body.get("provider_state"))
-        personal_result = import_user_providers(admin.id, body.get("personal_providers", []))
+        personal_result = import_user_providers(user.id, body.get("personal_providers", []))
         codex_result = import_pool_accounts("codex-chatgpt", body.get("codex_auth", {}))
-        antigravity_result = import_antigravity_accounts(admin.id, body.get("antigravity_auth", {}))
+        antigravity_result = import_antigravity_accounts(user.id, body.get("antigravity_auth", {}))
+        grok_result = import_grok_accounts(user.id, body.get("grok_auth", {}))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
@@ -788,6 +864,7 @@ async def providers_admin_backup_import(
         "personal": personal_result,
         "codex": codex_result,
         "antigravity": antigravity_result,
+        "grok": grok_result,
     }
 
 
@@ -1076,18 +1153,42 @@ async def provider_delete(provider_id: str, user=Depends(get_admin_user)):
 
 
 @router.post("/providers/manage/{provider_id}/activate")
-async def provider_activate(provider_id: str, user=Depends(get_admin_user)):
+async def provider_activate(provider_id: str, user=Depends(get_current_user)):
     """Define o provedor ativo."""
+    provider = pm_get(provider_id, include_keys=False)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider nao encontrado")
+    if not provider.get("enabled", True):
+        raise HTTPException(status_code=409, detail="Provider desativado. Habilite-o antes de ativar.")
+    if provider_id in {"grok-oauth", "antigravity"}:
+        try:
+            config = activate_builtin_for_user(user.id, provider_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"active": provider_id, "scope": "user", "config": config}
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Somente o administrador pode alterar o provider global")
     ok = pm_set_active(provider_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="Provider não encontrado")
+        raise HTTPException(status_code=400, detail="Nao foi possivel ativar o provider")
     return {"active": provider_id}
 
 
 @router.post("/providers/activate-model")
-async def model_activate(body: dict, user=Depends(get_admin_user)):
+async def model_activate(body: dict, user=Depends(get_current_user)):
     """Define o modelo ativo dentro do provider ativo."""
     model_id = body.get("model_id", "")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id e obrigatorio")
+    user_config = get_active_config_for_user(user.id)
+    if user_config.get("provider_id") in {"grok-oauth", "antigravity"}:
+        try:
+            activate_builtin_for_user(user.id, str(user_config["provider_id"]), str(model_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"active_model": model_id, "scope": "user"}
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Somente o administrador pode alterar o modelo global")
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id é obrigatório")
     ok = pm_set_active_model(model_id)
@@ -1127,6 +1228,8 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
         provider = pm_get(provider_id, include_keys=True)
         if not provider:
             raise HTTPException(status_code=404, detail="Provider nao encontrado")
+        if not provider.get("enabled", True):
+            raise HTTPException(status_code=409, detail="Provider desativado. Habilite-o antes de testar.")
         models = provider.get("models", [])
         model = next((m for m in models if model_id and m.get("id") == model_id and m.get("enabled", True)), None)
         if not model:
@@ -1178,6 +1281,24 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
             "message": (
                 "Conta Antigravity conectada. Use Sincronizar para validar projeto, modelos e cota."
                 if accounts else "Conecte ou importe uma conta Antigravity."
+            ),
+        }
+
+    if cfg.get("provider_id") == "grok-oauth":
+        from src.core.grok_oauth import list_accounts as grok_list_accounts
+        accounts = grok_list_accounts(user.id)
+        confirmed = any(account.get("access_status") in {"confirmed", "rate_limited"} for account in accounts)
+        return {
+            "ok": confirmed,
+            "provider": "grok-oauth",
+            "model": cfg.get("model_id", ""),
+            "source": "oauth_pool" if accounts else "none",
+            "message": (
+                "Conta Grok conectada e acesso aos modelos confirmado."
+                if confirmed else
+                "Conta Grok conectada; use Testar acesso para confirmar a inferencia."
+                if accounts else
+                "Conecte uma conta Grok."
             ),
         }
 
@@ -1290,6 +1411,8 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
     provider = pm_get(provider_id, include_keys=True)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider nao encontrado")
+    if not provider.get("enabled", True):
+        raise HTTPException(status_code=409, detail="Provider desativado. Habilite-o antes de testar.")
     model = next(
         (item for item in provider.get("models", []) if item.get("id") == model_id),
         None,
@@ -2652,6 +2775,87 @@ async def antigravity_account_sync(account_id: str, user=Depends(get_current_use
             pm_set_dynamic_models("antigravity", models)
         return {"status": "ok", "account": account, "models": models}
     except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+from src.core.grok_oauth import (
+    list_accounts as grok_list_accounts,
+    poll_device_oauth as grok_poll_device_oauth,
+    refresh_access_token as grok_refresh_access_token,
+    remove_account as grok_remove_account,
+    start_device_oauth as grok_start_device_oauth,
+    test_account as grok_test_account,
+    update_account as grok_update_account,
+)
+
+
+@router.get("/grok/accounts")
+async def grok_accounts_list(user=Depends(get_current_user)):
+    return grok_list_accounts(user.id)
+
+
+@router.post("/grok/oauth/device/start")
+async def grok_oauth_device_start(user=Depends(get_current_user)):
+    try:
+        return await grok_start_device_oauth(user.id)
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/grok/oauth/device/poll/{request_id}")
+async def grok_oauth_device_poll(request_id: str, user=Depends(get_current_user)):
+    try:
+        return await grok_poll_device_oauth(user.id, request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/grok/accounts/{account_id}/select")
+async def grok_account_select(account_id: str, user=Depends(get_current_user)):
+    account = grok_update_account(user.id, account_id, {"select": True})
+    if not account:
+        raise HTTPException(status_code=404, detail="Conta Grok nao encontrada")
+    return {"status": "ok", "account": account}
+
+
+@router.delete("/grok/accounts/{account_id}")
+async def grok_account_remove(account_id: str, user=Depends(get_current_user)):
+    if not grok_remove_account(user.id, account_id):
+        raise HTTPException(status_code=404, detail="Conta Grok nao encontrada")
+    return {"deleted": True}
+
+
+@router.post("/grok/accounts/{account_id}/refresh")
+async def grok_account_refresh(account_id: str, user=Depends(get_current_user)):
+    try:
+        account = await grok_refresh_access_token(user.id, account_id, force=True)
+        safe = {key: value for key, value in account.items() if key not in {"access_token", "refresh_token", "id_token"}}
+        return {"status": "ok", "account": safe}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/grok/accounts/{account_id}/test")
+async def grok_account_test(account_id: str, user=Depends(get_current_user)):
+    try:
+        result = await grok_test_account(user.id, account_id)
+        model_ids = result.get("models", [])
+        if model_ids:
+            current = pm_get("grok-oauth") or {}
+            existing = {str(model.get("id")): model for model in current.get("models", [])}
+            models = []
+            for model_id in model_ids:
+                previous = existing.get(model_id, {})
+                models.append({
+                    **previous,
+                    "id": model_id,
+                    "name": previous.get("name") or model_id,
+                    "context_length": int(previous.get("context_length") or 128000),
+                    "enabled": bool(previous.get("enabled", False)),
+                })
+            pm_set_dynamic_models("grok-oauth", models)
+        return result
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 

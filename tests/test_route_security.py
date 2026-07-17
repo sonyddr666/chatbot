@@ -65,6 +65,7 @@ class RouteSecurityTest(unittest.TestCase):
         sensitive_prefixes = (
             "/providers",
             "/codex",
+            "/grok",
             "/profiles",
             "/config",
             "/metrics",

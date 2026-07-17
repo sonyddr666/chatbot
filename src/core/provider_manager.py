@@ -271,6 +271,23 @@ BUILTIN_PROVIDERS = {
             },
         ],
     },
+
+    "grok-oauth": {
+        "name": "Grok OAuth",
+        "description": "Conta xAI/Grok conectada por OAuth Device Code",
+        "base_url": "https://cli-chat-proxy.grok.com/v1",
+        "endpoint": "/responses",
+        "api_format": "openai_responses",
+        "provider_type": "builtin",
+        "enabled": True,
+        "models": [
+            {"id": "grok-4.5", "name": "Grok 4.5", "context_length": 500000, "enabled": True, "supports_images": True, "supports_thinking": True, "supports_tools": True},
+            {"id": "grok-build-0.1", "name": "Grok Build 0.1", "context_length": 256000, "enabled": True, "supports_images": True, "supports_thinking": True, "supports_tools": True},
+            {"id": "grok-4.3", "name": "Grok 4.3", "context_length": 1000000, "enabled": True, "supports_images": True, "supports_thinking": True, "supports_tools": True},
+            {"id": "grok-4.20-0309-reasoning", "name": "Grok 4.20 (Reasoning)", "context_length": 1000000, "enabled": False, "supports_images": True, "supports_thinking": True, "supports_tools": True},
+            {"id": "grok-4.20-0309-non-reasoning", "name": "Grok 4.20 (Non-Reasoning)", "context_length": 1000000, "enabled": False, "supports_images": True, "supports_tools": True},
+        ],
+    },
 }
 
 
@@ -333,6 +350,7 @@ PROVIDER_RESOURCES = {
     "ollama": {"api_key_url": "", "docs_url": "https://docs.ollama.com/"},
     "codex-chatgpt": {"api_key_url": "", "docs_url": "https://developers.openai.com/codex/"},
     "antigravity": {"api_key_url": "", "docs_url": "https://antigravity.google/"},
+    "grok-oauth": {"api_key_url": "", "docs_url": "https://docs.x.ai/"},
     "morph": {"api_key_url": "https://morphllm.com/dashboard/api-keys", "docs_url": "https://docs.morphllm.com/quickstart"},
     "openrouter": {"api_key_url": "https://openrouter.ai/settings/keys", "docs_url": "https://openrouter.ai/docs/api/reference/authentication"},
     "cloudflare-workers-ai": {"api_key_url": "https://dash.cloudflare.com/profile/api-tokens", "docs_url": "https://developers.cloudflare.com/workers-ai/get-started/rest-api/"},
@@ -438,6 +456,8 @@ def get_provider_status(provider_id: str = "") -> dict:
     provider = get_provider(provider_id, include_keys=True)
     if not provider:
         return {"provider_id": provider_id, "configured": False, "error": "Provider não encontrado"}
+    if not provider.get("enabled", True):
+        return {"provider_id": provider_id, "configured": False, "error": "Provider desativado"}
 
     # Codex ChatGPT não usa API key; usa pool OAuth
     if provider_id == "codex-chatgpt":
@@ -537,6 +557,68 @@ def set_builtin_dynamic_models(provider_id: str, models: list[dict]) -> list[dic
     return normalized
 
 
+def sync_models_from_catalog(provider_id: str, catalog_provider_id: str = "") -> dict:
+    """Mescla models.dev no provider; novos entram desativados e nada e apagado."""
+    from src.core.model_catalog import list_catalog_models, resolve_catalog_provider_id
+
+    if provider_id in {"ollama", "codex-chatgpt", "antigravity", "grok-oauth"}:
+        raise ValueError("Este provider usa descoberta propria da conta ou maquina e nao deve ser substituido pelo catalogo mundial")
+    provider = get_provider(provider_id)
+    if not provider:
+        raise ValueError("Provider nao encontrado")
+    source_id = str(catalog_provider_id or resolve_catalog_provider_id(provider_id) or "").strip()
+    if not source_id:
+        raise ValueError("Este provider ainda nao possui uma fonte correspondente no models.dev")
+    incoming = list_catalog_models(source_id)
+    if not incoming:
+        raise ValueError("O provider escolhido nao possui modelos no catalogo atual")
+
+    existing = {str(model.get("id")): dict(model) for model in provider.get("models", [])}
+    merged = []
+    added = 0
+    for catalog_model in incoming:
+        model_id = catalog_model["id"]
+        previous = existing.pop(model_id, None)
+        if previous:
+            model = {**catalog_model, **previous}
+            model["catalog_removed"] = False
+        else:
+            model = {**catalog_model, "enabled": False, "catalog_removed": False}
+            added += 1
+        model["catalog_provider_id"] = source_id
+        merged.append(model)
+
+    # Um modelo retirado da fonte pode continuar sendo valido para uma conta
+    # ou endpoint antigo. Mantemos o registro e apenas sinalizamos a ausencia.
+    for previous in existing.values():
+        merged.append({
+            **previous,
+            "catalog_removed": True,
+            # Nunca interrompe silenciosamente o modelo que ja esta em uso.
+            "enabled": bool(previous.get("active")),
+        })
+
+    if provider_id in BUILTIN_PROVIDERS:
+        set_builtin_dynamic_models(provider_id, merged)
+    else:
+        raw = _load_raw()
+        target = next((item for item in raw.get("custom_providers", []) if item.get("id") == provider_id), None)
+        if target is None:
+            raise ValueError("Provider nao pode receber sincronizacao de catalogo")
+        target["models"] = merged
+        target["catalog_provider_id"] = source_id
+        _save_raw(raw)
+
+    return {
+        "provider_id": provider_id,
+        "catalog_provider_id": source_id,
+        "total": len(merged),
+        "added_hidden": added,
+        "removed_hidden": len(existing),
+        "models": get_provider(provider_id).get("models", []),
+    }
+
+
 def list_providers(include_keys: bool = False) -> list[dict]:
     """Retorna lista combinada de providers built-in + custom."""
     data = _load_raw()
@@ -567,7 +649,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
         }
         # built-in: API key para providers comuns; OAuth pool para Codex
         actual_key = get_provider_api_key(pid)
-        if pid in {"codex-chatgpt", "antigravity"}:
+        if pid in {"codex-chatgpt", "antigravity", "grok-oauth"}:
             has_accounts = _codex_has_accounts() if pid == "codex-chatgpt" else _antigravity_has_accounts()
             entry["api_key"] = ""
             entry["has_key"] = has_accounts
@@ -601,6 +683,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "has_key": bool(cp_key),
             "key_source": _get_key_source(cp["id"], cp_key),
             "reasoning_style": cp.get("reasoning_style", ""),
+            "catalog_provider_id": cp.get("catalog_provider_id", ""),
             **PROVIDER_RESOURCES.get(cp["id"], {}),
         }
         result.append(entry)
@@ -645,6 +728,7 @@ def export_custom_providers(include_api_keys: bool = False) -> list[dict]:
             "endpoint": provider.get("endpoint", ""),
             "api_format": provider.get("api_format", "chat_completions"),
             "enabled": bool(provider.get("enabled", True)),
+            "catalog_provider_id": provider.get("catalog_provider_id", ""),
             "models": [
                 {
                     key: value
@@ -742,6 +826,8 @@ def import_custom_providers(items: list[dict]) -> dict:
             provider["models"] = _normalize_import_models(item.get("models", []))
         if "reasoning_style" in item:
             provider["reasoning_style"] = str(item.get("reasoning_style", "")).strip()
+        if "catalog_provider_id" in item:
+            provider["catalog_provider_id"] = str(item.get("catalog_provider_id", "")).strip()
         provider["created_at"] = provider.get("created_at") or datetime.now(timezone.utc).isoformat()
 
         if "api_key" in item:
@@ -815,6 +901,7 @@ def create_provider(body: dict) -> dict:
         "api_format": body.get("api_format", "chat_completions"),
         "enabled": body.get("enabled", True),
         "models": body.get("models", []),
+        "catalog_provider_id": str(body.get("catalog_provider_id", "")).strip(),
         "created_at": datetime.utcnow().isoformat(),
     }
 
@@ -830,6 +917,7 @@ def create_provider(body: dict) -> dict:
         "provider_type": "custom",
         "enabled": new_provider["enabled"],
         "models": new_provider["models"],
+        "catalog_provider_id": new_provider["catalog_provider_id"],
         "active": False,
     }
 

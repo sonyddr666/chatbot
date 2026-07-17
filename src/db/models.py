@@ -123,6 +123,32 @@ class AntigravityAccount(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class GrokAccount(Base):
+    """xAI/Grok OAuth account owned by one chatbot user."""
+
+    __tablename__ = "grok_accounts"
+    __table_args__ = (
+        Index("uq_grok_user_subject", "user_id", "subject", unique=True),
+    )
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    subject = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False, default="")
+    label = Column(String(255), nullable=False, default="")
+    access_token_encrypted = Column(Text, nullable=False, default="")
+    refresh_token_encrypted = Column(Text, nullable=False, default="")
+    id_token_encrypted = Column(Text, nullable=False, default="")
+    expires_at = Column(Integer, nullable=False, default=0)
+    scope = Column(Text, nullable=False, default="")
+    access_status = Column(String(30), nullable=False, default="unknown")
+    last_error = Column(Text, nullable=False, default="")
+    is_selected = Column(Boolean, nullable=False, default=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

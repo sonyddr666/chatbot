@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from src.core.model_catalog import canonical_model_name, enrich_builtin_models
+from src.core.model_catalog import (
+    canonical_model_name,
+    enrich_builtin_models,
+    list_catalog_models,
+    list_catalog_providers,
+)
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -73,6 +78,55 @@ class ModelCatalogTests(unittest.TestCase):
                 [{"id": "gemma-4-31b", "supports_thinking": True}],
             )[0]
         self.assertFalse(model["supports_thinking"])
+
+    def test_lists_world_catalog_and_normalizes_models(self):
+        catalog = {
+            "anthropic": {
+                "name": "Anthropic",
+                "doc": "https://example.test/docs",
+                "env": ["ANTHROPIC_API_KEY"],
+                "models": {
+                    "claude-test": {
+                        "name": "Claude Test",
+                        "family": "claude",
+                        "reasoning": True,
+                        "tool_call": True,
+                        "limit": {"context": 200000, "output": 32000},
+                        "modalities": {"input": ["text", "image", "pdf"]},
+                        "last_updated": "2026-07-01",
+                    }
+                },
+            }
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            providers = list_catalog_providers("anth")
+            models = list_catalog_models("anthropic")
+        self.assertEqual(providers[0]["model_count"], 1)
+        self.assertEqual(models[0]["context_length"], 200000)
+        self.assertTrue(models[0]["supports_images"])
+        self.assertTrue(models[0]["supports_pdf"])
+        self.assertTrue(models[0]["supports_tools"])
+
+    def test_world_provider_search_also_matches_models(self):
+        catalog = {
+            "xai": {
+                "name": "xAI",
+                "models": {
+                    "grok-4.5": {"name": "Grok 4.5", "family": "grok"},
+                },
+            },
+            "anthropic": {
+                "name": "Anthropic",
+                "models": {
+                    "claude-test": {"name": "Claude Test", "family": "claude"},
+                },
+            },
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            providers = list_catalog_providers("grok")
+
+        self.assertEqual([provider["id"] for provider in providers], ["xai"])
+        self.assertIn("grok-4.5", providers[0]["model_search_index"])
 
 
 if __name__ == "__main__":
