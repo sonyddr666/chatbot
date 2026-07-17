@@ -571,6 +571,8 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
   const isReasoning = !!(isLoading && message.content === '' && message.reasoning)
   // Reasoning já finalizado
   const hasReasoning = !!message.reasoning
+  const fallbackActivities = (message.skillActivities || []).filter(activity => activity.name === 'provider_fallback')
+  const regularSkillActivities = (message.skillActivities || []).filter(activity => activity.name !== 'provider_fallback')
   const displayContent = useMemo(
     () => message.content.replace(/\s*<!-- workspace-plan:[a-f0-9]{32} -->\s*/gi, '').trim(),
     [message.content],
@@ -630,8 +632,29 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
                   {message.jobStatus === 'cancelled' && 'Cancelada'}
                 </div>
               )}
-              {!!message.skillActivities?.length && (
-                <SkillActivityBlock activities={message.skillActivities} />
+              {!!fallbackActivities.length && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {fallbackActivities.map((activity, index) => (
+                    <div key={activity.call_id || `provider-fallback-${index}`} className="contents">
+                      <span
+                        className="inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-bold"
+                        style={{ background: '#fef2f2', borderColor: '#fca5a5', color: '#b91c1c' }}
+                        title={activity.error || undefined}
+                      >
+                        Falhou: {activity.failed_provider || activity.failed_provider_id || 'Provider'}{activity.model_id ? ` · ${activity.model_id}` : ''}
+                      </span>
+                      <span
+                        className="inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-bold"
+                        style={{ background: '#eff6ff', borderColor: '#93c5fd', color: '#1d4ed8' }}
+                      >
+                        Redirecionado: {activity.target_provider || activity.target_provider_id || activity.provider || 'outro provider'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!!regularSkillActivities.length && (
+                <SkillActivityBlock activities={regularSkillActivities} />
               )}
               {/* Thinking block — mostra reasoning se existir */}
               {(hasReasoning || isReasoning) && (

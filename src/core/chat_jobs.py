@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 from src.config import settings
 from src.core.agent import AgentContext, AgentRunOutcome, run_agent_tools
@@ -65,6 +66,15 @@ async def _repo_call(func, *args, **kwargs):
 
 async def _add_event(job_id: str, event_type: str, payload: str) -> int:
     return await _repo_call(ChatJobRepo.add_event, job_id, event_type, payload)
+
+
+def _safe_provider_error(error: Exception) -> str:
+    """Keep a useful fallback reason without persisting credentials."""
+    text = str(error or "")[:1200]
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)((?:api[_-]?key|token|secret)\s*[:=]\s*)[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9._-]{8,}\b", "sk-[REDACTED]", text)
+    return text
 
 
 def _prompt_context(
@@ -755,6 +765,24 @@ async def process_chat_job(job_id: str) -> None:
         async def on_provider_fallback(failed: dict, next_config: dict, exc: Exception) -> None:
             failed_name = str(failed.get("name") or failed.get("provider_id") or "Provider")
             next_name = str(next_config.get("name") or next_config.get("provider_id") or "outro provider")
+            failed_id = str(failed.get("provider_id") or failed_name)
+            next_id = str(next_config.get("provider_id") or next_name)
+            model_id = str(provider_config.get("model_id") or failed.get("model_id") or "")
+            await _add_event(job_id, "skill", json.dumps({
+                "call_id": f"provider_fallback:{failed_id}:{next_id}",
+                "name": "provider_fallback",
+                "status": "completed",
+                "label": "Provider redirecionado",
+                "source_count": 0,
+                "sources": [],
+                "provider": next_name,
+                "failed_provider": failed_name,
+                "failed_provider_id": failed_id,
+                "target_provider": next_name,
+                "target_provider_id": next_id,
+                "model_id": model_id,
+                "error": _safe_provider_error(exc),
+            }, ensure_ascii=False))
             await _add_event(
                 job_id,
                 "status",

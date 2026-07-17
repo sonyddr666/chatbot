@@ -35,6 +35,12 @@ export interface SkillActivity {
   sources: SkillSource[]
   query?: string | null
   provider?: string | null
+  failed_provider?: string | null
+  failed_provider_id?: string | null
+  target_provider?: string | null
+  target_provider_id?: string | null
+  model_id?: string | null
+  error?: string | null
 }
 
 export function upsertSkillActivity(existing: SkillActivity[], incoming: SkillActivity): SkillActivity[] {

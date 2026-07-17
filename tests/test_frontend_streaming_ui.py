@@ -104,6 +104,15 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("reasoning: m.reasoning || ''", store)
         self.assertIn("skillActivities: Array.isArray(m.skill_activities)", store)
 
+    def test_provider_fallback_is_a_persistent_compact_tag(self):
+        message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
+        jobs = (ROOT / "src/core/chat_jobs.py").read_text(encoding="utf-8")
+
+        self.assertIn("Falhou: {activity.failed_provider", message)
+        self.assertIn("Redirecionado: {activity.target_provider", message)
+        self.assertIn('"name": "provider_fallback"', jobs)
+        self.assertIn('await _add_event(job_id, "skill"', jobs)
+
     def test_chat_jobs_are_primary_and_reattachable(self):
         api = (ROOT / "frontend/src/lib/api.ts").read_text(encoding="utf-8")
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
