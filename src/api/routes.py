@@ -708,16 +708,24 @@ def _safe_provider_config(cfg: dict) -> dict:
 
 
 @router.get("/providers/manage")
-async def providers_list(include_keys: bool = False, user=Depends(get_current_user)):
+async def providers_list(
+    include_keys: bool = False,
+    compact: bool = False,
+    user=Depends(get_current_user),
+):
     """Lista todos os provedores disponiveis sem expor chaves reais."""
-    providers = pm_list(include_keys=False)
+    providers = pm_list(include_keys=False, enrich_catalog=not compact)
     from src.core.antigravity_accounts import list_accounts as antigravity_list_accounts
     from src.core.grok_oauth import list_accounts as grok_list_accounts
 
     antigravity_accounts = antigravity_list_accounts(user.id)
     grok_accounts = grok_list_accounts(user.id)
     is_admin = bool(getattr(user, "is_admin", False))
-    user_active_provider = str(get_active_config_for_user(user.id).get("provider_id") or "")
+    user_active_provider = (
+        next((str(provider.get("id") or "") for provider in providers if provider.get("active")), "")
+        if compact and is_admin
+        else str(get_active_config_for_user(user.id).get("provider_id") or "")
+    )
     for provider in providers:
         if provider.get("id") == "antigravity":
             provider["has_key"] = bool(antigravity_accounts)

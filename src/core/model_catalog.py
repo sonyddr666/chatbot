@@ -16,6 +16,14 @@ from urllib.request import Request, urlopen
 
 CATALOG_URL = "https://models.dev/api.json"
 CACHE_FILE = os.path.join(".", "data", "models-dev-cache.json")
+CATALOG_PROVIDER_DEFAULTS = {
+    # models.dev does not currently publish this gateway URL, although the
+    # provider documents a single OpenAI-compatible endpoint for all models.
+    "aihubmix": {
+        "api": "https://aihubmix.com/v1",
+        "api_format": "chat_completions",
+    },
+}
 CACHE_TTL_SECONDS = 24 * 60 * 60
 
 _lock = threading.Lock()
@@ -205,6 +213,11 @@ def list_catalog_providers(query: str = "") -> list[dict]:
         model_search_index = " ".join(model_search_parts).lower()
         if needle and needle not in f"{provider_id} {name} {model_search_index}".lower():
             continue
+        defaults = CATALOG_PROVIDER_DEFAULTS.get(str(provider_id), {})
+        npm_package = str(raw.get("npm") or "")
+        api_format = str(defaults.get("api_format") or (
+            "anthropic_messages" if "anthropic" in npm_package else "chat_completions"
+        ))
         result.append({
             "id": str(provider_id),
             "name": name,
@@ -214,6 +227,8 @@ def list_catalog_providers(query: str = "") -> list[dict]:
             "doc": str(raw.get("doc") or ""),
             "env": [str(value) for value in (raw.get("env") or []) if value],
             "npm": str(raw.get("npm") or ""),
+            "api": str(raw.get("api") or defaults.get("api") or ""),
+            "api_format": api_format,
         })
     return sorted(result, key=lambda item: (item["name"].lower(), item["id"]))
 

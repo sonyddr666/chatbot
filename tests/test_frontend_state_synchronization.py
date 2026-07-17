@@ -8,10 +8,20 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
 
         self.assertIn("providersRequestRef", selector)
-        self.assertIn("controller.abort()", selector)
+        self.assertIn("/providers/manage?compact=true", selector)
+        self.assertIn("sessionStorage.setItem(`${PROVIDERS_CACHE_KEY}:${owner}`", selector)
+        self.assertNotIn("apiFetch(`${API}/providers/manage`, { signal:", selector)
         self.assertIn("await loadConfig()", selector)
         self.assertIn("syncChatProvider", manager)
         self.assertIn("new CustomEvent('provider-changed')", manager)
+
+    def test_catalog_provider_setup_only_requests_key_and_keeps_models_hidden_until_tested(self):
+        manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("catalogQuickSetup", manager)
+        self.assertIn("enabled: false, active: false", manager)
+        self.assertIn("formApiKey", manager)
+        self.assertIn("teste e habilite somente", manager)
 
     def test_shared_store_loaders_ignore_outdated_user_responses(self):
         store = Path("frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")

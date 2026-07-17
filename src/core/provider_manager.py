@@ -518,7 +518,13 @@ def _apply_builtin_provider_overrides(provider_id: str, provider: dict, raw: dic
     return merged
 
 
-def _apply_builtin_model_overrides(provider_id: str, models: list[dict], raw: dict | None = None) -> list[dict]:
+def _apply_builtin_model_overrides(
+    provider_id: str,
+    models: list[dict],
+    raw: dict | None = None,
+    *,
+    enrich_catalog: bool = True,
+) -> list[dict]:
     """Aplica overrides salvos para modelos built-in sem editar BUILTIN_PROVIDERS hardcoded."""
     raw = raw or _load_raw()
     overrides = raw.get("builtin_model_overrides", {}).get(provider_id, {})
@@ -531,8 +537,10 @@ def _apply_builtin_model_overrides(provider_id: str, models: list[dict], raw: di
         if isinstance(override, dict):
             merged.update({k: v for k, v in override.items() if k in {"name", "context_length", "enabled"}})
         result.append(merged)
-    from src.core.model_catalog import enrich_builtin_models
-    return enrich_builtin_models(provider_id, result)
+    if enrich_catalog:
+        from src.core.model_catalog import enrich_builtin_models
+        return enrich_builtin_models(provider_id, result)
+    return result
 
 
 def set_builtin_dynamic_models(provider_id: str, models: list[dict]) -> list[dict]:
@@ -619,7 +627,7 @@ def sync_models_from_catalog(provider_id: str, catalog_provider_id: str = "") ->
     }
 
 
-def list_providers(include_keys: bool = False) -> list[dict]:
+def list_providers(include_keys: bool = False, *, enrich_catalog: bool = True) -> list[dict]:
     """Retorna lista combinada de providers built-in + custom."""
     data = _load_raw()
     custom_providers = data.get("custom_providers", [])
@@ -631,7 +639,9 @@ def list_providers(include_keys: bool = False) -> list[dict]:
     # Built-in
     for pid, builtin_info in BUILTIN_PROVIDERS.items():
         pinfo = _apply_builtin_provider_overrides(pid, builtin_info, data)
-        models = _apply_builtin_model_overrides(pid, pinfo.get("models", []), data)
+        models = _apply_builtin_model_overrides(
+            pid, pinfo.get("models", []), data, enrich_catalog=enrich_catalog
+        )
         marked_models = _mark_active_model(models, active_model_id, pid == active_id)
         effective_model_id = next((m["id"] for m in marked_models if m.get("active")), None)
         entry = {
@@ -662,8 +672,11 @@ def list_providers(include_keys: bool = False) -> list[dict]:
 
     # Custom
     for cp in custom_providers:
-        from src.core.model_catalog import enrich_builtin_models
-        models = enrich_builtin_models(cp["id"], cp.get("models", []))
+        if enrich_catalog:
+            from src.core.model_catalog import enrich_builtin_models
+            models = enrich_builtin_models(cp["id"], cp.get("models", []))
+        else:
+            models = [dict(model) for model in cp.get("models", [])]
         marked_models = _mark_active_model(models, active_model_id, cp["id"] == active_id)
         effective_model_id = next((m["id"] for m in marked_models if m.get("active")), None)
         cp_key = get_provider_api_key(cp["id"])

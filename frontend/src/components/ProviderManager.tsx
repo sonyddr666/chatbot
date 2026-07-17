@@ -76,6 +76,8 @@ interface CatalogProviderInfo {
   doc?: string
   env?: string[]
   model_search_index?: string
+  api?: string
+  api_format?: string
 }
 
 interface CatalogModelInfo extends ModelInfo {
@@ -133,6 +135,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogRefreshing, setCatalogRefreshing] = useState(false)
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogProviderInfo | null>(null)
+  const [catalogQuickSetup, setCatalogQuickSetup] = useState<CatalogProviderInfo | null>(null)
   const [catalogModels, setCatalogModels] = useState<CatalogModelInfo[]>([])
   const [catalogModelSearch, setCatalogModelSearch] = useState('')
   const [catalogModelsLoading, setCatalogModelsLoading] = useState(false)
@@ -800,6 +803,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     setFormModelName('')
     setFormModelCtx('128000')
     setShowKey(false)
+    setCatalogQuickSetup(null)
     setEditing(false)
     setShowAddForm(false)
     setShowPersonalForm(false)
@@ -826,6 +830,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       toast.error('Nome e Base URL são obrigatórios')
       return
     }
+    if (catalogQuickSetup?.env?.length && !formApiKey.trim()) {
+      toast.error('Informe a API key para configurar este provider')
+      return
+    }
     setSaving(true)
     try {
       if (editing && selectedId) {
@@ -845,8 +853,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
         if (editingActiveProvider) await syncChatProvider()
       } else {
         // Cria o modelo inicial se o usuário preencheu
-        const models: any[] = []
-        if (formModelId.trim()) {
+        const models: any[] = catalogQuickSetup
+          ? catalogModels.map(model => ({ ...model, enabled: false, active: false }))
+          : []
+        if (!catalogQuickSetup && formModelId.trim()) {
           models.push({
             id: formModelId.trim().toLowerCase().replace(/\s+/g, '-'),
             name: formModelName.trim() || formModelId.trim(),
@@ -1547,11 +1557,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
             <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               <div className="max-w-xl mx-auto">
                 <h3 className="text-xl font-bold mb-6" style={{ color: 'var(--text-primary)' }}>
-                  {editing ? 'Edit Provider' : 'Add New Provider'}
+                  {editing ? 'Edit Provider' : catalogQuickSetup ? `Configurar ${catalogQuickSetup.name}` : 'Add New Provider'}
                 </h3>
 
                 <div className="space-y-4">
-                  {!editing && (
+                  {!editing && !catalogQuickSetup && (
                     <div>
                       <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider ID</label>
                       <input
@@ -1565,7 +1575,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     </div>
                   )}
                   {/* Nome */}
-                  <div>
+                  <div className={catalogQuickSetup ? 'hidden' : ''}>
                     <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
                     <input
                       type="text"
@@ -1582,7 +1592,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   </div>
 
                   {/* Base URL */}
-                  <div>
+                  <div className={catalogQuickSetup ? 'hidden' : ''}>
                     <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
                       {editing && isCloudflareSelected ? 'Base URL (automatica)' : 'Base URL'}
                     </label>
@@ -1607,6 +1617,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   </div>
 
                   {/* API Key */}
+                  {catalogQuickSetup && (
+                    <div className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+                      URL, formato e {catalogModels.length} modelos ja vieram do catalogo. Eles serao importados ocultos: teste e habilite somente os que realmente responderem.
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>API Key</label>
                     <div className="relative">
@@ -1633,7 +1648,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   </div>
 
                   {/* API Format */}
-                  <div>
+                  <div className={catalogQuickSetup ? 'hidden' : ''}>
                     <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>API Format</label>
                     <select
                       value={formApiFormat}
@@ -1652,7 +1667,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   </div>
 
                   {/* ─── Modelo inicial (opcional) ─── */}
-                  {!editing && (
+                  {!editing && !catalogQuickSetup && (
                     <>
                       <div className="border-t pt-4 mt-2" style={{ borderColor: 'var(--border)' }}>
                         <p className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
@@ -1729,7 +1744,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                       style={{ background: 'var(--accent)' }}
                     >
                       {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                      {editing ? 'Save Changes' : 'Create Provider'}
+                      {editing ? 'Save Changes' : catalogQuickSetup ? 'Salvar chave e modelos' : 'Create Provider'}
                     </button>
                   </div>
                 </div>
@@ -1749,10 +1764,17 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               onRefresh={() => void refreshWorldCatalog()}
               onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
               onConfigure={() => {
+                const catalogProvider = selectedCatalog
                 resetForm()
-                setFormProviderId(selectedCatalog.id)
-                setFormCatalogProviderId(selectedCatalog.id)
-                setFormName(selectedCatalog.name)
+                setCatalogQuickSetup(catalogProvider.api ? catalogProvider : null)
+                setFormProviderId(catalogProvider.id)
+                setFormCatalogProviderId(catalogProvider.id)
+                setFormName(catalogProvider.name)
+                setFormBaseUrl(catalogProvider.api || '')
+                setFormApiFormat(catalogProvider.api_format || 'chat_completions')
+                if (!catalogProvider.api) {
+                  toast('Este catalogo nao informa a URL da API; revise os campos avancados.')
+                }
                 const firstModel = catalogModels[0]
                 if (firstModel) {
                   setFormModelId(firstModel.id)

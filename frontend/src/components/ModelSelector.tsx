@@ -28,6 +28,30 @@ interface ProviderInfo {
 }
 
 const API = '/api/v1'
+const PROVIDERS_CACHE_KEY = 'chatbot_selectable_providers_v1'
+let providersMemoryCache: { owner: string; providers: ProviderInfo[] } | null = null
+
+function providerCacheOwner(): string {
+  return (getAuthToken() || 'anonymous').slice(-24)
+}
+
+function readProvidersCache(): ProviderInfo[] {
+  const owner = providerCacheOwner()
+  if (providersMemoryCache?.owner === owner) return providersMemoryCache.providers
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(`${PROVIDERS_CACHE_KEY}:${owner}`) || '[]')
+    providersMemoryCache = { owner, providers: Array.isArray(parsed) ? parsed : [] }
+  } catch {
+    providersMemoryCache = { owner, providers: [] }
+  }
+  return providersMemoryCache.providers
+}
+
+function writeProvidersCache(providers: ProviderInfo[]) {
+  const owner = providerCacheOwner()
+  providersMemoryCache = { owner, providers }
+  try { sessionStorage.setItem(`${PROVIDERS_CACHE_KEY}:${owner}`, JSON.stringify(providers)) } catch { /* optional */ }
+}
 
 function authHeaders(extra?: HeadersInit): HeadersInit {
   const token = getAuthToken()
@@ -60,8 +84,8 @@ export function ModelSelector({ canManageGlobal = false }: { canManageGlobal?: b
   const config = useChatStore(state => state.config)
   const loadConfig = useChatStore(state => state.loadConfig)
   const [open, setOpen] = useState(false)
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
-  const [loading, setLoading] = useState(false)
+  const [providers, setProviders] = useState<ProviderInfo[]>(readProvidersCache)
+  const [loading, setLoading] = useState(() => readProvidersCache().length === 0)
   const [error, setError] = useState<string | null>(null)
   const [optimisticSelection, setOptimisticSelection] = useState<{ provider: string; model: string } | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -79,54 +103,36 @@ export function ModelSelector({ canManageGlobal = false }: { canManageGlobal?: b
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  // Busca providers ao abrir (sempre dados frescos)
-  useEffect(() => {
-    if (!open) return
-    const requestId = ++providersRequestRef.current
-    const controller = new AbortController()
-    setLoading(true)
-    setError(null)
-    apiFetch(`${API}/providers/manage`, { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then(data => {
-        if (requestId !== providersRequestRef.current) return
-        setProviders(data)
-        setLoading(false)
-      })
-      .catch(err => {
-        if (controller.signal.aborted || requestId !== providersRequestRef.current) return
-        setError(err.message)
-        setLoading(false)
-      })
-    return () => {
-      controller.abort()
-      if (requestId === providersRequestRef.current) {
-        providersRequestRef.current += 1
-      }
-    }
-  }, [open])
-
+  // A lista e pre-carregada; abrir o menu nunca dispara uma consulta.
   // Também recarrega quando algum evento de mudança externa acontece
   // (ex: usuário fecha o provider manager)
   useEffect(() => {
     const refresh = () => {
-      if (!open) {
-        const requestId = ++providersRequestRef.current
-        apiFetch(`${API}/providers/manage`)
-          .then(r => r.json())
-          .then(data => {
-            if (requestId === providersRequestRef.current) setProviders(data)
+      const requestId = ++providersRequestRef.current
+      apiFetch(`${API}/providers/manage?compact=true`)
+          .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            return r.json()
           })
-          .catch(() => {})
-      }
+          .then(data => {
+            if (requestId === providersRequestRef.current) {
+              writeProvidersCache(data)
+              setProviders(data)
+              setLoading(false)
+              setError(null)
+            }
+          })
+          .catch(err => {
+            if (requestId === providersRequestRef.current && !readProvidersCache().length) {
+              setError(err instanceof Error ? err.message : 'Falha ao carregar')
+              setLoading(false)
+            }
+          })
     }
     refresh()
     window.addEventListener('provider-changed', refresh)
     return () => window.removeEventListener('provider-changed', refresh)
-  }, [open])
+  }, [])
 
   // Selecionar modelo — com optimistic update
   const handleSelect = useCallback(async (providerId: string, modelId: string) => {
@@ -140,7 +146,7 @@ export function ModelSelector({ canManageGlobal = false }: { canManageGlobal?: b
       model: model?.name || modelId,
     })
     // Optimistic: já atualiza local pra feedback instantâneo
-    setProviders(prev => prev.map(p => ({
+    const optimisticProviders = providers.map(p => ({
       ...p,
       active: p.id === providerId,
       active_model_id: p.id === providerId ? modelId : null,
@@ -148,7 +154,9 @@ export function ModelSelector({ canManageGlobal = false }: { canManageGlobal?: b
         ...m,
         active: p.id === providerId && m.id === modelId,
       })),
-    })))
+    }))
+    writeProvidersCache(optimisticProviders)
+    setProviders(optimisticProviders)
     setOpen(false)
 
     // Se for outro provider, ativa primeiro

@@ -128,6 +128,20 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual([provider["id"] for provider in providers], ["xai"])
         self.assertIn("grok-4.5", providers[0]["model_search_index"])
 
+    def test_catalog_exposes_ready_connection_defaults_for_aihubmix(self):
+        catalog = {
+            "aihubmix": {
+                "name": "AIHubMix",
+                "env": ["AIHUBMIX_API_KEY"],
+                "models": {"working-model": {"name": "Working Model"}},
+            }
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            provider = list_catalog_providers("aihubmix")[0]
+
+        self.assertEqual(provider["api"], "https://aihubmix.com/v1")
+        self.assertEqual(provider["api_format"], "chat_completions")
+
 
 if __name__ == "__main__":
     unittest.main()
