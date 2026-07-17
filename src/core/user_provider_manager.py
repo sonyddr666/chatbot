@@ -302,6 +302,24 @@ def activate_user_provider(user_id: int, config_id: int) -> bool:
         db.close()
 
 
+def use_global_provider(user_id: int) -> bool:
+    """Remove o override pessoal para o chat voltar ao provider global ativo."""
+    db = get_session_db()
+    try:
+        changed = (
+            db.query(UserProviderConfig)
+            .filter(
+                UserProviderConfig.user_id == user_id,
+                UserProviderConfig.is_default == True,
+            )
+            .update({"is_default": False})
+        )
+        db.commit()
+        return bool(changed)
+    finally:
+        db.close()
+
+
 def get_active_config_for_user(user_id: int) -> dict:
     db = get_session_db()
     try:
@@ -321,6 +339,10 @@ def get_active_config_for_user(user_id: int) -> dict:
             return config
     finally:
         db.close()
-    config = get_active_config()
+    # Credenciais globais pertencem ao administrador. Uma conta comum sem
+    # override pessoal recebe somente o gateway publico OpenCode Free.
+    from src.db.repository import UserRepo
+    user = UserRepo.get(user_id)
+    config = get_active_config() if user and user.is_admin else get_active_config("opencode-zen-free")
     config["user_id"] = user_id
     return config

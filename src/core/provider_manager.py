@@ -5,6 +5,7 @@ Armazena provedores customizados em JSON e mescla com os built-in do config.py.
 import json
 import os
 import shutil
+from copy import deepcopy
 from typing import Optional
 from datetime import datetime, timezone
 from src.config import settings
@@ -310,6 +311,39 @@ PROVIDER_ENV_MAP = {
 }
 
 
+# Integracoes mantidas pelo produto. Providers antigos salvos como custom continuam
+# usando seus modelos e chaves atuais, mas passam a ter semantica built-in na UI.
+PROMOTED_BUILTIN_PROVIDER_IDS = frozenset({
+    "morph",
+    "openrouter",
+    "cloudflare-workers-ai",
+    "groq",
+    "cohere",
+    "cerebras",
+    "nvidia-nim",
+    "google-ai",
+})
+
+PROVIDER_RESOURCES = {
+    "opencode-go": {"api_key_url": "https://opencode.ai/auth", "docs_url": "https://opencode.ai/docs/zen/"},
+    "opencode-zen": {"api_key_url": "https://opencode.ai/auth", "docs_url": "https://opencode.ai/docs/zen/"},
+    "opencode-zen-free": {"api_key_url": "https://opencode.ai/auth", "docs_url": "https://opencode.ai/docs/zen/"},
+    "openai": {"api_key_url": "https://platform.openai.com/api-keys", "docs_url": "https://platform.openai.com/docs/quickstart"},
+    "anthropic": {"api_key_url": "https://console.anthropic.com/settings/keys", "docs_url": "https://docs.anthropic.com/"},
+    "ollama": {"api_key_url": "", "docs_url": "https://docs.ollama.com/"},
+    "codex-chatgpt": {"api_key_url": "", "docs_url": "https://developers.openai.com/codex/"},
+    "antigravity": {"api_key_url": "", "docs_url": "https://antigravity.google/"},
+    "morph": {"api_key_url": "https://morphllm.com/dashboard/api-keys", "docs_url": "https://docs.morphllm.com/quickstart"},
+    "openrouter": {"api_key_url": "https://openrouter.ai/settings/keys", "docs_url": "https://openrouter.ai/docs/api/reference/authentication"},
+    "cloudflare-workers-ai": {"api_key_url": "https://dash.cloudflare.com/profile/api-tokens", "docs_url": "https://developers.cloudflare.com/workers-ai/get-started/rest-api/"},
+    "groq": {"api_key_url": "https://console.groq.com/keys", "docs_url": "https://console.groq.com/docs/quickstart"},
+    "cohere": {"api_key_url": "https://dashboard.cohere.com/api-keys", "docs_url": "https://docs.cohere.com/reference/about"},
+    "cerebras": {"api_key_url": "https://cloud.cerebras.ai/", "docs_url": "https://inference-docs.cerebras.ai/api-reference/authentication"},
+    "nvidia-nim": {"api_key_url": "https://build.nvidia.com/settings/api-keys", "docs_url": "https://docs.nvidia.com/nim/"},
+    "google-ai": {"api_key_url": "https://aistudio.google.com/apikey", "docs_url": "https://ai.google.dev/gemini-api/docs/api-key"},
+}
+
+
 def _codex_has_accounts() -> bool:
     """Codex não usa API key; usa OAuth account pool."""
     try:
@@ -529,6 +563,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "models": marked_models,
             "active": pid == active_id,
             "active_model_id": effective_model_id if pid == active_id else None,
+            **PROVIDER_RESOURCES.get(pid, {}),
         }
         # built-in: API key para providers comuns; OAuth pool para Codex
         actual_key = get_provider_api_key(pid)
@@ -550,6 +585,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
         marked_models = _mark_active_model(models, active_model_id, cp["id"] == active_id)
         effective_model_id = next((m["id"] for m in marked_models if m.get("active")), None)
         cp_key = get_provider_api_key(cp["id"])
+        promoted_builtin = cp["id"] in PROMOTED_BUILTIN_PROVIDER_IDS
         entry = {
             "id": cp["id"],
             "name": cp.get("name", cp["id"]),
@@ -557,7 +593,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "endpoint": cp.get("endpoint", ""),
             "api_key": cp_key if include_keys else ("sk-..." if cp_key else ""),
             "api_format": cp.get("api_format", "chat_completions"),
-            "provider_type": "custom",
+            "provider_type": "builtin" if promoted_builtin else "custom",
             "enabled": cp.get("enabled", True),
             "models": marked_models,
             "active": cp["id"] == active_id,
@@ -565,6 +601,7 @@ def list_providers(include_keys: bool = False) -> list[dict]:
             "has_key": bool(cp_key),
             "key_source": _get_key_source(cp["id"], cp_key),
             "reasoning_style": cp.get("reasoning_style", ""),
+            **PROVIDER_RESOURCES.get(cp["id"], {}),
         }
         result.append(entry)
 
@@ -599,6 +636,8 @@ def export_custom_providers(include_api_keys: bool = False) -> list[dict]:
     raw = _load_raw()
     exported = []
     for provider in raw.get("custom_providers", []):
+        if provider.get("id") in PROMOTED_BUILTIN_PROVIDER_IDS:
+            continue
         item = {
             "id": provider.get("id", ""),
             "name": provider.get("name", provider.get("id", "")),
@@ -680,7 +719,7 @@ def import_custom_providers(items: list[dict]) -> dict:
         provider_id = str(item.get("id", "")).strip().lower().replace(" ", "-")
         if not provider_id:
             raise ValueError("Todo provider customizado importado precisa de id")
-        if provider_id in BUILTIN_PROVIDERS:
+        if provider_id in BUILTIN_PROVIDERS or provider_id in PROMOTED_BUILTIN_PROVIDER_IDS:
             skipped.append({"id": provider_id, "reason": "provider built-in"})
             continue
 
@@ -759,6 +798,9 @@ def create_provider(body: dict) -> dict:
     else:
         provider_id = "provider-" + str(len(custom) + 1)
 
+    if provider_id in BUILTIN_PROVIDERS or provider_id in PROMOTED_BUILTIN_PROVIDER_IDS:
+        raise ValueError(f"Provider built-in '{provider_id}' ja existe")
+
     # Verifica se já existe
     for cp in custom:
         if cp["id"] == provider_id:
@@ -804,6 +846,22 @@ def update_provider(provider_id: str, data: dict) -> Optional[dict]:
         set_stored_api_key(provider_id, data["api_key"])
     raw = _load_raw()
 
+    if provider_id in PROMOTED_BUILTIN_PROVIDER_IDS:
+        forbidden = set(data) - {"enabled", "api_key"}
+        if forbidden:
+            raise ValueError("Provider built-in nao permite editar sua configuracao base")
+        custom = raw["custom_providers"]
+        for cp in custom:
+            if cp["id"] != provider_id:
+                continue
+            if data.get("enabled") is False and raw.get("active_provider_id") == provider_id:
+                raise ValueError("Nao da para desativar o provider ativo. Ative outro provider primeiro.")
+            if "enabled" in data:
+                cp["enabled"] = data["enabled"]
+            _save_raw(raw)
+            return get_provider(provider_id)
+        return None
+
     # Built-in: persiste enable/disable em providers.json.
     if provider_id in BUILTIN_PROVIDERS:
         if data.get("enabled") is False and raw.get("active_provider_id") == provider_id:
@@ -845,6 +903,8 @@ def update_provider(provider_id: str, data: dict) -> Optional[dict]:
 
 def delete_provider(provider_id: str) -> bool:
     """Remove um provider customizado."""
+    if provider_id in BUILTIN_PROVIDERS or provider_id in PROMOTED_BUILTIN_PROVIDER_IDS:
+        return False
     raw = _load_raw()
     before = len(raw["custom_providers"])
     raw["custom_providers"] = [cp for cp in raw["custom_providers"] if cp["id"] != provider_id]
@@ -889,19 +949,20 @@ def set_active_model(model_id: str) -> bool:
     return False
 
 
-def get_active_config() -> dict:
+def get_active_config(provider_id: str | None = None, model_id: str | None = None) -> dict:
     """Retorna a configuração completa do provider+modelo ativos.
     Usado pelo chat para saber qual modelo usar.
     """
     raw = _load_raw()
-    active_id = raw.get("active_provider_id", "opencode-zen-free")
-    active_model_id = raw.get("active_model_id")
+    explicit_provider = bool(provider_id)
+    active_id = provider_id or raw.get("active_provider_id", "opencode-zen-free")
+    active_model_id = model_id if explicit_provider else raw.get("active_model_id")
 
     # Repara config antiga/inválida: provider desativado ou sem modelo habilitado.
     active_provider = get_provider(active_id)
     if not active_provider or not active_provider.get("enabled", True) or not any(m.get("enabled", True) for m in active_provider.get("models", [])):
         fallback = next((p for p in list_providers() if p.get("enabled", True) and any(m.get("enabled", True) for m in p.get("models", []))), None)
-        if fallback:
+        if fallback and not explicit_provider:
             active_id = fallback["id"]
             raw["active_provider_id"] = active_id
             raw["active_model_id"] = None
@@ -973,6 +1034,46 @@ def get_active_config() -> dict:
         "api_format": "chat_completions",
         "model_id": "",
         "model_name": "",
+    }
+
+
+def export_complete_state() -> dict:
+    """Retorna o estado portavel completo, incluindo chaves globais."""
+    raw = deepcopy(_load_raw())
+    for key, default in DEFAULT_PROVIDERS_DATA.items():
+        raw.setdefault(key, deepcopy(default))
+    # Materializa tambem chaves vindas de env/settings. Assim o backup continua
+    # portavel mesmo quando a credencial nao foi originalmente digitada na UI.
+    for provider in list_providers(include_keys=False):
+        provider_id = str(provider.get("id") or "")
+        effective_key = get_provider_api_key(provider_id)
+        if provider_id and effective_key:
+            raw["provider_keys"][provider_id] = effective_key
+    return raw
+
+
+def import_complete_state(state: dict) -> dict:
+    """Restaura um estado completo validado, sem aceitar campos arbitrarios."""
+    if not isinstance(state, dict):
+        raise ValueError("Estado de providers invalido")
+    allowed = set(DEFAULT_PROVIDERS_DATA)
+    restored = deepcopy(DEFAULT_PROVIDERS_DATA)
+    for key in allowed:
+        if key in state:
+            restored[key] = deepcopy(state[key])
+    if not isinstance(restored["custom_providers"], list):
+        raise ValueError("Lista de providers customizados invalida")
+    for key in ("provider_keys", "builtin_provider_overrides", "builtin_model_overrides", "builtin_dynamic_models"):
+        if not isinstance(restored[key], dict):
+            raise ValueError(f"Campo {key} invalido")
+    if not isinstance(restored["active_provider_id"], str):
+        raise ValueError("Provider ativo invalido")
+    if restored["active_model_id"] is not None and not isinstance(restored["active_model_id"], str):
+        raise ValueError("Modelo ativo invalido")
+    _save_raw(restored)
+    return {
+        "providers": len(restored["custom_providers"]) + len(BUILTIN_PROVIDERS),
+        "keys": sum(1 for value in restored["provider_keys"].values() if value),
     }
 
 

@@ -1,12 +1,13 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react'
 import {
   X, Plus, Trash2, Check,
-  Server, Globe, Cpu, Eye, EyeOff, Power, PowerOff,
-  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft, Gauge,
+  Server, Globe, Eye, EyeOff, Power, PowerOff,
+  Pencil, Save, AlertTriangle, Loader2, Upload, Download, RefreshCw, User, ArrowLeft, Gauge, ExternalLink,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
 import { api, formatApiError, getAuthToken, type UserProviderInfo } from '../lib/api'
+import { AIProviderIcon } from './AIProviderIcon'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ interface ProviderInfo {
   enabled: boolean
   active: boolean
   active_model_id?: string | null
+  api_key_url?: string
+  docs_url?: string
   models: ModelInfo[]
   has_key?: boolean
   key_source?: string
@@ -61,6 +64,7 @@ interface BenchmarkResult {
 interface Props {
   open: boolean
   onClose: () => void
+  isAdmin?: boolean
 }
 
 // ─── API helpers ────────────────────────────────────────────────────
@@ -86,10 +90,16 @@ async function apiReq<T>(url: string, opts?: RequestInit): Promise<T> {
 
 // ─── Componente principal ──────────────────────────────────────────
 
-export const ProviderManager = memo(function ProviderManager({ open, onClose }: Props) {
+export const ProviderManager = memo(function ProviderManager({ open, onClose, isAdmin = false }: Props) {
   // Importante: não assinar a store inteira aqui.
   // Durante streaming, messages muda a cada chunk; se este modal assinar tudo, o Codex Pool fica travando.
   const loadConfig = useChatStore(s => s.loadConfig)
+  const providerLoadRequestRef = useRef(0)
+
+  const syncChatProvider = useCallback(async () => {
+    await loadConfig()
+    window.dispatchEvent(new CustomEvent('provider-changed'))
+  }, [loadConfig])
 
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [userProviders, setUserProviders] = useState<UserProviderInfo[]>([])
@@ -130,23 +140,31 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   // ─── Carregar providers ────────────────────────────────────────
 
   const loadProviders = useCallback(async () => {
+    const requestId = ++providerLoadRequestRef.current
     setLoading(true)
     try {
       const [data, personal] = await Promise.all([
         apiReq<ProviderInfo[]>(`${API}/providers/manage`),
         api.listUserProviders(),
       ])
+      if (requestId !== providerLoadRequestRef.current) return
       setProviders(data)
       setUserProviders(personal.providers)
+      setSelectedId(current => {
+        if (current && data.some(provider => provider.id === current)) return current
+        return data.find(provider => provider.active)?.id || data[0]?.id || null
+      })
     } catch (err: any) {
+      if (requestId !== providerLoadRequestRef.current) return
       toast.error(err.message)
     } finally {
-      setLoading(false)
+      if (requestId === providerLoadRequestRef.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     if (open) {
+      setSelectedId(null)
       loadProviders()
       setShowAddForm(false)
       setShowPersonalForm(false)
@@ -191,7 +209,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       })
       await loadProviders()
       if (created.is_default || personalIsDefault) {
-        loadConfig()
+        await syncChatProvider()
       }
       resetPersonalForm()
       setShowPersonalForm(false)
@@ -209,7 +227,21 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       await api.activateUserProvider(id)
       setUserProviders(prev => prev.map(p => ({ ...p, is_default: p.id === id })))
       toast.success('Provider pessoal ativado')
-      loadConfig()
+      await syncChatProvider()
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setPersonalSaving(false)
+    }
+  }
+
+  const handleUseGlobalProvider = async () => {
+    setPersonalSaving(true)
+    try {
+      await api.useGlobalProvider()
+      setUserProviders(prev => prev.map(provider => ({ ...provider, is_default: false })))
+      toast.success('Provider global ativado para este usuario')
+      await syncChatProvider()
     } catch (err: any) {
       toast.error(err.message)
     } finally {
@@ -244,6 +276,34 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     }
   }
 
+  const handleExportAdminBackup = async () => {
+    const accepted = confirm(
+      'Exportar o backup administrativo completo?\n\n'
+      + 'O arquivo tera TODAS as API keys e tokens OAuth do Codex e Antigravity em texto legivel. '
+      + 'Quem possuir esse arquivo podera usar suas contas.',
+    )
+    if (!accepted) return
+    setExportingProviders(true)
+    try {
+      const bundle = await apiReq<Record<string, unknown>>(`${API}/providers/admin-backup`)
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `chatbot-backup-completo-admin-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setShowExportDialog(false)
+      toast.success('Backup administrativo completo exportado')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setExportingProviders(false)
+    }
+  }
+
   const handleImportProviders = async (event: any) => {
     const input = event.target as HTMLInputElement
     const file = input.files?.[0]
@@ -251,21 +311,27 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     setImportingProviders(true)
     try {
       const parsed = JSON.parse(await file.text())
-      const hasApiKeys = JSON.stringify(parsed).includes('"api_key"')
+      const isAdminBackup = parsed?.format === 'chatbot-admin-complete-backup'
+      const hasApiKeys = isAdminBackup || JSON.stringify(parsed).includes('"api_key"')
       const accepted = confirm(
-        `Importar providers de "${file.name}"?\n\n`
-        + 'Providers pessoais existentes com a mesma configuracao serao atualizados. '
-        + 'Para usuarios comuns, providers customizados serao adicionados como providers pessoais.'
+        `${isAdminBackup ? 'Restaurar backup administrativo completo' : 'Importar providers'} de "${file.name}"?\n\n`
+        + (isAdminBackup
+          ? 'Providers, chaves, contas Codex e contas Antigravity serao restaurados para o administrador.'
+          : 'Providers pessoais existentes com a mesma configuracao serao atualizados. Para usuarios comuns, providers customizados serao adicionados como providers pessoais.')
         + (hasApiKeys ? '\n\nO arquivo contem API keys.' : ''),
       )
       if (!accepted) return
 
-      const result = await apiReq<any>(`${API}/providers/import`, {
+      const result = await apiReq<any>(`${API}${isAdminBackup ? '/providers/admin-backup' : '/providers/import'}`, {
         method: 'POST',
         body: JSON.stringify(parsed),
       })
       await loadProviders()
-      loadConfig()
+      await syncChatProvider()
+      if (isAdminBackup) {
+        toast.success(`Backup restaurado: ${result.providers?.keys || 0} chave(s), ${result.codex?.accounts || 0} Codex, ${result.antigravity?.accounts || 0} Antigravity`)
+        return
+      }
       const customChanged = (result.custom?.created?.length || 0) + (result.custom?.updated?.length || 0)
       const personalChanged = (result.personal?.created?.length || 0) + (result.personal?.updated?.length || 0)
       const customSkipped = result.custom?.skipped?.length || 0
@@ -331,7 +397,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       setCloudflareAccounts(result.accounts || [])
       if (result.configured) {
         await loadProviders()
-        loadConfig()
+        await syncChatProvider()
         setShowApiKey(false)
         setLocalApiKey('')
         setCloudflareAccountId('')
@@ -436,9 +502,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const handleActivate = async (id: string) => {
     try {
       await apiReq(`${API}/providers/manage/${id}/activate`, { method: 'POST' })
+      await api.useGlobalProvider()
       setProviders(prev => prev.map(p => ({ ...p, active: p.id === id })))
       toast.success(`Provider ativado`)
-      loadConfig() // Recarrega para o chat usar o novo provider
+      await syncChatProvider()
     } catch (err: any) {
       toast.error(err.message)
     }
@@ -470,6 +537,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
 
   const handleDelete = async (id: string) => {
     if (!confirm('Tem certeza que deseja excluir este provider?')) return
+    const deletingActiveProvider = providers.some(provider => provider.id === id && provider.active)
     try {
       await apiReq(`${API}/providers/manage/${id}`, { method: 'DELETE' })
       setProviders(prev => prev.filter(p => p.id !== id))
@@ -479,6 +547,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         setEditing(false)
       }
       toast.success('Provider excluído')
+      if (deletingActiveProvider) await syncChatProvider()
     } catch (err: any) {
       toast.error(err.message)
     }
@@ -571,6 +640,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
     setSaving(true)
     try {
       if (editing && selectedId) {
+        const editingActiveProvider = providers.some(provider => provider.id === selectedId && provider.active)
         const body: Record<string, any> = {
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
@@ -583,6 +653,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         })
         setProviders(prev => prev.map(p => p.id === selectedId ? { ...p, ...updated } : p))
         toast.success('Provider atualizado')
+        if (editingActiveProvider) await syncChatProvider()
       } else {
         // Cria o modelo inicial se o usuário preencheu
         const models: any[] = []
@@ -637,16 +708,22 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       }
       if (editingModelId) {
         // Atualizar modelo existente
-        await apiReq(`${API}/providers/manage/${selectedId}/models/${editingModelId}`, {
+        const updated = await apiReq<ModelInfo>(`${API}/providers/manage/${selectedId}/models/${editingModelId}`, {
           method: 'PUT', body: JSON.stringify(body),
         })
         setProviders(prev => prev.map(p =>
           p.id === selectedId ? {
             ...p,
-            models: p.models.map(m => m.id === editingModelId ? { ...m, ...body } : m),
+            models: p.models.map(m => m.id === editingModelId ? { ...m, ...updated } : m),
           } : p
         ))
         toast.success('Modelo atualizado')
+        const editedActiveModel = providers.some(provider => (
+          provider.id === selectedId
+          && provider.active
+          && provider.models.some(model => model.id === editingModelId && model.active)
+        ))
+        if (editedActiveModel) await syncChatProvider()
       } else {
         // Criar novo modelo
         const created = await apiReq<ModelInfo>(`${API}/providers/manage/${selectedId}/models`, {
@@ -680,12 +757,18 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
   const handleDeleteModel = async (modelId: string) => {
     if (!selectedId) return
     if (!confirm(`Excluir modelo "${modelId}"?`)) return
+    const deletingActiveModel = providers.some(provider => (
+      provider.id === selectedId
+      && provider.active
+      && provider.models.some(model => model.id === modelId && model.active)
+    ))
     try {
       await apiReq(`${API}/providers/manage/${selectedId}/models/${modelId}`, { method: 'DELETE' })
       setProviders(prev => prev.map(p =>
         p.id === selectedId ? { ...p, models: p.models.filter(m => m.id !== modelId) } : p
       ))
       toast.success('Modelo excluído')
+      if (deletingActiveModel) await syncChatProvider()
     } catch (err: any) {
       toast.error(err.message)
     }
@@ -732,6 +815,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
         method: 'POST',
         body: JSON.stringify({ model_id: modelId }),
       })
+      await api.useGlobalProvider()
       // Atualiza a lista completa
       setProviders(prev => prev.map(prov => ({
         ...prov,
@@ -744,7 +828,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
       })))
       setSelectedId(targetProviderId)
       toast.success(`✅ Usando: ${provider?.name || targetProviderId} › ${modelId}`)
-      loadConfig()
+      await syncChatProvider()
     } catch (err: any) {
       toast.error(err.message)
     }
@@ -814,6 +898,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                 {importingProviders ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
                 Importar JSON
               </button>
+
             </div>
           </div>
 
@@ -863,9 +948,21 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                 )}
 
                 <div className="px-2 py-1.5 mt-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
-                    Providers pessoais
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
+                      Providers pessoais
+                    </p>
+                    {userProviders.some(provider => provider.is_default) && (
+                      <button
+                        onClick={handleUseGlobalProvider}
+                        disabled={personalSaving}
+                        className="rounded-lg px-2 py-1 text-[10px] font-semibold disabled:opacity-50"
+                        style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                      >
+                        Usar global
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   {userProviders.length === 0 ? (
@@ -883,13 +980,21 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         }}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
+                          <div className="flex min-w-0 items-start gap-2">
+                            <AIProviderIcon
+                              provider={`${provider.display_name} ${provider.base_url}`}
+                              model={provider.model}
+                              size={18}
+                              className="mt-0.5 flex-shrink-0"
+                            />
+                            <div className="min-w-0">
                             <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                               {provider.display_name}
                             </p>
                             <p className="text-xs truncate" style={{ color: 'var(--text-tertiary)' }}>
                               {provider.model}
                             </p>
+                            </div>
                           </div>
                           {provider.is_default && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
@@ -1333,6 +1438,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
               <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <AIProviderIcon provider={`${selected.name} ${selected.id}`} size={24} className="flex-shrink-0" />
                     <h3 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{selected.name}</h3>
                     {selected.active && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -1360,6 +1466,30 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {selected.api_key_url && (
+                    <a
+                      href={selected.api_key_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-90"
+                      style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}
+                    >
+                      <ExternalLink size={12} />
+                      Obter chave API
+                    </a>
+                  )}
+                  {selected.docs_url && (
+                    <a
+                      href={selected.docs_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-all hover:opacity-90"
+                      style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+                    >
+                      <ExternalLink size={12} />
+                      Documentação
+                    </a>
+                  )}
                   {!selected.active && (
                     <button
                       onClick={() => handleActivate(selected.id)}
@@ -1444,6 +1574,18 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                         ? 'Salva no arquivo de dados. Também pode vir do .env.'
                         : 'Chave do provedor customizado.'}
                     </p>
+                    {selected?.api_key_url && (
+                      <a
+                        href={selected.api_key_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        <ExternalLink size={12} />
+                        Obter uma chave no site oficial
+                      </a>
+                    )}
                     <input
                       type="password"
                       value={localApiKey}
@@ -1628,7 +1770,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   <div className="border-b px-4 py-2 text-xs" style={{ borderColor: 'var(--border)', background: 'rgba(249,115,22,0.08)', color: 'var(--text-secondary)' }}>
                     <strong style={{ color: '#f97316' }}>Mais rapido:</strong>{' '}
                     {benchmarkRanking.slice(0, 3).map((result, index) => (
-                      <span key={result.model} className="mr-3">
+                      <span key={result.model} className="mr-3 inline-flex items-center gap-1">
+                        <AIProviderIcon provider={`${selected.name} ${selected.id}`} model={`${result.model_name} ${result.model}`} size={13} />
                         #{index + 1} {result.model_name} ({result.ttft_ms}ms)
                       </span>
                     ))}
@@ -1645,6 +1788,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                       <ModelRow
                         key={model.id}
                         model={model}
+                        provider={`${selected.name} ${selected.id}`}
                         isBuiltin={selected.provider_type === 'builtin'}
                         readOnly={selected.id === 'antigravity'}
                         onToggle={() => handleToggleModel(model.id, model.enabled)}
@@ -1662,7 +1806,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
               </div>
 
               {/* ─── Codex ChatGPT: Pool de Contas ─── */}
-              {selected.id === 'codex-chatgpt' && <CodexAccountPanel providerId={selected.id} />}
+              {selected.id === 'codex-chatgpt' && isAdmin && <CodexAccountPanel providerId={selected.id} />}
               {selected.id === 'antigravity' && <AntigravityAccountPanel onModelsUpdated={loadProviders} />}
 
               {/* Add Model Form */}
@@ -1820,6 +1964,25 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose }: 
                   </span>
                 </span>
               </button>
+
+              {isAdmin && (
+                <button
+                  onClick={handleExportAdminBackup}
+                  disabled={exportingProviders}
+                  className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all hover:opacity-90 disabled:opacity-50"
+                  style={{ borderColor: '#dc2626', color: 'var(--text-primary)', background: '#dc262612' }}
+                >
+                  {exportingProviders
+                    ? <Loader2 size={20} className="animate-spin" style={{ color: '#dc2626' }} />
+                    : <AlertTriangle size={20} style={{ color: '#dc2626' }} />}
+                  <span>
+                    <span className="block text-sm font-semibold">Backup completo do administrador</span>
+                    <span className="block text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                      Todas as chaves e contas OAuth do Codex e Antigravity.
+                    </span>
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="mt-4 flex items-start gap-2 text-xs" style={{ color: '#d97706' }}>
@@ -1847,13 +2010,15 @@ function ProviderItem({
   return (
     <div
       onClick={onClick}
-      className="flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-colors group"
+      className="flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer transition-colors group"
       style={{
-        background: selected ? 'var(--accent-light)' : 'transparent',
-        color: selected ? 'var(--accent)' : 'var(--text-primary)',
+        background: provider.active ? 'rgba(22, 163, 74, 0.10)' : selected ? 'var(--accent-light)' : 'transparent',
+        borderColor: provider.active ? '#16a34a' : 'transparent',
+        boxShadow: provider.active ? '0 0 0 1px rgba(22, 163, 74, 0.18)' : 'none',
+        color: provider.active ? 'var(--text-primary)' : selected ? 'var(--accent)' : 'var(--text-primary)',
       }}
-      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)' }}
-      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+      onMouseEnter={e => { if (!selected && !provider.active) (e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)' }}
+      onMouseLeave={e => { if (!selected && !provider.active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
     >
       {/* Status dot */}
       <span
@@ -1861,10 +2026,7 @@ function ProviderItem({
         style={{ background: provider.enabled ? '#16a34a' : '#a1a1aa' }}
       />
 
-      {/* Active indicator */}
-      {provider.active && (
-        <span className="text-[10px] font-bold flex-shrink-0" style={{ color: '#16a34a' }}>ACTIVE</span>
-      )}
+      <AIProviderIcon provider={`${provider.name} ${provider.id}`} size={19} className="flex-shrink-0" />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
@@ -1892,10 +2054,11 @@ function ProviderItem({
 }
 
 function ModelRow({
-  model, isBuiltin, readOnly = false, onToggle, onSelect, onEdit, onDelete,
+  model, provider, isBuiltin, readOnly = false, onToggle, onSelect, onEdit, onDelete,
   onBenchmark, benchmarking = false, benchmark, benchmarkRank,
 }: {
   model: ModelInfo
+  provider: string
   isBuiltin: boolean
   readOnly?: boolean
   onToggle: () => void
@@ -1928,7 +2091,12 @@ function ModelRow({
         borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
       }}>
       <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
-        <Cpu className="mt-1 shrink-0 sm:mt-0" size={16} style={{ color: isActive ? 'var(--accent)' : model.enabled ? 'var(--text-secondary)' : 'var(--text-tertiary)' }} />
+        <AIProviderIcon
+          provider={provider}
+          model={`${model.name} ${model.id}`}
+          size={18}
+          className="mt-1 shrink-0 sm:mt-0"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -2223,7 +2391,7 @@ function AntigravityAccountPanel({ onModelsUpdated }: { onModelsUpdated: () => v
     <div className="mt-6 overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)' }}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
         <div className="flex items-center gap-2">
-          <User size={16} style={{ color: 'var(--accent)' }} />
+          <AIProviderIcon provider="Antigravity" size={18} />
           <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Antigravity Accounts</h4>
           <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: accounts.length ? '#dcfce7' : '#fef2f2', color: accounts.length ? '#16a34a' : '#dc2626' }}>
             {accounts.length} conta{accounts.length === 1 ? '' : 's'}
@@ -2492,7 +2660,7 @@ function CodexAccountPanel({ providerId }: { providerId: string }) {
         style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}
       >
         <div className="flex items-center gap-2">
-          <User size={16} style={{ color: 'var(--accent)' }} />
+          <AIProviderIcon provider="Codex ChatGPT" size={18} />
           <h4 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
             Codex Account Pool
           </h4>

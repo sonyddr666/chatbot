@@ -79,6 +79,7 @@ export function WorkspacePanel({ open, onClose }: Props) {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [ragConfirm, setRagConfirm] = useState(false)
   const [ragLoading, setRagLoading] = useState(false)
+  const treeRequestRef = useRef(0)
 
   const clearImagePreview = useCallback(() => {
     if (imagePreviewUrlRef.current) URL.revokeObjectURL(imagePreviewUrlRef.current)
@@ -106,13 +107,16 @@ export function WorkspacePanel({ open, onClose }: Props) {
   }, [])
 
   const refreshTree = useCallback(async () => {
+    const requestId = ++treeRequestRef.current
     setLoading(true)
     try {
-      setTree(await loadBranch(''))
+      const nextTree = await loadBranch('')
+      if (requestId === treeRequestRef.current) setTree(nextTree)
     } catch (error) {
+      if (requestId !== treeRequestRef.current) return
       toast.error(error instanceof Error ? error.message : 'Falha ao carregar workspace')
     } finally {
-      setLoading(false)
+      if (requestId === treeRequestRef.current) setLoading(false)
     }
   }, [loadBranch])
 

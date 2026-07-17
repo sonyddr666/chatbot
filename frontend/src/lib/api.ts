@@ -324,7 +324,7 @@ export interface WorkspaceActionPlan {
 
 /** Chunk do streaming SSE */
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity' | 'attachment' | 'job_state'
+  type: 'content' | 'reasoning' | 'done' | 'start' | 'status' | 'workspace_plan' | 'skill_activity' | 'attachment' | 'job_state' | 'reset'
   text?: string
   eventId?: number
   jobId?: string
@@ -520,6 +520,9 @@ export const api = {
   getProfiles: () => req<Profile[]>('/profiles'),
   listUserProviders: () =>
     req<{ providers: UserProviderInfo[] }>('/providers/user'),
+  useGlobalProvider: () => req<{ status: string; source: string }>('/providers/user/use-global', {
+    method: 'POST',
+  }),
   createUserProvider: (body: {
     provider_id: string
     display_name?: string
@@ -622,6 +625,7 @@ export const api = {
       if (event.event === 'token') yield { ...base, type: 'content', text: raw }
       else if (event.event === 'reasoning') yield { ...base, type: 'reasoning', text: raw }
       else if (event.event === 'status') yield { ...base, type: 'status', text: raw }
+      else if (event.event === 'reset') yield { ...base, type: 'reset' }
       else if (event.event === 'workspace_plan') {
         yield { ...base, type: 'workspace_plan', workspacePlan: JSON.parse(control) }
       } else if (event.event === 'skill_activity') {

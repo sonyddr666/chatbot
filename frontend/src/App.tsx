@@ -404,10 +404,15 @@ export default function App() {
       conversations: [],
       documents: [],
       stats: null,
+      config: null,
+      profiles: [],
+      selectedProfile: 'zen-free',
       sessionId: 'default',
       isLoading: false,
       error: null,
       streamStatus: null,
+      route: null,
+      lastMetrics: null,
     })
   }, [disconnectWs])
 
@@ -477,7 +482,7 @@ export default function App() {
 
       <Sidebar />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <ProviderManager open={providerManagerOpen} onClose={() => setProviderManagerOpen(false)} />
+      <ProviderManager open={providerManagerOpen} onClose={() => setProviderManagerOpen(false)} isAdmin={!!user?.is_admin} />
       <SkillsPanel open={skillsOpen} onClose={() => setSkillsOpen(false)} />
       <WorkspacePanel open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <DocumentsPanel open={documentsOpen} onClose={() => setDocumentsOpen(false)} />
@@ -530,7 +535,7 @@ export default function App() {
                 <WifiOff size={14} style={{ color: 'var(--text-tertiary)' }} />
               )}
             </span>
-            <ModelSelector />
+            <ModelSelector canManageGlobal={user.is_admin} />
             <HeaderSelect
               value={liveVoice.enabled ? 'live' : responseMode}
               options={RESPONSE_MODE_OPTIONS}

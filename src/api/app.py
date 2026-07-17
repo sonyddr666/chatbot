@@ -17,7 +17,7 @@ from src.config import settings
 from src.core.auth_required import resolve_authorized_user
 from src.db.models import init_db as initialize_database
 from src.db.repository import ChatJobRepo, UserRepo
-from src.core.chat_jobs import start_chat_job
+from src.core.chat_jobs import start_chat_job, stop_chat_jobs
 from src.core.scheduled_tasks import start_schedule_runner, stop_schedule_runner
 
 app = FastAPI(
@@ -62,7 +62,7 @@ def _websocket_auth_token(websocket: WebSocket) -> tuple[str, str | None]:
 async def initialize_persistent_runtime():
     initialize_database()
     UserRepo.ensure_initial_admin()
-    await asyncio.to_thread(ChatJobRepo.interrupt_stale)
+    await asyncio.to_thread(ChatJobRepo.recover_running)
     queued_job_ids = await asyncio.to_thread(ChatJobRepo.list_queued_ids)
     for job_id in queued_job_ids:
         start_chat_job(job_id)
@@ -74,6 +74,7 @@ async def initialize_persistent_runtime():
 @app.on_event("shutdown")
 async def stop_persistent_runtime():
     await stop_schedule_runner()
+    await stop_chat_jobs()
 
 
 @app.get("/")

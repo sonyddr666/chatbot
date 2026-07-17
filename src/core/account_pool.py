@@ -287,6 +287,32 @@ def list_accounts(provider_id: str) -> list[dict]:
     return provider.get("accounts", [])
 
 
+def export_accounts(provider_id: str) -> dict:
+    """Exporta o pool com tokens; usar apenas em rota administrativa protegida."""
+    provider = _load().get(provider_id, {})
+    return {
+        "strategy": provider.get("strategy", "round-robin"),
+        "accounts": json.loads(json.dumps(provider.get("accounts", []))),
+    }
+
+
+def import_accounts(provider_id: str, payload: dict) -> dict:
+    if not isinstance(payload, dict) or not isinstance(payload.get("accounts", []), list):
+        raise ValueError("Pool de contas invalido")
+    imported = 0
+    for account in payload.get("accounts", []):
+        if not isinstance(account, dict) or not account.get("access_token"):
+            continue
+        add_account(provider_id, account)
+        imported += 1
+    pool = _load()
+    pool.setdefault(provider_id, {"accounts": [], "strategy": "round-robin"})["strategy"] = str(
+        payload.get("strategy") or "round-robin"
+    )
+    _save(pool)
+    return {"accounts": imported}
+
+
 def get_account(provider_id: str, account_id: str) -> Optional[dict]:
     """Retorna uma conta específica pelo account_id."""
     for acc in list_accounts(provider_id):

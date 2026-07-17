@@ -43,8 +43,7 @@ class UserProviderConfigTest(unittest.TestCase):
             list_user_providers,
         )
 
-        fallback = get_active_config()
-        self.assertEqual(get_active_config_for_user(self.user.id)["provider_id"], fallback["provider_id"])
+        self.assertEqual(get_active_config_for_user(self.user.id)["provider_id"], "opencode-zen-free")
 
         created = create_user_provider(
             self.user.id,
@@ -71,7 +70,7 @@ class UserProviderConfigTest(unittest.TestCase):
         self.assertEqual(active["provider_id"], "personal-openai")
         self.assertEqual(active["model_id"], "gpt-test")
         self.assertEqual(active["api_key"], "sk-user-secret-1234567890")
-        self.assertEqual(get_active_config_for_user(self.other.id)["provider_id"], fallback["provider_id"])
+        self.assertEqual(get_active_config_for_user(self.other.id)["provider_id"], "opencode-zen-free")
 
     def test_user_provider_routes_create_list_and_activate_current_user_only(self):
         token = create_access_token(self.user.id, self.user.username)
@@ -99,17 +98,27 @@ class UserProviderConfigTest(unittest.TestCase):
         list_response = client.get("/api/v1/providers/user", headers={"Authorization": f"Bearer {token}"})
         other_list_response = client.get("/api/v1/providers/user", headers={"Authorization": f"Bearer {other_token}"})
         active_response = client.get("/api/v1/providers/active-config", headers={"Authorization": f"Bearer {token}"})
+        global_response = client.post(
+            "/api/v1/providers/user/use-global",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        active_global_response = client.get(
+            "/api/v1/providers/active-config",
+            headers={"Authorization": f"Bearer {token}"},
+        )
 
         self.assertEqual(create_response.status_code, 200)
         self.assertEqual(activate_response.status_code, 200)
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(other_list_response.status_code, 200)
         self.assertEqual(active_response.status_code, 200)
+        self.assertEqual(global_response.status_code, 200)
         self.assertEqual(len(list_response.json()["providers"]), 1)
         self.assertEqual(other_list_response.json()["providers"], [])
         self.assertNotIn("local-secret", str(list_response.json()))
         self.assertEqual(active_response.json()["provider_id"], "personal-local")
         self.assertTrue(active_response.json()["has_key"])
+        self.assertNotEqual(active_global_response.json()["provider_id"], "personal-local")
 
     def test_non_admin_can_export_and_import_personal_provider_bundle(self):
         from src.core.user_provider_manager import create_user_provider, get_active_config_for_user
@@ -166,6 +175,53 @@ class UserProviderConfigTest(unittest.TestCase):
             [{"id": "global-custom", "model": "global-model"}],
         )
         self.assertEqual(get_active_config_for_user(self.other.id)["api_key"], "portable-secret")
+
+    def test_admin_backup_and_codex_pool_are_forbidden_to_regular_users(self):
+        token = create_access_token(self.user.id, self.user.username)
+        client = TestClient(app)
+
+        backup = client.get(
+            "/api/v1/providers/admin-backup",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        codex = client.get(
+            "/api/v1/codex/pool/codex-chatgpt",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(backup.status_code, 403)
+        self.assertEqual(codex.status_code, 403)
+
+    def test_admin_backup_contains_provider_codex_and_antigravity_credentials(self):
+        from src.db.models import User, get_session_db
+
+        db = get_session_db()
+        try:
+            row = db.query(User).filter(User.id == self.user.id).first()
+            row.is_admin = True
+            db.commit()
+        finally:
+            db.close()
+        token = create_access_token(self.user.id, self.user.username)
+        client = TestClient(app)
+
+        with (
+            patch("src.api.routes.pm_export_complete_state", return_value={"provider_keys": {"x": "secret"}}),
+            patch("src.api.routes.export_user_providers", return_value=[{"api_key": "personal-secret"}]),
+            patch("src.core.account_pool.export_accounts", return_value={"accounts": [{"access_token": "codex-token"}]}),
+            patch("src.core.antigravity_accounts.export_accounts", return_value={"accounts": [{"access_token": "ag-token"}]}),
+        ):
+            response = client.get(
+                "/api/v1/providers/admin-backup",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["format"], "chatbot-admin-complete-backup")
+        self.assertEqual(body["provider_state"]["provider_keys"]["x"], "secret")
+        self.assertEqual(body["codex_auth"]["accounts"][0]["access_token"], "codex-token")
+        self.assertEqual(body["antigravity_auth"]["accounts"][0]["access_token"], "ag-token")
 
     def test_chat_route_passes_active_user_provider_to_chat_engine(self):
         from src.core.user_provider_manager import create_user_provider

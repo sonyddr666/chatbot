@@ -51,6 +51,7 @@ from src.rag.personal import retrieve_user_context
 
 
 _tasks: dict[str, asyncio.Task] = {}
+_cancelled_by_user: set[str] = set()
 
 
 async def _repo_call(func, *args, **kwargs):
@@ -731,7 +732,10 @@ async def process_chat_job(job_id: str) -> None:
             pass
         await _repo_call(ChatJobRepo.finish, job_id, "completed")
     except asyncio.CancelledError:
-        await _repo_call(ChatJobRepo.finish, job_id, "cancelled", "Resposta interrompida pelo usuario")
+        if job_id in _cancelled_by_user:
+            await _repo_call(ChatJobRepo.finish, job_id, "cancelled", "Resposta interrompida pelo usuario")
+        else:
+            await _repo_call(ChatJobRepo.requeue, job_id)
         raise
     except Exception as exc:
         await _repo_call(ChatJobRepo.finish, job_id, "failed", str(exc))
@@ -749,14 +753,26 @@ def start_chat_job(job_id: str) -> None:
 async def cancel_chat_job(job_id: str) -> bool:
     task = _tasks.get(job_id)
     if task and not task.done():
+        _cancelled_by_user.add(job_id)
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+        finally:
+            _cancelled_by_user.discard(job_id)
         return True
     job = await _repo_call(ChatJobRepo.get, job_id)
     if job and job.get("status") in {"queued", "running"}:
         await _repo_call(ChatJobRepo.finish, job_id, "cancelled", "Resposta interrompida pelo usuario")
         return True
     return False
+
+
+async def stop_chat_jobs() -> None:
+    """Stop local workers without turning a server restart into a user cancellation."""
+    tasks = [task for task in _tasks.values() if not task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)

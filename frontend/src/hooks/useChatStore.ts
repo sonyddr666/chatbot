@@ -5,6 +5,11 @@ import { api, getAuthToken, parseApiTimestamp, upsertSkillActivity } from '../li
 let activeStreamController: AbortController | null = null
 let activeJobId: string | null = null
 let sessionLoadSequence = 0
+let conversationsLoadSequence = 0
+let configLoadSequence = 0
+let profilesLoadSequence = 0
+let documentsLoadSequence = 0
+let statsLoadSequence = 0
 const resumeJobRuns = new Map<string, Promise<void>>()
 
 const PENDING_JOBS_KEY = 'chatbot_pending_jobs_v1'
@@ -110,6 +115,11 @@ function loadReasoningEffort(): ReasoningEffort {
   return ['auto', 'none', 'default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(saved || '')
     ? saved as ReasoningEffort
     : 'auto'
+}
+
+function loadUseRag(): boolean {
+  const saved = localStorage.getItem('chatbot_use_rag')
+  return saved === null ? true : saved === 'true'
 }
 
 // ─── Tipos locais ───
@@ -262,7 +272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectedProfile: 'zen-free',
   responseMode: loadResponseMode(),
   reasoningEffort: loadReasoningEffort(),
-  useRag: true,
+  useRag: loadUseRag(),
   wsConnected: false,
   wsReconnecting: false,
   documents: [],
@@ -278,7 +288,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     localStorage.setItem('chatbot_reasoning_effort', effort)
     set({ reasoningEffort: effort })
   },
-  setUseRag: (v) => set({ useRag: v }),
+  setUseRag: (v) => {
+    localStorage.setItem('chatbot_use_rag', String(v))
+    set({ useRag: v })
+  },
 
   sendMessage: async (
     content: string,
@@ -577,15 +590,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   loadConversations: async () => {
+    const requestId = ++conversationsLoadSequence
+    const owner = pendingOwner()
     try {
       const convs = await api.listConversations()
-      set({ conversations: convs })
+      if (requestId === conversationsLoadSequence && owner === pendingOwner()) {
+        set({ conversations: convs })
+      }
     } catch { /* silêncio */ }
   },
 
   loadConfig: async () => {
+    const requestId = ++configLoadSequence
+    const owner = pendingOwner()
     try {
       const config = await api.getConfig()
+      if (requestId !== configLoadSequence || owner !== pendingOwner()) return
       const allowed = config.reasoning_efforts?.length ? config.reasoning_efforts : ['auto' as ReasoningEffort]
       const current = get().reasoningEffort
       const reasoningEffort = allowed.includes(current)
@@ -597,23 +617,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   loadProfiles: async () => {
+    const requestId = ++profilesLoadSequence
+    const owner = pendingOwner()
     try {
       const profiles = await api.getProfiles()
-      set({ profiles })
+      if (requestId === profilesLoadSequence && owner === pendingOwner()) set({ profiles })
     } catch { /* silêncio */ }
   },
 
   loadDocuments: async () => {
+    const requestId = ++documentsLoadSequence
+    const owner = pendingOwner()
     try {
       const docs = await api.listDocuments()
-      set({ documents: docs })
+      if (requestId === documentsLoadSequence && owner === pendingOwner()) set({ documents: docs })
     } catch { /* silêncio */ }
   },
 
   loadStats: async () => {
+    const requestId = ++statsLoadSequence
+    const owner = pendingOwner()
     try {
       const stats = await api.getStats()
-      set({ stats })
+      if (requestId === statsLoadSequence && owner === pendingOwner()) set({ stats })
     } catch { /* silêncio */ }
   },
 
@@ -634,27 +660,47 @@ function resumePersistedJob(jobId: string): Promise<void> {
 }
 
 async function runPersistedJobResume(jobId: string) {
-  let controller: AbortController | null = null
+  const controller = new AbortController()
   try {
-    const job = await api.getChatJob(jobId)
-    useChatStore.setState(state => ({
-      messages: state.messages.map(message => message.jobId === jobId ? {
-        ...message,
-        content: job.content,
-        reasoning: job.reasoning,
-        attachments: job.assistant_attachments || message.attachments || [],
-        jobStatus: job.status,
-        messageId: job.assistant_message_id,
-      } : message),
-      isLoading: job.status === 'queued' || job.status === 'running',
-    }))
-    if (job.status !== 'queued' && job.status !== 'running') return
-
     activeStreamController?.abort()
-    controller = new AbortController()
     activeStreamController = controller
     activeJobId = jobId
-    await jobStream(jobId, job.last_event_id, controller.signal)
+    let failures = 0
+    while (!controller.signal.aborted) {
+      try {
+        const job = await api.getChatJob(jobId)
+        useChatStore.setState(state => ({
+          messages: state.messages.map(message => message.jobId === jobId ? {
+            ...message,
+            content: job.content,
+            reasoning: job.reasoning,
+            attachments: job.assistant_attachments || [],
+            jobStatus: job.status,
+            messageId: job.assistant_message_id,
+          } : message),
+          isLoading: job.status === 'queued' || job.status === 'running',
+          error: null,
+        }))
+        if (job.status !== 'queued' && job.status !== 'running') return
+        failures = 0
+        const terminal = await jobStream(jobId, job.last_event_id, controller.signal)
+        if (terminal || controller.signal.aborted) return
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        failures += 1
+        if (failures >= 80) throw error
+      }
+      if (activeJobId === jobId) {
+        useChatStore.setState({ streamStatus: 'Reconectando ao servidor...' })
+      }
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(resolve, 750)
+        controller.signal.addEventListener('abort', () => {
+          window.clearTimeout(timeout)
+          reject(new DOMException('Aborted', 'AbortError'))
+        }, { once: true })
+      })
+    }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     useChatStore.setState({
@@ -669,7 +715,7 @@ async function runPersistedJobResume(jobId: string) {
   }
 }
 
-async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
+async function jobStream(jobId: string, afterId: number, signal?: AbortSignal): Promise<boolean> {
   const deltaBuffer = createStreamRenderBuffer((reasoning, content) => {
     updateAssistantForJob(jobId, message => ({
       ...message,
@@ -706,6 +752,16 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
       } else if (chunk.type === 'workspace_plan' && chunk.workspacePlan) {
         deltaBuffer.flush()
         updateAssistantForJob(jobId, message => ({ ...message, workspacePlan: chunk.workspacePlan }))
+      } else if (chunk.type === 'reset') {
+        deltaBuffer.flush()
+        updateAssistantForJob(jobId, message => ({
+          ...message,
+          content: '',
+          reasoning: '',
+          attachments: [],
+          skillActivities: [],
+          jobStatus: 'queued',
+        }))
       } else if (chunk.type === 'start') {
         deltaBuffer.flush()
         updateAssistantForJob(jobId, message => ({
@@ -733,6 +789,7 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
         if (messageId) void api.markMessageRead(messageId).catch(() => undefined)
         const store = useChatStore.getState()
         void Promise.all([store.loadConversations(), store.loadStats()])
+        return true
       } else if (chunk.type === 'job_state') {
         deltaBuffer.flush()
         updateAssistantForJob(jobId, message => ({
@@ -742,11 +799,13 @@ async function jobStream(jobId: string, afterId: number, signal?: AbortSignal) {
         if (activeJobId === jobId) {
           useChatStore.setState({ error: chunk.text || null, isLoading: false, streamStatus: null })
         }
+        return true
       }
     }
   } finally {
     deltaBuffer.flush()
   }
+  return false
 }
 
 // ─── HTTP SSE Streaming (fallback / principal) ───

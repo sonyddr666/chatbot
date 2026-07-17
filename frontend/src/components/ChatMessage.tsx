@@ -11,6 +11,7 @@ import { useChatStore } from '../hooks/useChatStore'
 import { ThinkingBlock } from './ThinkingBlock'
 import { WorkspacePlanCard } from './WorkspacePlanCard'
 import { SkillActivityBlock } from './SkillActivityBlock'
+import { AIProviderIcon } from './AIProviderIcon'
 
 interface Props {
   message: ChatMessageType
@@ -643,12 +644,17 @@ export function ChatMessageBubble({ message, isLoading, status, onRegenerate, on
               {/* Badge do modelo que respondeu */}
               {(message.modelName || message.modelId || message.providerName) && (
                 <div
-                  className="inline-flex items-center gap-1 px-2 py-0.5 mb-2 rounded-full text-[11px] font-medium"
+                  className="inline-flex max-w-full items-center gap-1.5 px-2 py-0.5 mb-2 rounded-full text-[11px] font-medium"
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
                   title={`${message.providerName || message.providerId || ''} ${message.modelName || message.modelId || ''}`.trim()}
                 >
-                  <span>{message.providerName || message.providerId || 'Provider'}</span>
-                  {(message.modelName || message.modelId) && <span>· {message.modelName || message.modelId}</span>}
+                  <AIProviderIcon
+                    provider={message.providerName || message.providerId}
+                    model={message.modelName || message.modelId}
+                    size={14}
+                    className="flex-shrink-0"
+                  />
+                  <span className="truncate">{message.modelName || message.modelId || message.providerName || message.providerId}</span>
                 </div>
               )}
 

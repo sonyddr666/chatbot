@@ -126,6 +126,28 @@ class ChatJobPersistenceTest(unittest.TestCase):
         self.assertTrue(ChatJobRepo.claim_queued(job["id"]))
         self.assertFalse(ChatJobRepo.claim_queued(job["id"]))
 
+    def test_running_job_is_reset_and_requeued_after_server_restart(self):
+        job = ChatJobRepo.create_with_messages(
+            user_id=self.user.id,
+            session_id=f"u{self.user.id}:restart",
+            message="Continue depois do reinicio",
+            provider={"provider_id": "codex", "model_id": "gpt-test"},
+            response_mode="normal",
+            reasoning_effort="low",
+            use_rag=False,
+        )
+        self.assertTrue(ChatJobRepo.claim_queued(job["id"]))
+        ChatJobRepo.add_event(job["id"], "reasoning", "parcial")
+        ChatJobRepo.add_event(job["id"], "text_delta", "resposta parcial")
+
+        self.assertEqual(ChatJobRepo.recover_running(), 1)
+        recovered = ChatJobRepo.get(job["id"], self.user.id)
+        self.assertEqual(recovered["status"], "queued")
+        self.assertEqual(recovered["content"], "")
+        self.assertEqual(recovered["reasoning"], "")
+        self.assertEqual(recovered["error"], "")
+        self.assertEqual(ChatJobRepo.list_events(job["id"], self.user.id)[-1]["type"], "reset")
+
     def test_fast_two_word_search_does_not_bypass_skills(self):
         job = ChatJobRepo.create_with_messages(
             user_id=self.user.id,

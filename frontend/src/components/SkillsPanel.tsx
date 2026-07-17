@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { CheckCircle2, Loader2, Save, Wifi, X } from 'lucide-react'
 import { api, type PerplexoStatus, type SkillInfo, type SkillRunInfo } from '../lib/api'
@@ -15,8 +15,10 @@ export function SkillsPanel({ open, onClose }: Props) {
   const [savingSkill, setSavingSkill] = useState('')
   const [testingPerplexo, setTestingPerplexo] = useState(false)
   const [perplexoStatus, setPerplexoStatus] = useState<PerplexoStatus | null>(null)
+  const loadRequestRef = useRef(0)
 
   const load = async () => {
+    const requestId = ++loadRequestRef.current
     setLoading(true)
     try {
       const [nextSkills, nextRuns, nextPerplexoStatus] = await Promise.all([
@@ -24,15 +26,17 @@ export function SkillsPanel({ open, onClose }: Props) {
         api.listSkillRuns(10),
         api.getPerplexoStatus().catch(() => null),
       ])
+      if (requestId !== loadRequestRef.current) return
       setSkills(nextSkills)
       setRuns(nextRuns.runs)
       setPerplexoStatus(current => nextPerplexoStatus
         ? { ...current, ...nextPerplexoStatus, online: current?.online }
         : current)
     } catch (err) {
+      if (requestId !== loadRequestRef.current) return
       toast.error(err instanceof Error ? err.message : 'Falha ao carregar skills')
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestRef.current) setLoading(false)
     }
   }
 

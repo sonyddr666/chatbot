@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { ChevronDown, Cpu, Server, Settings, AlertCircle } from 'lucide-react'
+import { ChevronDown, Settings, AlertCircle } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
-import { getAuthToken } from '../lib/api'
+import { api, getAuthToken } from '../lib/api'
+import { AIProviderIcon } from './AIProviderIcon'
 
 // ─── Tipos ──────────────────────────────────────────────────────────
 
@@ -54,13 +56,16 @@ function fmtCtx(n: number): string {
 
 // ─── Componente ─────────────────────────────────────────────────────
 
-export function ModelSelector() {
-  const { loadConfig } = useChatStore()
+export function ModelSelector({ canManageGlobal = false }: { canManageGlobal?: boolean }) {
+  const config = useChatStore(state => state.config)
+  const loadConfig = useChatStore(state => state.loadConfig)
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [optimisticSelection, setOptimisticSelection] = useState<{ provider: string; model: string } | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const providersRequestRef = useRef(0)
 
   // Fecha ao clicar fora
   useEffect(() => {
@@ -77,21 +82,31 @@ export function ModelSelector() {
   // Busca providers ao abrir (sempre dados frescos)
   useEffect(() => {
     if (!open) return
+    const requestId = ++providersRequestRef.current
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
-    apiFetch(`${API}/providers/manage`)
+    apiFetch(`${API}/providers/manage`, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
       .then(data => {
+        if (requestId !== providersRequestRef.current) return
         setProviders(data)
         setLoading(false)
       })
       .catch(err => {
+        if (controller.signal.aborted || requestId !== providersRequestRef.current) return
         setError(err.message)
         setLoading(false)
       })
+    return () => {
+      controller.abort()
+      if (requestId === providersRequestRef.current) {
+        providersRequestRef.current += 1
+      }
+    }
   }, [open])
 
   // Também recarrega quando algum evento de mudança externa acontece
@@ -99,18 +114,31 @@ export function ModelSelector() {
   useEffect(() => {
     const refresh = () => {
       if (!open) {
+        const requestId = ++providersRequestRef.current
         apiFetch(`${API}/providers/manage`)
           .then(r => r.json())
-          .then(data => setProviders(data))
+          .then(data => {
+            if (requestId === providersRequestRef.current) setProviders(data)
+          })
           .catch(() => {})
       }
     }
+    refresh()
     window.addEventListener('provider-changed', refresh)
     return () => window.removeEventListener('provider-changed', refresh)
   }, [open])
 
   // Selecionar modelo — com optimistic update
   const handleSelect = useCallback(async (providerId: string, modelId: string) => {
+    // Invalida a busca iniciada ao abrir o menu. Sem isso, uma resposta antiga
+    // pode chegar depois do clique e recolocar visualmente o provider anterior.
+    providersRequestRef.current += 1
+    const provider = providers.find(p => p.id === providerId)
+    const model = provider?.models.find(item => item.id === modelId)
+    setOptimisticSelection({
+      provider: provider?.name || providerId,
+      model: model?.name || modelId,
+    })
     // Optimistic: já atualiza local pra feedback instantâneo
     setProviders(prev => prev.map(p => ({
       ...p,
@@ -124,13 +152,15 @@ export function ModelSelector() {
     setOpen(false)
 
     // Se for outro provider, ativa primeiro
-    const provider = providers.find(p => p.id === providerId)
     if (!provider?.active) {
       try {
         const r = await apiFetch(`${API}/providers/manage/${providerId}/activate`, { method: 'POST' })
         if (!r.ok) throw new Error('Falha ao ativar provider')
-      } catch {
-        // Reverte optimistic update? Não por enquanto
+      } catch (selectionError) {
+        setOptimisticSelection(null)
+        toast.error(selectionError instanceof Error ? selectionError.message : 'Falha ao ativar provider')
+        await loadConfig()
+        window.dispatchEvent(new CustomEvent('provider-changed'))
         return
       }
     }
@@ -143,11 +173,18 @@ export function ModelSelector() {
         body: JSON.stringify({ model_id: modelId }),
       })
       if (!r.ok) throw new Error('Falha ao ativar modelo')
-      loadConfig()
+      // A selecao deste menu e global. Remove o override pessoal apenas depois
+      // que provider e modelo globais foram salvos com sucesso.
+      await api.useGlobalProvider()
+      await loadConfig()
+      setOptimisticSelection(null)
       // Dispara evento pra outros componentes saberem
       window.dispatchEvent(new CustomEvent('provider-changed'))
-    } catch {
-      // silent
+    } catch (selectionError) {
+      setOptimisticSelection(null)
+      toast.error(selectionError instanceof Error ? selectionError.message : 'Falha ao ativar modelo')
+      await loadConfig()
+      window.dispatchEvent(new CustomEvent('provider-changed'))
     }
   }, [providers, loadConfig])
 
@@ -159,12 +196,26 @@ export function ModelSelector() {
 
   const activeProvider = selectableProviders.find(p => p.active)
   const activeModel = activeProvider?.models.find(m => m.active) || activeProvider?.models[0]
+  const providerMatchesConfig = !!activeProvider && activeProvider.id === config?.provider_id
+  const modelMatchesConfig = !!activeModel && activeModel.id === config?.model_id
+  const displayedProviderName = optimisticSelection?.provider || (providerMatchesConfig && modelMatchesConfig
+    ? activeProvider.name
+    : config?.profile || activeProvider?.name)
+  const displayedModelName = optimisticSelection?.model || (providerMatchesConfig && modelMatchesConfig
+    ? activeModel.name
+    : config?.model || activeModel?.name)
 
   return (
     <div className="relative min-w-0" ref={dropdownRef}>
       {/* Botão do seletor */}
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!canManageGlobal) {
+            window.dispatchEvent(new CustomEvent('open-provider-manager'))
+            return
+          }
+          setOpen(!open)
+        }}
         className="flex min-w-0 items-center gap-1.5 rounded-xl px-2 py-1.5 text-sm font-medium transition-all hover:opacity-90 sm:gap-2 sm:px-3"
         style={{
           background: 'var(--accent-light)',
@@ -172,20 +223,15 @@ export function ModelSelector() {
           border: '1px solid transparent',
         }}
         title={
-          activeProvider && activeModel
-            ? `${activeProvider.name} › ${activeModel.name}`
+          displayedProviderName && displayedModelName
+            ? `${displayedProviderName} › ${displayedModelName}`
             : 'Selecionar modelo'
         }
       >
-        <Cpu size={14} />
-        <span className="flex max-w-[112px] min-w-0 items-center gap-1 truncate sm:max-w-[160px]">
-          {activeProvider && activeModel ? (
-            <>
-              <span className="hidden opacity-60 font-normal text-xs sm:inline">
-                {activeProvider.name.replace('OpenCode ', '')}
-              </span>
-              <span>{activeModel.name}</span>
-            </>
+        <AIProviderIcon provider={displayedProviderName} model={displayedModelName} size={16} className="flex-shrink-0" />
+        <span className="max-w-[96px] min-w-0 truncate sm:max-w-[132px]">
+          {displayedProviderName && displayedModelName ? (
+            displayedModelName
           ) : (
             'Selecionar modelo'
           )}
@@ -233,7 +279,7 @@ export function ModelSelector() {
                     borderColor: 'var(--border)',
                   }}
                 >
-                  <Server size={14} style={{ color: provider.active ? 'var(--accent)' : 'var(--text-tertiary)' }} />
+                  <AIProviderIcon provider={provider.name || provider.id} size={17} className="flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span
@@ -269,7 +315,7 @@ export function ModelSelector() {
                           borderLeft: model.active ? '3px solid var(--accent)' : '3px solid transparent',
                         }}
                       >
-                        <Cpu size={16} style={{ color: model.active ? 'var(--accent)' : 'var(--text-tertiary)' }} />
+                        <AIProviderIcon provider={`${provider.name} ${provider.id}`} model={`${model.name} ${model.id}`} size={18} className="flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <p

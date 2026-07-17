@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { FileText, RefreshCw, Trash2, Upload, X } from 'lucide-react'
 import { api, type DocumentInfo } from '../lib/api'
@@ -20,17 +20,21 @@ export function DocumentsPanel({ open, onClose }: Props) {
   const [manifestDocumentId, setManifestDocumentId] = useState<number | null>(null)
   const [manifestTitle, setManifestTitle] = useState('')
   const [manifest, setManifest] = useState<Record<string, unknown> | null>(null)
+  const loadRequestRef = useRef(0)
 
   const loadDocuments = useCallback(async () => {
+    const requestId = ++loadRequestRef.current
     setLoading(true)
     try {
       const docs = await api.listDocuments()
+      if (requestId !== loadRequestRef.current) return
       setDocuments(docs)
       await loadStoreDocuments()
     } catch (err) {
+      if (requestId !== loadRequestRef.current) return
       toast.error(err instanceof Error ? err.message : 'Falha ao carregar documentos')
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestRef.current) setLoading(false)
     }
   }, [loadStoreDocuments])
 

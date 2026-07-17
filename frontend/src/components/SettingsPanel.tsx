@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
-import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Cpu, Radio, MessageCircle } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { X, Sun, Moon, Brain, Zap, BarChart3, Server, Radio, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useChatStore } from '../hooks/useChatStore'
 import { api, getAuthToken, type PreferenceSuggestionInfo, type ReasoningEffort } from '../lib/api'
+import { AIProviderIcon } from './AIProviderIcon'
 
 interface Props {
   open: boolean
@@ -52,17 +53,12 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [answerDetail, setAnswerDetail] = useState('pratico')
   const [ragAggressiveness, setRagAggressiveness] = useState('balanced')
   const [preferenceSuggestions, setPreferenceSuggestions] = useState<PreferenceSuggestionInfo[]>([])
+  const providerRequestRef = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme)
     localStorage.setItem('theme', theme ? 'dark' : 'light')
   }, [theme])
-
-  useEffect(() => {
-    if (config) {
-      setUseRag(config.rag)
-    }
-  }, [config, setUseRag])
 
   useEffect(() => {
     if (open) loadConfig()
@@ -117,9 +113,11 @@ export function SettingsPanel({ open, onClose }: Props) {
 
   // Busca provider ativo
   const fetchActiveProvider = useCallback(async () => {
+    const requestId = ++providerRequestRef.current
     try {
       const r = await fetch(`${API}/providers/manage`, { headers: authHeaders() })
       const data: ProviderInfo[] = await r.json()
+      if (requestId !== providerRequestRef.current) return
       const active = data.find(p => p.active) || null
       setActiveProvider(active)
       setActiveModel(active?.models.find(m => m.active) || null)
@@ -136,10 +134,22 @@ export function SettingsPanel({ open, onClose }: Props) {
 
   // Escuta mudanças externas
   useEffect(() => {
-    const refresh = () => fetchActiveProvider()
+    const refresh = () => {
+      void fetchActiveProvider()
+      void loadConfig()
+    }
     window.addEventListener('provider-changed', refresh)
     return () => window.removeEventListener('provider-changed', refresh)
-  }, [fetchActiveProvider])
+  }, [fetchActiveProvider, loadConfig])
+
+  const activeProviderMatchesConfig = activeProvider?.id === config?.provider_id
+  const displayedProviderName = activeProviderMatchesConfig
+    ? activeProvider?.name
+    : config?.profile || config?.provider
+  const displayedModel = activeProviderMatchesConfig && activeModel?.id === config?.model_id
+    ? activeModel
+    : null
+  const displayedModelName = displayedModel?.name || config?.model
 
   if (!open) return null
 
@@ -166,25 +176,29 @@ export function SettingsPanel({ open, onClose }: Props) {
               Modelo Ativo
             </label>
             <div
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg"
+              className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg"
               style={{
                 background: 'var(--bg-secondary)',
                 border: '1px solid var(--border)',
               }}
             >
-              <Cpu size={18} style={{ color: 'var(--accent)' }} />
+              <AIProviderIcon provider={displayedProviderName} model={displayedModelName} size={20} className="flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                  {activeModel?.name || activeProvider?.name || 'Nenhum'}
+                  {displayedModelName || displayedProviderName || 'Nenhum'}
                 </p>
                 <p className="text-xs truncate" style={{ color: 'var(--text-tertiary)' }}>
-                  {activeProvider?.name || ''}
-                  {activeModel?.context_length ? ` · ${fmtCtx(activeModel.context_length)}` : ''}
+                  {displayedProviderName || ''}
+                  {displayedModel?.context_length ? ` · ${fmtCtx(displayedModel.context_length)}` : ''}
                 </p>
               </div>
-              {activeModel && (
-                <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-                  {activeModel.id}
+              {(displayedModel || config?.model_id) && (
+                <span
+                  className="min-w-0 max-w-[44%] flex-shrink truncate whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-xs"
+                  title={displayedModel?.id || config?.model_id || ''}
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                >
+                  {displayedModel?.id || config?.model_id}
                 </span>
               )}
             </div>
@@ -435,8 +449,14 @@ export function SettingsPanel({ open, onClose }: Props) {
           {/* Info */}
           <div className="p-3 rounded-lg text-xs space-y-1" style={{ background: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}>
             <p>🤖 Chatbot v0.3.0</p>
-            <p>⚡ Provider: {activeProvider?.name || config?.provider || '—'}</p>
-            <p>🧠 Modelo: {activeModel?.name || config?.model || '—'}</p>
+            <p className="flex items-center gap-1.5">
+              <AIProviderIcon provider={displayedProviderName} size={14} />
+              Provider: {displayedProviderName || '—'}
+            </p>
+            <p className="flex items-center gap-1.5">
+              <AIProviderIcon provider={displayedProviderName} model={displayedModelName} size={14} />
+              Modelo: {displayedModelName || '—'}
+            </p>
             <p>📦 Vector DB: ChromaDB</p>
             <p>🧠 Modo: {responseMode}</p>
             <p>⚙ Esforco: {reasoningEffort}</p>

@@ -42,6 +42,12 @@ PROVIDER_CATALOG_IDS = {
     "codex-chatgpt": ("openai", "opencode"),
 }
 
+# Correcoes verificadas por provider para casos em que o catalogo generico
+# descreve a familia, mas a API concreta nao expoe a mesma capacidade.
+PROVIDER_CAPABILITY_OVERRIDES = {
+    ("cerebras", "gemma-4-31b"): {"supports_thinking": False},
+}
+
 # Compact snapshot of the fields used by this UI. It is only consulted when a
 # model cannot be resolved from the live/stale models.dev catalog.
 # Tuple: images, thinking, video, audio, pdf, tools.
@@ -168,6 +174,33 @@ def _candidate_ids(model: dict) -> list[str]:
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
+def canonical_model_name(provider_id: str, model_id: str, reported_name: str = "") -> str:
+    """Corrige nomes descobertos que contradizem o proprio ID do modelo."""
+    normalized_id = str(model_id or "").strip()
+    reported = str(reported_name or "").strip()
+    if provider_id != "antigravity" or not normalized_id.lower().startswith("gemini-"):
+        return reported or normalized_id
+
+    words = normalized_id.split("-")
+    labels = {
+        "gemini": "Gemini",
+        "flash": "Flash",
+        "lite": "Lite",
+        "pro": "Pro",
+        "thinking": "Thinking",
+        "preview": "Preview",
+        "experimental": "Experimental",
+        "exp": "Experimental",
+        "image": "Image",
+        "computer": "Computer",
+        "use": "Use",
+        "extra": "Extra",
+        "low": "Low",
+        "high": "High",
+    }
+    return " ".join(labels.get(word.lower(), word) for word in words)
+
+
 def _find_metadata(provider_id: str, model: dict, catalog: dict) -> dict:
     for source_id in PROVIDER_CATALOG_IDS.get(provider_id, (provider_id,)):
         models = (catalog.get(source_id) or {}).get("models") or {}
@@ -194,6 +227,11 @@ def enrich_builtin_models(provider_id: str, models: list[dict]) -> list[dict]:
         result = []
         for original in models:
             model = dict(original)
+            model["name"] = canonical_model_name(
+                provider_id,
+                str(model.get("id", "")),
+                str(model.get("name", "")),
+            )
             if model.get("supports_thinking"):
                 model.setdefault("thinking_stream", "extra-low" not in str(model.get("id", "")).lower())
             result.append(model)
@@ -235,5 +273,9 @@ def enrich_builtin_models(provider_id: str, models: list[dict]) -> list[dict]:
             "recommended",
             any(candidate in OPENCODE_RECOMMENDED for candidate in _candidate_ids(model)),
         )
+        model.update(PROVIDER_CAPABILITY_OVERRIDES.get(
+            (provider_id.lower(), str(model.get("id", "")).lower()),
+            {},
+        ))
         result.append(model)
     return result

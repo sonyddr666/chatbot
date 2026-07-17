@@ -42,6 +42,7 @@ from src.core.user_provider_manager import (
     import_user_providers,
     list_user_providers,
     metadata_from_config,
+    use_global_provider,
 )
 from src.rag.chunker import split_text, split_documents
 from src.rag.personal import add_user_documents, delete_user_documents, retrieve_user_context, user_rag_collection
@@ -687,6 +688,8 @@ from src.core.provider_manager import (
     get_provider_status as pm_get_status,
     export_custom_providers as pm_export_custom,
     import_custom_providers as pm_import_custom,
+    export_complete_state as pm_export_complete_state,
+    import_complete_state as pm_import_complete_state,
     set_builtin_dynamic_models as pm_set_dynamic_models,
 )
 
@@ -708,10 +711,16 @@ async def providers_list(include_keys: bool = False, user=Depends(get_current_us
     from src.core.antigravity_accounts import list_accounts as antigravity_list_accounts
 
     antigravity_accounts = antigravity_list_accounts(user.id)
+    is_admin = bool(getattr(user, "is_admin", False))
     for provider in providers:
         if provider.get("id") == "antigravity":
             provider["has_key"] = bool(antigravity_accounts)
             provider["key_source"] = "oauth_pool" if antigravity_accounts else "none"
+        if not is_admin:
+            provider["active"] = provider.get("id") == "opencode-zen-free"
+            if provider.get("id") != "opencode-zen-free" and provider.get("id") != "antigravity":
+                provider["has_key"] = False
+                provider["key_source"] = "none"
     return providers
 
 
@@ -734,6 +743,51 @@ async def providers_export(
             user.id,
             include_api_keys=include_api_keys,
         ),
+    }
+
+
+@router.get("/providers/admin-backup")
+async def providers_admin_backup(admin=Depends(get_admin_user)):
+    """Backup completo e sensivel, disponivel exclusivamente ao administrador."""
+    from src.core.account_pool import export_accounts as export_pool_accounts
+    from src.core.antigravity_accounts import export_accounts as export_antigravity_accounts
+
+    return {
+        "format": "chatbot-admin-complete-backup",
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "warning": "CONTEM CHAVES DE API E TOKENS OAUTH EM TEXTO LEGIVEL",
+        "provider_state": pm_export_complete_state(),
+        "personal_providers": export_user_providers(admin.id, include_api_keys=True),
+        "codex_auth": export_pool_accounts("codex-chatgpt"),
+        "antigravity_auth": export_antigravity_accounts(admin.id),
+    }
+
+
+@router.post("/providers/admin-backup")
+async def providers_admin_backup_import(
+    body: dict = Body(..., media_type="application/json"),
+    admin=Depends(get_admin_user),
+):
+    """Restaura o backup completo na conta administrativa atual."""
+    if body.get("format") != "chatbot-admin-complete-backup" or body.get("version") != 1:
+        raise HTTPException(status_code=400, detail="Backup administrativo invalido ou nao suportado")
+    from src.core.account_pool import import_accounts as import_pool_accounts
+    from src.core.antigravity_accounts import import_accounts as import_antigravity_accounts
+
+    try:
+        provider_result = pm_import_complete_state(body.get("provider_state"))
+        personal_result = import_user_providers(admin.id, body.get("personal_providers", []))
+        codex_result = import_pool_accounts("codex-chatgpt", body.get("codex_auth", {}))
+        antigravity_result = import_antigravity_accounts(admin.id, body.get("antigravity_auth", {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "ok",
+        "providers": provider_result,
+        "personal": personal_result,
+        "codex": codex_result,
+        "antigravity": antigravity_result,
     }
 
 
@@ -854,6 +908,13 @@ async def providers_user_activate(config_id: int, user=Depends(get_current_user)
     if not activate_user_provider(user.id, config_id):
         raise HTTPException(status_code=404, detail="Provider pessoal nao encontrado")
     return {"status": "ok", "active_config_id": config_id}
+
+
+@router.post("/providers/user/use-global")
+async def providers_user_use_global(user=Depends(get_current_user)):
+    """Remove o provider pessoal padrao e volta ao provider global ativo."""
+    use_global_provider(user.id)
+    return {"status": "ok", "source": "global"}
 
 
 @router.get("/providers/manage/{provider_id}")
@@ -2636,20 +2697,20 @@ def _public_pool_account(acc: dict, provider_id: str) -> dict:
 
 
 @router.get("/codex/pool/{provider_id}")
-async def codex_pool_list(provider_id: str, user=Depends(get_current_user)):
+async def codex_pool_list(provider_id: str, user=Depends(get_admin_user)):
     """Lista contas no pool de um provider."""
     accounts = pool_list_accounts(provider_id)
     return [_public_pool_account(acc, provider_id) for acc in accounts]
 
 
 @router.get("/codex/pool/{provider_id}/stats")
-async def codex_pool_stats(provider_id: str, user=Depends(get_current_user)):
+async def codex_pool_stats(provider_id: str, user=Depends(get_admin_user)):
     """Estatísticas do pool (quotas, etc)."""
     return pool_get_stats(provider_id)
 
 
 @router.post("/codex/pool/{provider_id}/accounts")
-async def codex_pool_add(provider_id: str, body: dict, user=Depends(get_current_user)):
+async def codex_pool_add(provider_id: str, body: dict, user=Depends(get_admin_user)):
     """Adiciona uma conta ao pool (via tokens manualmente)."""
     try:
         acc = pool_add_account(provider_id, body)
@@ -2659,7 +2720,7 @@ async def codex_pool_add(provider_id: str, body: dict, user=Depends(get_current_
 
 
 @router.delete("/codex/pool/{provider_id}/accounts/{account_id}")
-async def codex_pool_remove(provider_id: str, account_id: str, user=Depends(get_current_user)):
+async def codex_pool_remove(provider_id: str, account_id: str, user=Depends(get_admin_user)):
     """Remove uma conta do pool."""
     ok = pool_remove_account(provider_id, account_id)
     if not ok:
@@ -2668,7 +2729,7 @@ async def codex_pool_remove(provider_id: str, account_id: str, user=Depends(get_
 
 
 @router.post("/codex/pool/{provider_id}/accounts/{account_id}/refresh")
-async def codex_pool_refresh(provider_id: str, account_id: str, user=Depends(get_current_user)):
+async def codex_pool_refresh(provider_id: str, account_id: str, user=Depends(get_admin_user)):
     """Renova token de uma conta."""
     tokens = await pool_refresh_token(provider_id, account_id)
     if not tokens:
@@ -2677,21 +2738,21 @@ async def codex_pool_refresh(provider_id: str, account_id: str, user=Depends(get
 
 
 @router.post("/codex/pool/{provider_id}/refresh-all")
-async def codex_pool_refresh_all(provider_id: str, user=Depends(get_current_user)):
+async def codex_pool_refresh_all(provider_id: str, user=Depends(get_admin_user)):
     """Renova tokens de todas as contas expiradas."""
     results = await pool_refresh_all(provider_id)
     return {"results": results}
 
 
 @router.post("/codex/pool/{provider_id}/update-quota")
-async def codex_pool_update_quota(provider_id: str, user=Depends(get_current_user)):
+async def codex_pool_update_quota(provider_id: str, user=Depends(get_admin_user)):
     """Atualiza cota de todas as contas."""
     results = await pool_update_quota(provider_id)
     return {"results": results}
 
 
 @router.get("/codex/pool/{provider_id}/best")
-async def codex_pool_best(provider_id: str, user=Depends(get_current_user)):
+async def codex_pool_best(provider_id: str, user=Depends(get_admin_user)):
     """Retorna a melhor conta sem expor access_token/refresh_token."""
     best = await pool_get_best(provider_id)
     if not best:
@@ -2704,7 +2765,7 @@ async def codex_pool_best(provider_id: str, user=Depends(get_current_user)):
 # ─── Device Code ─────────────────────────────────────────────────────
 
 @router.post("/codex/device-code/request")
-async def codex_device_request(user=Depends(get_current_user)):
+async def codex_device_request(user=Depends(get_admin_user)):
     """Passo 1: Inicia Device Code OAuth.
     Retorna user_code, verification_uri e request_id.
     O frontend deve chamar /codex/device-code/poll/{request_id} a cada ~5s.
@@ -2722,7 +2783,7 @@ async def codex_device_request(user=Depends(get_current_user)):
 
 
 @router.post("/codex/device-code/poll/{request_id}")
-async def codex_device_do_poll(request_id: str, user=Depends(get_current_user)):
+async def codex_device_do_poll(request_id: str, user=Depends(get_admin_user)):
     """
     Passo 2: Faz UMA tentativa de poll para ver se o usuário autenticou.
     - Se aprovado: faz exchange auth_code → tokens e salva no pool.
@@ -2734,13 +2795,13 @@ async def codex_device_do_poll(request_id: str, user=Depends(get_current_user)):
 
 
 @router.get("/codex/device-code/status/{request_id}")
-async def codex_device_status(request_id: str, user=Depends(get_current_user)):
+async def codex_device_status(request_id: str, user=Depends(get_admin_user)):
     """Consulta o status atual (sem fazer poll)."""
     return get_device_session_status(request_id)
 
 
 @router.post("/codex/extract-auth")
-async def codex_extract_auth(body: dict, user=Depends(get_current_user)):
+async def codex_extract_auth(body: dict, user=Depends(get_admin_user)):
     """Extrai tokens de um auth.json enviado pelo usuário."""
     tokens = extract_tokens_from_json(body)
     if not tokens:

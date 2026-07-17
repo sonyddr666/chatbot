@@ -129,6 +129,48 @@ def list_accounts(user_id: int) -> list[dict]:
         db.close()
 
 
+def export_accounts(user_id: int) -> dict:
+    """Exporta auth portavel descriptografado para backup administrativo."""
+    db = get_session_db()
+    try:
+        rows = db.query(AntigravityAccount).filter(AntigravityAccount.user_id == user_id).all()
+        accounts = []
+        selected_id = ""
+        for row in rows:
+            item = _internal(row)
+            item["models"] = _json(row.models_json, {})
+            item["quotas"] = _json(row.quota_json, [])
+            item["account_id"] = row.id
+            accounts.append(item)
+            if row.is_selected:
+                selected_id = row.id
+        return {"selected_account_id": selected_id, "accounts": accounts}
+    finally:
+        db.close()
+
+
+def import_accounts(user_id: int, payload: dict) -> dict:
+    """Restaura contas sem depender de chamadas externas ao Google."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("accounts", []), list):
+        raise ValueError("Contas Antigravity invalidas")
+    selected_id = str(payload.get("selected_account_id") or "")
+    imported = 0
+    for raw in payload.get("accounts", []):
+        if not isinstance(raw, dict) or not raw.get("access_token") or not raw.get("email"):
+            continue
+        original_id = str(raw.get("account_id") or raw.get("id") or "")
+        saved = save_account(user_id, raw, select=not selected_id or original_id == selected_id)
+        update_account(user_id, saved["id"], {
+            "models": raw.get("models", {}),
+            "quotas": raw.get("quotas", []),
+            "project_id": raw.get("project_id", ""),
+            "endpoint": raw.get("endpoint", ""),
+            "account_type": raw.get("account_type", ""),
+        })
+        imported += 1
+    return {"accounts": imported}
+
+
 def get_account(user_id: int, account_id: str | None = None) -> dict | None:
     db = get_session_db()
     try:

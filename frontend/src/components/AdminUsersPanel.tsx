@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Clock3, RefreshCw, ShieldCheck, Trash2, UserRoundCheck, Users, X, XCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { api, parseApiTimestamp, type AdminUserInfo } from '../lib/api'
@@ -28,15 +28,19 @@ export function AdminUsersPanel({ open, onClose }: Props) {
   const [users, setUsers] = useState<AdminUserInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [actingId, setActingId] = useState<number | null>(null)
+  const loadRequestRef = useRef(0)
 
   const loadUsers = useCallback(async () => {
+    const requestId = ++loadRequestRef.current
     setLoading(true)
     try {
-      setUsers(await api.adminListUsers(filter))
+      const nextUsers = await api.adminListUsers(filter)
+      if (requestId === loadRequestRef.current) setUsers(nextUsers)
     } catch (error) {
+      if (requestId !== loadRequestRef.current) return
       toast.error(error instanceof Error ? error.message : 'Falha ao carregar usuarios')
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestRef.current) setLoading(false)
     }
   }, [filter])
 

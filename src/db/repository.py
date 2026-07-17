@@ -1404,21 +1404,50 @@ class ChatJobRepo:
             db.close()
 
     @staticmethod
-    def interrupt_stale() -> int:
+    def requeue(job_id: str) -> bool:
         db = get_session_db()
         try:
-            jobs = db.query(ChatJob).filter(ChatJob.status == "running").all()
-            for job in jobs:
-                job.status = "interrupted"
-                job.error = "Servidor reiniciado durante a resposta"
-                job.completed_at = datetime.now(timezone.utc)
-                message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
-                if message:
-                    message.status = "interrupted"
+            job = db.query(ChatJob).filter(
+                ChatJob.id == job_id,
+                ChatJob.status.in_(["queued", "running"]),
+            ).first()
+            if not job:
+                return False
+            job.status = "queued"
+            job.error = ""
+            job.started_at = None
+            job.completed_at = None
+            message = db.query(Message).filter(Message.id == job.assistant_message_id).first()
+            if message:
+                message.status = "running"
+                message.content = ""
+                message.reasoning = ""
+                message.skill_activities_json = "[]"
+                message.attachments_json = "[]"
+            event = ChatJobEvent(
+                job_id=job.id,
+                type="reset",
+                payload=json.dumps({"reason": "server_restart"}, ensure_ascii=False),
+            )
+            db.add(event)
+            db.flush()
+            job.last_event_id = event.id
             db.commit()
-            return len(jobs)
+            return True
         finally:
             db.close()
+
+    @staticmethod
+    def recover_running() -> int:
+        db = get_session_db()
+        try:
+            job_ids = [
+                job_id for (job_id,) in
+                db.query(ChatJob.id).filter(ChatJob.status == "running").all()
+            ]
+        finally:
+            db.close()
+        return sum(1 for job_id in job_ids if ChatJobRepo.requeue(job_id))
 
     @staticmethod
     def list_queued_ids() -> list[str]:

@@ -304,6 +304,7 @@ export function Sidebar() {
                       onClick={() =>
                         api.deleteDocument(d.id).then(() => {
                           loadDocuments()
+                          window.dispatchEvent(new CustomEvent('documents-changed'))
                           toast.success('Documento excluído')
                         }).catch(() => toast.error('Erro ao excluir'))
                       }
@@ -394,6 +395,7 @@ function UploadZone({ onUpload }: { onUpload: () => void }) {
     try {
       await api.uploadOriginalDocument(file)
       onUpload()
+      window.dispatchEvent(new CustomEvent('documents-changed'))
       toast.success(`"${file.name}" salvo. Confirme a ingestao em Documentos RAG.`)
     } catch (err: any) {
       toast.error(err.message || 'Erro ao enviar')

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from src.core.model_catalog import enrich_builtin_models
+from src.core.model_catalog import canonical_model_name, enrich_builtin_models
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -49,6 +49,30 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(model["supports_images"])
         self.assertTrue(model["supports_thinking"])
         self.assertEqual(model["catalog_source"], "models.dev-snapshot")
+
+    def test_repairs_antigravity_name_that_conflicts_with_model_id(self):
+        self.assertEqual(
+            canonical_model_name(
+                "antigravity",
+                "gemini-2.5-flash-thinking",
+                "Gemini 3.1 Flash Lite",
+            ),
+            "Gemini 2.5 Flash Thinking",
+        )
+
+        model = enrich_builtin_models(
+            "antigravity",
+            [{"id": "gemini-2.5-flash", "name": "Gemini 3.1 Flash Lite"}],
+        )[0]
+        self.assertEqual(model["name"], "Gemini 2.5 Flash")
+
+    def test_applies_verified_provider_specific_capability_override(self):
+        with patch("src.core.model_catalog.get_catalog", return_value={}):
+            model = enrich_builtin_models(
+                "cerebras",
+                [{"id": "gemma-4-31b", "supports_thinking": True}],
+            )[0]
+        self.assertFalse(model["supports_thinking"])
 
 
 if __name__ == "__main__":

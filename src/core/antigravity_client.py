@@ -189,6 +189,8 @@ async def sync_account(user_id: int, account_id: str | None = None) -> dict:
 
 
 def provider_models_from_account(account: dict) -> list[dict]:
+    from src.core.model_catalog import canonical_model_name
+
     models = account.get("models") or {}
     result = []
     for model_id, info in models.items():
@@ -204,7 +206,11 @@ def provider_models_from_account(account: dict) -> list[dict]:
         thinking_stream = supports_thinking and "extra-low" not in lowered
         result.append({
             "id": model_id,
-            "name": str(info.get("displayName") or model_id),
+            "name": canonical_model_name(
+                "antigravity",
+                model_id,
+                str(info.get("displayName") or model_id),
+            ),
             "context_length": int(info.get("inputTokenLimit") or info.get("maxInputTokens") or 1_000_000),
             "enabled": True,
             "supports_thinking": supports_thinking,

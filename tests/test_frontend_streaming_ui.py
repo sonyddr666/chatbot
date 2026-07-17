@@ -114,6 +114,36 @@ class FrontendStreamingUiTest(unittest.TestCase):
         self.assertIn("resumePersistedJob", store)
         self.assertIn("reasoningEffort: ReasoningEffort", api)
 
+    def test_provider_names_use_compact_lobehub_icons(self):
+        selector = (ROOT / "frontend/src/components/ModelSelector.tsx").read_text(encoding="utf-8")
+        message = (ROOT / "frontend/src/components/ChatMessage.tsx").read_text(encoding="utf-8")
+        icon = (ROOT / "frontend/src/components/AIProviderIcon.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("@lobehub/icons", icon)
+        self.assertIn("WorkersAI", icon)
+        self.assertIn("Cerebras", icon)
+        self.assertIn("Gemini", icon)
+        for official_icon in (
+            "Zhipu", "OpenCode", "Nvidia", "Minimax", "XiaomiMiMo",
+            "Stepfun", "IBM", "Poolside", "Morph", "Codex",
+        ):
+            self.assertIn(f"@lobehub/icons/es/{official_icon}/components/", icon)
+        self.assertIn("<AIProviderIcon", selector)
+        self.assertIn("displayedModelName", selector)
+        self.assertIn("<AIProviderIcon", message)
+        self.assertNotIn("<span>{message.providerName || message.providerId || 'Provider'}</span>", message)
+
+        manager = (ROOT / "frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+        self.assertIn('provider={`${provider.name} ${provider.id}`}', manager)
+        self.assertIn('model={`${model.name} ${model.id}`}', manager)
+        self.assertIn('provider="Codex ChatGPT"', manager)
+        self.assertNotIn('<Cpu className="mt-1 shrink-0 sm:mt-0"', manager)
+        self.assertIn("borderColor: provider.active ? '#16a34a'", manager)
+        self.assertIn("background: provider.active ? 'rgba(22, 163, 74, 0.10)'", manager)
+        self.assertNotIn('>ACTIVE</span>', manager)
+        self.assertIn('Obter chave API', manager)
+        self.assertIn('selected.docs_url', manager)
+
     def test_stream_rendering_is_batched_and_frontend_errors_are_recoverable(self):
         store = (ROOT / "frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
         main = (ROOT / "frontend/src/main.tsx").read_text(encoding="utf-8")
