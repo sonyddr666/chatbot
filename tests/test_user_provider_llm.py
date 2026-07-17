@@ -9,6 +9,37 @@ from src.core.memory import ConversationMemory
 
 
 class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
+    def test_catalog_auth_headers_use_documented_scheme(self):
+        from src.core.llm import _provider_auth_headers
+
+        self.assertEqual(
+            _provider_auth_headers("secret", "bearer_api_key"),
+            {"Authorization": "Bearer secret"},
+        )
+        self.assertEqual(
+            _provider_auth_headers("secret", "x_api_key"),
+            {"X-API-Key": "secret"},
+        )
+        self.assertEqual(
+            _provider_auth_headers("secret", "authorization_api_key_scheme"),
+            {"Authorization": "Api-Key secret"},
+        )
+
+    def test_anthropic_catalog_provider_uses_native_messages_adapter(self):
+        from langchain_anthropic import ChatAnthropic
+        from src.core.llm import get_llm
+
+        llm = get_llm({
+            "provider_id": "anthropic",
+            "base_url": "https://api.anthropic.com/v1",
+            "api_key": "test-anthropic-key",
+            "api_format": "anthropic_messages",
+            "model_id": "claude-test",
+        })
+
+        self.assertIsInstance(llm, ChatAnthropic)
+        self.assertEqual(llm.model, "claude-test")
+
     def test_opencode_delta_preserves_reasoning_and_content(self):
         from src.core.llm import _openai_delta_parts
 

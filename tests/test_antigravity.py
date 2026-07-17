@@ -2,7 +2,11 @@ import unittest
 
 from src.core.antigravity_accounts import decrypt_secret, encrypt_secret
 from src.core.antigravity_client import _reasoning_chunks, _resolve_model, provider_models_from_account
-from src.core.image_actions import detect_image_action, references_previous_image
+from src.core.image_actions import (
+    contextual_image_prompt_is_resolved,
+    detect_image_action,
+    references_previous_image,
+)
 
 
 class AntigravityAdapterTests(unittest.TestCase):
@@ -85,6 +89,18 @@ class AntigravityAdapterTests(unittest.TestCase):
             [],
         )
         self.assertTrue(analysis_sequence["requires_planning"])
+        contextual_follow_up = detect_image_action("Gerar ilustracoes deles, uma so", [])
+        self.assertEqual(contextual_follow_up["confidence"], "medium")
+        self.assertTrue(contextual_follow_up["requires_planning"])
+        self.assertTrue(contextual_follow_up["uses_current_context"])
+        self.assertFalse(contextual_image_prompt_is_resolved(
+            "Gerar ilustracoes deles, uma so",
+            "Gerar ilustracoes deles, uma so",
+        ))
+        self.assertTrue(contextual_image_prompt_is_resolved(
+            "Gerar ilustracoes deles, uma so",
+            "Ilustracao cinematografica de Nevoa, Glitch e Flower Boy reunidos em uma rua neon chuvosa.",
+        ))
         self.assertTrue(detect_image_action(
             "gera um texto para depois gerar uma imagem",
             [],

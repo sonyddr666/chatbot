@@ -1248,8 +1248,10 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
             "provider_id": provider.get("id", provider_id),
             "name": provider.get("name", provider_id),
             "base_url": provider.get("base_url", ""),
+            "endpoint": provider.get("endpoint", ""),
             "api_key": provider.get("api_key", "") or get_provider_api_key(provider_id),
             "api_format": provider.get("api_format", "chat_completions"),
+            "auth_type": provider.get("auth_type", ""),
             "model_id": model.get("id", ""),
             "model_name": model.get("name", model.get("id", "")),
         }
@@ -1340,13 +1342,14 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
     }
+    from src.core.llm import _provider_auth_headers
+    headers.update(_provider_auth_headers(api_key, str(cfg.get("auth_type") or "")))
 
     # Se for Anthropic, usa /messages
     api_format = cfg.get("api_format", "chat_completions")
     if api_format == "anthropic_messages":
-        url = f"{base_url}/messages"
+        url = f"{base_url.rstrip('/')}/messages"
         payload = {
             "model": test_model,
             "max_tokens": 10,
@@ -1356,7 +1359,8 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
         headers["anthropic-version"] = "2023-06-01"
         headers.pop("Authorization", None)
     else:
-        url = f"{base_url}/chat/completions"
+        from src.core.llm import _chat_completions_url
+        url = _chat_completions_url(cfg)
         payload = {
             "model": test_model,
             "messages": [{"role": "user", "content": "ping"}],
@@ -1427,15 +1431,6 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
     )
     if not model:
         raise HTTPException(status_code=404, detail="Modelo nao encontrado")
-    if not model.get("enabled", True):
-        return {
-            "ok": False,
-            "provider": provider_id,
-            "model": model_id,
-            "model_name": model.get("name", model_id),
-            "message": "Modelo desativado",
-        }
-
     from langchain_core.messages import HumanMessage
     from src.core.llm import generate_stream
     from src.core.model_capabilities import with_reasoning_capabilities
@@ -1448,6 +1443,7 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
         "endpoint": provider.get("endpoint", ""),
         "api_key": provider.get("api_key", "") or get_provider_api_key(provider_id),
         "api_format": provider.get("api_format", "chat_completions"),
+        "auth_type": provider.get("auth_type", ""),
         "model_id": model_id,
         "model_name": model.get("name", model_id),
         "supports_images": model.get("supports_images"),
@@ -1458,6 +1454,20 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
         "user_id": user.id,
     }
     cfg = with_reasoning_capabilities(cfg)
+
+    def finish_benchmark(result: dict) -> dict:
+        """Persist validation while leaving catalog imports hidden until the admin enables them."""
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            pm_update_model(provider_id, model_id, {
+                "validation_status": "working" if result.get("ok") else "failed",
+                "validation_error": "" if result.get("ok") else str(result.get("message") or "")[:1000],
+                "validated_at": now,
+                "validation_latency_ms": int(result.get("ttft_ms") or result.get("total_ms") or 0),
+            })
+        except Exception:
+            pass
+        return result
 
     started = time.perf_counter()
     first_chunk_at: float | None = None
@@ -1495,24 +1505,24 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
         await asyncio.wait_for(consume(), timeout=90.0)
     except asyncio.TimeoutError:
         total_ms = round((time.perf_counter() - started) * 1000)
-        return {
+        return finish_benchmark({
             "ok": False,
             "provider": provider_id,
             "model": model_id,
             "model_name": model.get("name", model_id),
             "total_ms": total_ms,
             "message": "Tempo limite de 90 segundos excedido",
-        }
+        })
     except Exception as exc:
         total_ms = round((time.perf_counter() - started) * 1000)
-        return {
+        return finish_benchmark({
             "ok": False,
             "provider": provider_id,
             "model": model_id,
             "model_name": model.get("name", model_id),
             "total_ms": total_ms,
             "message": str(exc),
-        }
+        })
 
     finished = time.perf_counter()
     total_ms = round((finished - started) * 1000)
@@ -1521,7 +1531,7 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
     generation_seconds = max((finished - (first_chunk_at or started)), 0.001)
     chars_per_second = round(generated_chars / generation_seconds, 1)
     if stream_error or not (content or reasoning):
-        return {
+        return finish_benchmark({
             "ok": False,
             "provider": provider_id,
             "model": model_id,
@@ -1529,9 +1539,9 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
             "ttft_ms": ttft_ms,
             "total_ms": total_ms,
             "message": stream_error or "O modelo terminou sem devolver texto",
-        }
+        })
 
-    return {
+    return finish_benchmark({
         "ok": True,
         "provider": provider_id,
         "model": model_id,
@@ -1541,7 +1551,7 @@ async def providers_benchmark(body: dict | None = None, user=Depends(get_current
         "output_chars": generated_chars,
         "chars_per_second": chars_per_second,
         "had_reasoning": bool(reasoning),
-    }
+    })
 
 
 def _detect_key_source(provider_id: str, key: str) -> str:

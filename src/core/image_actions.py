@@ -79,7 +79,10 @@ _ATYPICAL_VISUAL_CONTEXT = re.compile(
 _CURRENT_CONTEXT_REFERENCE = re.compile(
     r"\b(nossa\s+conversa|conversa\s+atual|que\s+(?:a\s+gente|nos)\s+conversou|"
     r"mensagens?\s+anteriores?|contexto\s+(?:acima|anterior|da\s+conversa)|"
-    r"texto\s+que\s+(?:voce|voc[eê])\s+criar)\b",
+    r"texto\s+que\s+(?:voce|voc[eê])\s+criar|"
+    r"(?:dele|dela|deles|delas|eles|elas|ambos|ambas|os\s+dois|as\s+duas)|"
+    r"(?:esse|essa|esses|essas|este|esta|estes|estas)\s+personagens?|"
+    r"(?:personagens?|pessoas?|objetos?)\s+(?:citad[oa]s?|mencionad[oa]s?))\b",
     re.IGNORECASE,
 )
 _SEQUENTIAL_REQUEST = re.compile(
@@ -170,6 +173,24 @@ def detect_image_action(message: str, attachments: list[dict]) -> dict | None:
 
 def references_previous_image(message: str) -> bool:
     return bool(_IMAGE_REFERENCE.search(message or ""))
+
+
+def image_request_uses_current_context(message: str) -> bool:
+    """Whether an image request contains a reference that needs dialogue context."""
+    return bool(_CURRENT_CONTEXT_REFERENCE.search(message or ""))
+
+
+def contextual_image_prompt_is_resolved(request: str, prompt: str) -> bool:
+    """Reject a planner output that merely copies an unresolved contextual request."""
+    request_text = " ".join((request or "").lower().split())
+    prompt_text = " ".join((prompt or "").lower().split())
+    if not prompt_text:
+        return False
+    if request_text and difflib.SequenceMatcher(None, request_text, prompt_text).ratio() >= 0.88:
+        return False
+    if _CURRENT_CONTEXT_REFERENCE.search(prompt_text) and len(prompt_text) < max(180, len(request_text) * 2):
+        return False
+    return len(prompt_text.split()) >= 8
 
 
 def has_antigravity_image_model(user_id: int) -> bool:

@@ -141,6 +141,23 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(provider["api"], "https://aihubmix.com/v1")
         self.assertEqual(provider["api_format"], "chat_completions")
+        self.assertTrue(provider["endpoint_verified"])
+        self.assertTrue(provider["quick_setup"])
+
+    def test_unreviewed_provider_cannot_claim_key_only_quick_setup(self):
+        catalog = {
+            "unreviewed-example": {
+                "name": "Unreviewed",
+                "api": "https://example.test/v1",
+                "env": ["EXAMPLE_API_KEY"],
+                "models": {"model": {"name": "Model"}},
+            }
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            provider = list_catalog_providers("unreviewed")[0]
+
+        self.assertFalse(provider["endpoint_verified"])
+        self.assertFalse(provider["quick_setup"])
 
 
 if __name__ == "__main__":

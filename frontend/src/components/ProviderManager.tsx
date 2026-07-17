@@ -18,6 +18,9 @@ interface ModelInfo {
   alias?: string
   usage?: string
   status?: string
+  validation_status?: 'working' | 'failed'
+  validation_error?: string
+  validated_at?: string
   context_length: number
   enabled: boolean
   active?: boolean
@@ -34,6 +37,7 @@ interface ProviderInfo {
   endpoint?: string
   api_key?: string
   api_format: string
+  auth_type?: string
   provider_type: 'builtin' | 'custom'
   enabled: boolean
   active: boolean
@@ -78,6 +82,16 @@ interface CatalogProviderInfo {
   model_search_index?: string
   api?: string
   api_format?: string
+  endpoint?: string
+  endpoint_verified?: boolean
+  connection_catalogued?: boolean
+  connection_confidence?: string
+  quick_setup?: boolean
+  setup_mode?: string
+  auth_type?: string
+  required_fields?: string[]
+  docs_url?: string
+  connection_notes?: string
 }
 
 interface CatalogModelInfo extends ModelInfo {
@@ -632,6 +646,15 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
         body: JSON.stringify({ provider_id: selectedId, model_id: modelId }),
       })
       setBenchmarkResults(prev => ({ ...prev, [modelId]: result }))
+      setProviders(prev => prev.map(provider => provider.id !== selectedId ? provider : ({
+        ...provider,
+        models: provider.models.map(model => model.id !== modelId ? model : ({
+          ...model,
+          validation_status: result.ok ? 'working' : 'failed',
+          validation_error: result.ok ? '' : (result.message || 'Falha no teste'),
+          validated_at: new Date().toISOString(),
+        })),
+      })))
       if (notify) {
         if (result.ok) toast.success(`${result.model_name}: ${result.ttft_ms}ms ate o primeiro texto`)
         else toast.error(`${result.model_name}: ${result.message || 'falhou'}`)
@@ -872,6 +895,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           endpoint: formEndpoint.trim(),
           api_key: formApiKey.trim(),
           api_format: formApiFormat,
+          auth_type: catalogQuickSetup?.auth_type || undefined,
           models,
         }
         const created = await apiReq<ProviderInfo>(`${API}/providers/manage`, {
@@ -1765,15 +1789,27 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
               onConfigure={() => {
                 const catalogProvider = selectedCatalog
+                if (!catalogProvider.quick_setup) {
+                  const fields = (catalogProvider.required_fields || []).join(', ')
+                  toast.error(
+                    catalogProvider.endpoint_verified
+                      ? `Configuracao rapida bloqueada: este provider exige ${fields || 'campos ou adaptador adicionais'}.`
+                      : 'Configuracao rapida bloqueada ate endpoint, autenticacao e protocolo terem validacao oficial.'
+                  )
+                  return
+                }
                 resetForm()
-                setCatalogQuickSetup(catalogProvider.api ? catalogProvider : null)
+                setCatalogQuickSetup(catalogProvider.quick_setup ? catalogProvider : null)
                 setFormProviderId(catalogProvider.id)
                 setFormCatalogProviderId(catalogProvider.id)
                 setFormName(catalogProvider.name)
                 setFormBaseUrl(catalogProvider.api || '')
+                setFormEndpoint(catalogProvider.endpoint || '')
                 setFormApiFormat(catalogProvider.api_format || 'chat_completions')
-                if (!catalogProvider.api) {
-                  toast('Este catalogo nao informa a URL da API; revise os campos avancados.')
+                if (!catalogProvider.quick_setup) {
+                  toast(catalogProvider.endpoint_verified
+                    ? 'Este provider exige configuracao adicional ou um adaptador especifico; revise os campos avancados.'
+                    : 'Endpoint ainda nao validado em documentacao oficial; configuracao rapida bloqueada.')
                 }
                 const firstModel = catalogModels[0]
                 if (firstModel) {
@@ -2637,6 +2673,16 @@ function ModelRow({
                 {status.label}
               </span>
             )}
+            {model.validation_status === 'working' && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#dcfce7', color: '#15803d' }}>
+                Testado
+              </span>
+            )}
+            {model.validation_status === 'failed' && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#fee2e2', color: '#b91c1c' }}>
+                Falhou
+              </span>
+            )}
             {model.recommended && (
               <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
                 Recomendado
@@ -2669,6 +2715,11 @@ function ModelRow({
           {model.usage && (
             <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
               {model.usage}
+            </p>
+          )}
+          {!benchmarking && !benchmark && model.validation_status === 'failed' && model.validation_error && (
+            <p className="mt-1 break-words text-xs" style={{ color: '#dc2626' }}>
+              Ultimo teste: {model.validation_error}
             </p>
           )}
           {benchmarking && (

@@ -19,6 +19,7 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
 
         self.assertIn("catalogQuickSetup", manager)
+        self.assertIn("catalogProvider.quick_setup ? catalogProvider : null", manager)
         self.assertIn("enabled: false, active: false", manager)
         self.assertIn("formApiKey", manager)
         self.assertIn("teste e habilite somente", manager)

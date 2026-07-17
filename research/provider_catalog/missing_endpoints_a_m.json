@@ -1,0 +1,297 @@
+[
+  {
+    "provider_id": "aihubmix",
+    "status": "supported",
+    "base_url": "https://aihubmix.com/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "OpenAI-compatible Chat Completions",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://docs.aihubmix.com/en/api/Aihubmix-Integration",
+    "models_endpoint": "https://aihubmix.com/v1/models",
+    "confidence": "high",
+    "notes": "The legacy OpenAI-compatible /v1/models endpoint is token-aware. The newer public catalog is GET https://aihubmix.com/api/v1/models. AIHubMix documents native Gemini and Anthropic surfaces too, but its unified /v1/chat/completions surface is the appropriate default for this catalog. Some capability-specific models can still require a native surface or suffix; validate each model before enabling it.",
+    "source_urls": [
+      "https://docs.aihubmix.com/en/api/Aihubmix-Integration",
+      "https://docs.aihubmix.com/en/api/Models-API",
+      "https://docs.aihubmix.com/en/FAQs/Faq"
+    ]
+  },
+  {
+    "provider_id": "amazon-bedrock",
+    "status": "supported_with_provider_adapter",
+    "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+    "api_format": "aws_bedrock_converse",
+    "protocol": "Amazon Bedrock Converse/ConverseStream (native AWS REST/SDK)",
+    "auth_type": "aws_sigv4_or_bedrock_bearer_api_key",
+    "required_fields": ["region", "bedrock_bearer_api_key OR aws_access_key_id + aws_secret_access_key (+ aws_session_token when applicable)"],
+    "docs_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html",
+    "models_endpoint": "https://bedrock.{region}.amazonaws.com/foundation-models",
+    "confidence": "high",
+    "notes": "Do not treat the whole Models.dev Bedrock list as a single OpenAI-compatible catalog. Native Converse gives the broadest consistent message interface, but model support and regional availability vary. The newer bedrock-mantle endpoint offers OpenAI-compatible APIs only for models listed as available on that endpoint. A Bedrock API key can be sent as Authorization: Bearer; IAM credentials require SigV4. The control-plane ListFoundationModels operation is region-specific and is not an OpenAI /models endpoint.",
+    "source_urls": [
+      "https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html",
+      "https://docs.aws.amazon.com/bedrock/latest/userguide/apis.html",
+      "https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html",
+      "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html"
+    ]
+  },
+  {
+    "provider_id": "anthropic",
+    "status": "supported",
+    "base_url": "https://api.anthropic.com/v1",
+    "api_format": "anthropic_messages",
+    "protocol": "Anthropic Messages API",
+    "auth_type": "x_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://platform.claude.com/docs/en/api/messages/create",
+    "models_endpoint": "https://api.anthropic.com/v1/models",
+    "confidence": "high",
+    "notes": "Requests require x-api-key, anthropic-version (currently 2023-06-01 in official examples), and content-type headers. The Messages endpoint is POST /v1/messages; it is not OpenAI Chat Completions. GET /v1/models returns the models available to the credential.",
+    "source_urls": [
+      "https://platform.claude.com/docs/en/get-started",
+      "https://platform.claude.com/docs/en/api/messages/create",
+      "https://platform.claude.com/docs/en/api/beta/models/list",
+      "https://platform.claude.com/docs/en/manage-claude/authentication"
+    ]
+  },
+  {
+    "provider_id": "azure",
+    "status": "supported_dynamic_endpoint",
+    "base_url": "https://{resource_name}.openai.azure.com/openai/v1",
+    "api_format": "openai_chat_completions_azure_v1",
+    "protocol": "Azure OpenAI v1 OpenAI-compatible API",
+    "auth_type": "api_key_header_or_microsoft_entra_bearer",
+    "required_fields": ["resource_name", "api_key OR Microsoft Entra token", "deployed_model_name"],
+    "docs_url": "https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat",
+    "models_endpoint": "https://{resource_name}.openai.azure.com/openai/v1/models",
+    "confidence": "high",
+    "notes": "The model value must be the deployment name in the user's Azure resource, not automatically the raw Models.dev model ID. Therefore API key alone cannot guarantee a model works: the model must first be deployed and available in that resource/region. The legacy route is /openai/deployments/{deployment-id}/chat/completions?api-version=..., while the current v1 route uses /openai/v1/chat/completions. API-key header and Entra bearer authentication are both documented.",
+    "source_urls": [
+      "https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat",
+      "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/chatgpt?pivots=programming-language-chat-completions",
+      "https://learn.microsoft.com/en-us/azure/foundry/openai/reference"
+    ]
+  },
+  {
+    "provider_id": "azure-cognitive-services",
+    "status": "supported_dynamic_endpoint",
+    "base_url": "https://{resource_name}.services.ai.azure.com/openai/v1",
+    "api_format": "openai_chat_completions_azure_v1",
+    "protocol": "Microsoft Foundry Models OpenAI-compatible v1 API",
+    "auth_type": "api_key_header_or_microsoft_entra_bearer",
+    "required_fields": ["resource_name", "api_key OR Microsoft Entra token", "deployed_model_name"],
+    "docs_url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/endpoints",
+    "models_endpoint": "https://{resource_name}.services.ai.azure.com/openai/v1/models",
+    "confidence": "high",
+    "notes": "Microsoft documents both services.ai.azure.com and openai.azure.com v1 base URLs. Models.dev IDs describe catalog models, but inference uses the deployment name created inside the user's Foundry resource. API key alone is insufficient until the resource and deployment exist. Older deployments may require /openai/deployments/{deployment}/chat/completions plus an api-version query parameter.",
+    "source_urls": [
+      "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/endpoints",
+      "https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat",
+      "https://learn.microsoft.com/en-us/azure/ai-foundry/how-to/model-inference-to-openai-migration?view=foundry-classic"
+    ]
+  },
+  {
+    "provider_id": "cerebras",
+    "status": "supported",
+    "base_url": "https://api.cerebras.ai/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "OpenAI-compatible Chat Completions",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://inference-docs.cerebras.ai/api-reference/chat-completions",
+    "models_endpoint": "https://api.cerebras.ai/v1/models",
+    "confidence": "high",
+    "notes": "POST /v1/chat/completions and GET /v1/models are documented. The models list is the authority for currently callable shared endpoints; preview models can be removed and dedicated endpoint models are a separate product surface.",
+    "source_urls": [
+      "https://inference-docs.cerebras.ai/api-reference/authentication",
+      "https://inference-docs.cerebras.ai/api-reference/chat-completions",
+      "https://inference-docs.cerebras.ai/api-reference/models/list-models",
+      "https://inference-docs.cerebras.ai/models/overview"
+    ]
+  },
+  {
+    "provider_id": "cloudflare-ai-gateway",
+    "status": "supported_with_model_id_normalization",
+    "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "Cloudflare AI Gateway REST API, OpenAI-compatible Chat Completions",
+    "auth_type": "cloudflare_bearer_api_token",
+    "required_fields": ["api_token with AI Gateway permission", "account_id", "gateway_id for Workers AI or a non-default gateway"],
+    "docs_url": "https://developers.cloudflare.com/ai-gateway/usage/rest-api/",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "The current Cloudflare REST API accepts Authorization: Bearer and is the simplest integration. Models.dev entries in this snapshot use old unified-gateway IDs such as workers-ai/@cf/..., while the REST API requires @cf/... for Workers AI and author/model for third parties. These IDs must be normalized; sending them unchanged is not guaranteed to work. Workers AI requires cf-aig-gateway-id. Cloudflare's official docs link to a web model catalog but do not document a general GET /models endpoint on this REST surface. The older gateway.ai.cloudflare.com/{account}/{gateway}/compat surface remains valid but uses different cf-aig-authorization/provider-key header behavior.",
+    "source_urls": [
+      "https://developers.cloudflare.com/ai-gateway/usage/rest-api/",
+      "https://developers.cloudflare.com/ai-gateway/get-started/",
+      "https://developers.cloudflare.com/ai-gateway/usage/chat-completion/",
+      "https://developers.cloudflare.com/ai-gateway/configuration/authentication/"
+    ]
+  },
+  {
+    "provider_id": "cohere",
+    "status": "supported",
+    "base_url": "https://api.cohere.ai/compatibility/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "Cohere OpenAI Compatibility API",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://docs.cohere.com/docs/compatibility-api",
+    "models_endpoint": "https://api.cohere.com/v1/models",
+    "confidence": "high",
+    "notes": "Use the compatibility base URL for the application's OpenAI Chat Completions transport. Cohere's authoritative model discovery endpoint is the native GET https://api.cohere.com/v1/models and can be filtered by endpoint; only enable models that advertise chat/chat-completions support. The discovery host differs from the compatibility inference host.",
+    "source_urls": [
+      "https://docs.cohere.com/docs/compatibility-api",
+      "https://docs.cohere.com/reference/list-models",
+      "https://docs.cohere.com/reference/chat"
+    ]
+  },
+  {
+    "provider_id": "deepinfra",
+    "status": "supported",
+    "base_url": "https://api.deepinfra.com/v1/openai",
+    "api_format": "openai_chat_completions",
+    "protocol": "OpenAI-compatible Chat Completions",
+    "auth_type": "bearer_api_key_or_scoped_jwt",
+    "required_fields": ["api_key OR scoped_jwt"],
+    "docs_url": "https://docs.deepinfra.com/quickstart",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "DeepInfra officially documents /v1/openai as the OpenAI-compatible base and Authorization: Bearer. Its reference documents native per-model metadata at GET /models/{model_name}, but the reviewed official pages do not establish a single OpenAI-compatible list-models endpoint; do not invent /v1/openai/models. Validate catalog IDs against the provider catalog/per-model metadata before enabling them.",
+    "source_urls": [
+      "https://docs.deepinfra.com/",
+      "https://docs.deepinfra.com/quickstart",
+      "https://docs.deepinfra.com/api-reference/introduction",
+      "https://docs.deepinfra.com/api-reference/models/models-info",
+      "https://docs.deepinfra.com/account/authentication"
+    ]
+  },
+  {
+    "provider_id": "gitlab",
+    "status": "unsupported_for_api_key_only_generic_chat",
+    "base_url": null,
+    "api_format": "gitlab_duo_proprietary",
+    "protocol": "GitLab Duo Agent Platform proprietary workflow/authentication chain",
+    "auth_type": "gitlab_duo_multi_token_oauth_chain",
+    "required_fields": ["eligible GitLab Duo subscription and instance", "GitLab OAuth/access context", "GitLab Duo Agent Platform services"],
+    "docs_url": "https://docs.gitlab.com/user/duo_agent_platform/",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "Official GitLab documentation does not prove a public, generic Chat Completions endpoint that accepts an arbitrary GITLAB_TOKEN and exposes the Models.dev duo-chat-* IDs. Duo Agent Platform uses a multi-token chain involving OAuth, workflow services, Cloud Connector, and AI Gateway. Therefore this provider must not be offered as a simple paste-one-key provider until GitLab documents a stable public inference endpoint and request contract or a dedicated adapter is implemented and tested.",
+    "source_urls": [
+      "https://docs.gitlab.com/user/duo_agent_platform/",
+      "https://docs.gitlab.com/user/duo_agent_platform/authentication/"
+    ]
+  },
+  {
+    "provider_id": "google",
+    "status": "supported_with_provider_adapter",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "api_format": "google_generate_content",
+    "protocol": "Gemini native generateContent/streamGenerateContent",
+    "auth_type": "x_goog_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://ai.google.dev/api/generate-content",
+    "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+    "confidence": "high",
+    "notes": "Native generation is POST /v1beta/models/{model}:generateContent or :streamGenerateContent and is not OpenAI Chat Completions. Authentication uses x-goog-api-key (the query key form is also shown in examples). GET /v1beta/models returns supportedGenerationMethods, which must be checked before enabling a model for chat. An OpenAI compatibility surface exists, but the Models.dev provider package is native Google and native capability semantics should be preserved.",
+    "source_urls": [
+      "https://ai.google.dev/api",
+      "https://ai.google.dev/api/generate-content",
+      "https://ai.google.dev/api/models",
+      "https://ai.google.dev/gemini-api/docs/generate-content/api-key"
+    ]
+  },
+  {
+    "provider_id": "google-vertex",
+    "status": "supported_dynamic_endpoint_with_provider_adapter",
+    "base_url": "https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/google/models",
+    "api_format": "vertex_google_generate_content",
+    "protocol": "Vertex AI native generateContent/streamGenerateContent",
+    "auth_type": "google_application_default_credentials_oauth2",
+    "required_fields": ["project_id", "location", "Application Default Credentials or service-account/workload identity with Vertex AI permissions", "enabled Vertex AI API"],
+    "docs_url": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/start/quickstart",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "Inference is POST .../publishers/google/models/{model}:generateContent and uses a Google OAuth access token/ADC. This is not a paste-only API-key integration in the general production configuration represented by the snapshot. Model availability depends on project, region, API enablement, IAM and sometimes Model Garden terms. No single credential-scoped /models endpoint equivalent to OpenAI's was proven for this publisher path; correlate against official Vertex model availability and test in the configured project/location.",
+    "source_urls": [
+      "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/start/quickstart",
+      "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling",
+      "https://docs.cloud.google.com/docs/authentication/application-default-credentials",
+      "https://docs.cloud.google.com/docs/authentication/rest"
+    ]
+  },
+  {
+    "provider_id": "google-vertex-anthropic",
+    "status": "supported_dynamic_endpoint_with_provider_adapter",
+    "base_url": "https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/anthropic/models",
+    "api_format": "vertex_anthropic_raw_predict",
+    "protocol": "Anthropic Messages-compatible payload over Vertex rawPredict/streamRawPredict",
+    "auth_type": "google_application_default_credentials_oauth2",
+    "required_fields": ["project_id", "location", "Application Default Credentials or service-account/workload identity", "enabled Vertex AI API", "accepted Claude Model Garden terms/access"],
+    "docs_url": "https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "The model ID is in the Vertex URL, not the body; anthropic_version=vertex-2023-10-16 belongs in the JSON body. Regional and model availability varies. Anthropic explicitly documents that the Models API is not supported on Google Cloud, so a models endpoint must not be invented. Use official Vertex/Anthropic availability tables and test the exact project/location/model combination.",
+    "source_urls": [
+      "https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai",
+      "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude",
+      "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude"
+    ]
+  },
+  {
+    "provider_id": "groq",
+    "status": "supported",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "Mostly OpenAI-compatible Chat Completions",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://console.groq.com/docs/openai",
+    "models_endpoint": "https://api.groq.com/openai/v1/models",
+    "confidence": "high",
+    "notes": "Groq explicitly describes its API as mostly, not fully, OpenAI compatible. GET /models is the authority for active IDs. Unsupported OpenAI fields can produce HTTP 400, so requests must be capability-aware and models should be tested before enabling.",
+    "source_urls": [
+      "https://console.groq.com/docs/openai",
+      "https://console.groq.com/docs/api-reference",
+      "https://console.groq.com/docs/models"
+    ]
+  },
+  {
+    "provider_id": "merge-gateway",
+    "status": "supported",
+    "base_url": "https://api-gateway.merge.dev/v1/openai",
+    "api_format": "openai_chat_completions",
+    "protocol": "Merge Gateway OpenAI SDK compatibility shim",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://docs.merge.dev/merge-gateway/get-started",
+    "models_endpoint": "https://api-gateway.merge.dev/v1/models",
+    "confidence": "high",
+    "notes": "Use /v1/openai for Chat Completions compatibility. Merge's native public API base is /v1 and centers on POST /responses; GET /v1/models returns canonical provider/model IDs and availability. Official examples differ on whether the OpenAI shim needs a provider prefix, so preserve the exact ID returned by GET /v1/models and validate it rather than stripping prefixes blindly.",
+    "source_urls": [
+      "https://docs.merge.dev/merge-gateway/get-started",
+      "https://docs.merge.dev/merge-gateway/api-overview",
+      "https://docs.merge.dev/merge-gateway/api-overview/models/list"
+    ]
+  },
+  {
+    "provider_id": "mistral",
+    "status": "supported",
+    "base_url": "https://api.mistral.ai/v1",
+    "api_format": "openai_chat_completions",
+    "protocol": "Mistral Chat Completions (OpenAI-like schema)",
+    "auth_type": "bearer_api_key",
+    "required_fields": ["api_key"],
+    "docs_url": "https://docs.mistral.ai/api",
+    "models_endpoint": "https://api.mistral.ai/v1/models",
+    "confidence": "high",
+    "notes": "POST /v1/chat/completions and GET /v1/models are officially documented with Bearer authentication. Use the model list capabilities (notably completion_chat) and archived status to decide whether a model can be exposed in chat; the static Models.dev snapshot alone cannot guarantee current availability.",
+    "source_urls": [
+      "https://docs.mistral.ai/api",
+      "https://docs.mistral.ai/api/endpoint/models",
+      "https://docs.mistral.ai/getting-started/quickstarts/developer/first-api-request"
+    ]
+  }
+]

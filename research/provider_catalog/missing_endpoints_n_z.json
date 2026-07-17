@@ -1,0 +1,165 @@
+[
+  {
+    "provider_id": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://platform.openai.com/docs/api-reference/chat/create",
+    "models_endpoint": "https://api.openai.com/v1/models",
+    "confidence": "high",
+    "notes": "The official API reference confirms Bearer authentication and POST /v1/chat/completions. Do not expose every models.dev entry in this chat provider: image-generation, embedding and realtime model IDs use other endpoints/protocols. The live /v1/models result and per-model capability metadata should be used to enable only chat-compatible text models.",
+    "source_urls": [
+      "https://platform.openai.com/docs/api-reference/chat/create",
+      "https://platform.openai.com/docs/api-reference/models/list"
+    ]
+  },
+  {
+    "provider_id": "perplexity",
+    "base_url": "https://api.perplexity.ai/v1",
+    "endpoint": "/sonar",
+    "api_format": "chat_completions",
+    "protocol": "openai_chat_completions_compatible_json",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://docs.perplexity.ai/api-reference/sonar-post",
+    "models_endpoint": "https://api.perplexity.ai/v1/models",
+    "confidence": "high",
+    "notes": "The current official Sonar endpoint is POST /v1/sonar and accepts Chat Completions-shaped messages. The /v1/models endpoint is primarily the Agent API catalog and returns creator-prefixed IDs; it must not be copied unfiltered into the Sonar selector. The models.dev entries sonar, sonar-pro, sonar-reasoning-pro and sonar-deep-research belong to the Sonar API and should be validated against current Sonar documentation before activation.",
+    "source_urls": [
+      "https://docs.perplexity.ai/api-reference/sonar-post",
+      "https://docs.perplexity.ai/api-reference/models-get",
+      "https://docs.perplexity.ai/docs/getting-started/quickstart"
+    ]
+  },
+  {
+    "provider_id": "sap-ai-core",
+    "base_url": null,
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse_with_sap_headers",
+    "auth_type": "oauth2_client_credentials",
+    "required_fields": [
+      "deployment_url",
+      "auth_url",
+      "client_id",
+      "client_secret",
+      "resource_group"
+    ],
+    "docs_url": "https://help.sap.com/docs/sap-ai-core/generative-ai/ef03b580fd5c4bc3ac60843303df1322.html",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "There is no universal static inference base URL. SAP requires the deployment-specific DEPLOYMENT_URL, a short-lived OAuth2 client-credentials token, and the AI-Resource-Group header. The current generic API-key-only provider form cannot support this correctly and should mark SAP AI Core unsupported until it implements token acquisition/refresh plus the custom header. Model availability is tenant, region, deployment and entitlement dependent; a models.dev snapshot is not proof that a model is callable. The AI_API_URL is a management API URL and must not be substituted for DEPLOYMENT_URL.",
+    "source_urls": [
+      "https://help.sap.com/docs/sap-ai-core/sap-ai-core-service-guide/get-auth-token",
+      "https://help.sap.com/docs/sap-ai-core/sap-ai-core-service-guide/consume-generative-ai-models-using-sap-ai-core",
+      "https://help.sap.com/docs/sap-ai-core/generative-ai/mistral",
+      "https://help.sap.com/docs/sap-ai-core/sap-ai-core-service-guide/models"
+    ]
+  },
+  {
+    "provider_id": "togetherai",
+    "base_url": "https://api.together.ai/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://docs.together.ai/docs/inference/openai-compatibility",
+    "models_endpoint": "https://api.together.ai/v1/models",
+    "confidence": "high",
+    "notes": "Together officially documents OpenAI compatibility, Bearer authentication, streaming SSE ending in data: [DONE], and GET /v1/models. Filter the model response to chat/language/code models before exposing items in this text-chat UI; image, embedding, moderation and rerank models use different request/response contracts.",
+    "source_urls": [
+      "https://docs.together.ai/docs/inference/openai-compatibility",
+      "https://docs.together.ai/docs/api-keys-authentication",
+      "https://docs.together.ai/reference/chat-completions",
+      "https://docs.together.ai/reference/models"
+    ]
+  },
+  {
+    "provider_id": "v0",
+    "base_url": "https://api.v0.dev/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://v0.dev/docs/v0-model-api",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "The official v0 Model API page documents exactly POST https://api.v0.dev/v1/chat/completions, Bearer V0_API_KEY, OpenAI-compatible streaming, and the three models present in the snapshot. No official model-list endpoint was found, so keep the documented static model IDs and do not invent /v1/models. Access currently requires an eligible paid v0 plan with usage-based billing.",
+    "source_urls": [
+      "https://v0.dev/docs/v0-model-api"
+    ]
+  },
+  {
+    "provider_id": "venice",
+    "base_url": "https://api.venice.ai/api/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://docs.venice.ai/api-reference/endpoint/chat/completions",
+    "models_endpoint": "https://api.venice.ai/api/v1/models?type=text",
+    "confidence": "high",
+    "notes": "Venice officially documents this base URL, Bearer authentication and OpenAI-style chat completions. Use the models endpoint with type=text (not type=all) for this chat UI. Even among text results, honor model_spec.offline and capability fields, and do not assume every historical models.dev ID is currently online.",
+    "source_urls": [
+      "https://docs.venice.ai/api-reference/api-spec",
+      "https://docs.venice.ai/api-reference/endpoint/chat/completions",
+      "https://docs.venice.ai/api-reference/endpoint/models/list"
+    ]
+  },
+  {
+    "provider_id": "vercel",
+    "base_url": "https://ai-gateway.vercel.sh/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key_or_vercel_oidc",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://vercel.com/docs/ai-gateway/openai-compat/rest-api",
+    "models_endpoint": "https://ai-gateway.vercel.sh/v1/models",
+    "confidence": "high",
+    "notes": "Use the direct OpenAI-compatible REST base /v1 in this Python application, not the AI SDK-specific /v1/ai base. External/non-Vercel deployments should use an AI Gateway API key; Vercel-hosted workloads may use OIDC. The catalog contains language, embedding, image, audio and video models, so only entries whose live type is language should appear in this chat-completions selector.",
+    "source_urls": [
+      "https://vercel.com/docs/ai-gateway/openai-compat/rest-api",
+      "https://vercel.com/docs/ai-gateway/authentication-and-byok",
+      "https://vercel.com/docs/ai-gateway/models-and-providers"
+    ]
+  },
+  {
+    "provider_id": "xai",
+    "base_url": "https://api.x.ai/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "chat_completions",
+    "protocol": "openai_compatible_json_and_sse",
+    "auth_type": "bearer_api_key",
+    "required_fields": [
+      "api_key"
+    ],
+    "docs_url": "https://docs.x.ai/developers/rest-api-reference/inference/chat",
+    "models_endpoint": "https://api.x.ai/v1/models",
+    "confidence": "high",
+    "notes": "xAI officially documents the OpenAI-compatible REST API and Bearer authentication. The models.dev provider also contains image and video model IDs; those must not be enabled in chat completions. Prefer the authenticated live model list (or /v1/language-models when richer modality metadata is needed) and expose only models with text output supported by the chat endpoint.",
+    "source_urls": [
+      "https://docs.x.ai/developers/rest-api-reference/inference",
+      "https://docs.x.ai/developers/rest-api-reference/inference/chat",
+      "https://docs.x.ai/developers/rest-api-reference/inference/models"
+    ]
+  }
+]

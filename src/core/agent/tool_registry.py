@@ -11,7 +11,13 @@ from typing import Any
 from src.core.agent.schemas import RegisteredTool, ToolDefinition, ToolResult
 from src.core.agent.policy import is_active_admin
 from src.core.file_delivery import resolve_file_delivery
-from src.core.image_actions import execute_image_action, has_antigravity_image_model
+from src.core.image_actions import (
+    contextual_image_prompt_is_resolved,
+    execute_image_action,
+    has_antigravity_image_model,
+    image_request_uses_current_context,
+    plan_image_action,
+)
 from src.core.skill_permissions import can_execute_skill, skill_permissions
 from src.core.skill_runtime import execute_enabled_skill_tool, runtime_skill_activity
 from src.core.workspace import grep_workspace, list_tree, read_text_file
@@ -58,6 +64,37 @@ def _image_options(arguments: dict) -> tuple[str, str, int]:
 async def _generate_image(context: Any, arguments: dict) -> ToolResult:
     prompt = _string(arguments, "prompt")
     aspect, size, count = _image_options(arguments)
+    if image_request_uses_current_context(context.request):
+        history = [
+            {
+                "role": str(item.get("role") or ""),
+                "content": str(item.get("content") or "")[:3000],
+            }
+            for item in (context.recent_history or [])[-12:]
+            if str(item.get("content") or "").strip()
+        ]
+        planned = await plan_image_action({
+            "operation": "generate",
+            "prompt": json.dumps({
+                "instruction": (
+                    "Produza uma descricao visual autocontida. Resolva todas as referencias do pedido atual "
+                    "usando o historico; nao mencione o historico nem deixe pronomes sem referente."
+                ),
+                "current_request": context.request,
+                "planner_candidate": prompt,
+                "conversation": history,
+            }, ensure_ascii=False),
+            "count": count,
+        }, context.provider_config)
+        resolved_prompt = str(planned.get("prompt") or "").strip()
+        if not contextual_image_prompt_is_resolved(context.request, resolved_prompt):
+            raise ValueError(
+                "O modelo nao conseguiu transformar a referencia da conversa em um prompt visual completo."
+            )
+        prompt = resolved_prompt
+        aspect = str(planned.get("aspect_ratio") or aspect)
+        size = str(planned.get("image_size") or size)
+        count = int(planned.get("count") or count)
     artifacts = await execute_image_action(context.user_id, {
         "operation": "generate",
         "reference": None,
@@ -70,7 +107,10 @@ async def _generate_image(context: Any, arguments: dict) -> ToolResult:
         call_id=context.current_call_id,
         name="image_generate",
         status="completed",
-        content=f"{len(artifacts)} imagem(ns) gerada(s) com Antigravity.",
+        content=(
+            f"{len(artifacts)} imagem(ns) gerada(s) com Antigravity. "
+            f"Prompt efetivamente enviado ao gerador: {prompt}"
+        ),
         attachments=artifacts,
         activity={
             "provider": "Antigravity",
@@ -102,7 +142,10 @@ async def _edit_image(context: Any, arguments: dict) -> ToolResult:
         call_id=context.current_call_id,
         name="image_edit",
         status="completed",
-        content=f"{len(artifacts)} imagem(ns) editada(s) com Antigravity.",
+        content=(
+            f"{len(artifacts)} imagem(ns) editada(s) com Antigravity. "
+            f"Prompt efetivamente enviado ao editor: {prompt}"
+        ),
         attachments=artifacts,
         activity={
             "provider": "Antigravity",

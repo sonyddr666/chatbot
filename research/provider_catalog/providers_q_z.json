@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-07-17",
+  "scope": "Providers Q-Z plus the numeric provider 302ai, all with a non-empty api field in data/models-dev-cache.json",
+  "provider_count": 47,
+  "summary": {"api_key_only": 35, "dynamic": 1, "oauth": 0, "unsupported": 11, "high_confidence": 25, "medium_confidence": 12, "low_confidence": 10},
+  "current_chat_compatibility_rules": {
+    "openai_chat": "Compatible with src/core/llm.py for text chat and OpenAI-style SSE, subject to capability_filters and a live per-model test.",
+    "unsupported": "Not compatible with the current chat. The provider must remain unavailable until a documented adapter or protocol is implemented.",
+    "dynamic_setup": "Compatible only after every field in auth.fields and additional_fields needed by the account has been resolved."
+  },
+  "confidence_legend": {
+    "high": "Primary documentation confirms base URL, auth and chat protocol.",
+    "medium": "Primary documentation confirms the integration generally but one requested detail is absent or inaccessible.",
+    "low": "The snapshot has an endpoint, but primary documentation was insufficient to safely enable it."
+  },
+  "providers": [
+    {
+      "provider_id": "302ai", "name": "302.AI", "base_url": "https://api.302.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models?llm=1&include_custom_models=1",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "openai_style_stream_documented_but_sse_framing_not_explicit", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["llm_models_only_from_live_models_endpoint", "only_enable_models_returning_normalized_openai_chunks", "exclude_audio_image_and_video_generation_from_text_chat", "upstream_specific_response_envelopes_require_manual_test", "manual_test_before_enable"],
+      "source_urls": ["https://doc.302.ai/147522039e0", "https://doc.302.ai/235272987e0", "https://doc.302.ai/147522038e0"], "confidence": "medium"
+    },
+    {
+      "provider_id": "qihang-ai", "name": "QiHang", "base_url": "https://api.qhaigc.net/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "model_capabilities_from_live_models", "manual_test_before_enable"],
+      "source_urls": ["https://www.qhaigc.net/docs", "https://www.qhaigc.net/docs/tutorials/opencode"], "confidence": "high"
+    },
+    {
+      "provider_id": "qiniu-ai", "name": "Qiniu", "base_url": "https://api.qnaigc.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_content_supported", "image_output_not_supported_by_current_chat_parser", "manual_test_before_enable"],
+      "source_urls": ["https://developer.qiniu.com/aitokenapi/13379/real-time-ai-interface-api", "https://developer.qiniu.com/aitokenapi/13000/claude-inference-api"], "confidence": "high"
+    },
+    {
+      "provider_id": "regolo-ai", "name": "Regolo AI", "base_url": "https://api.regolo.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_by_model", "manual_test_before_enable", "do_not_auto_sync_models_without_models_endpoint"],
+      "source_urls": ["https://docs.regolo.ai/", "https://docs.regolo.ai/models/features/thinking/"], "confidence": "medium"
+    },
+    {
+      "provider_id": "requesty", "name": "Requesty", "base_url": "https://router.requesty.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["provider_prefixed_model_ids", "pdf_input_uses_input_file_not_current_attachment_shape", "tools_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.requesty.ai/api-reference/inference-apis", "https://docs.requesty.ai/api-reference/endpoint/chat-completions-create", "https://docs.requesty.ai/api-reference/endpoint/models-list"], "confidence": "high"
+    },
+    {
+      "provider_id": "routing-run", "name": "routing.run", "base_url": "https://api.routing.run/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://docs.routing.run/api-reference/models"], "confidence": "low"
+    },
+    {
+      "provider_id": "sakana", "name": "Sakana AI", "base_url": "https://api.sakana.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["fugu_model_ids_only", "temperature_accepted_but_ignored", "previous_response_id_not_supported", "manual_test_before_enable"],
+      "source_urls": ["https://console.sakana.ai/get-started", "https://console.sakana.ai/models"], "confidence": "high"
+    },
+    {
+      "provider_id": "sarvam", "name": "Sarvam AI", "base_url": "https://api.sarvam.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_or_api_subscription_key", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["allow_only_sarvam_30b_and_sarvam_105b", "reasoning_content_supported", "ignore_final_empty_choices_usage_chunk", "manual_test_before_enable"],
+      "source_urls": ["https://docs.sarvam.ai/api-reference/authentication", "https://docs.sarvam.ai/api-reference/chat/chat-completions", "https://docs.sarvam.ai/api-reference-docs/changelog"], "confidence": "high"
+    },
+    {
+      "provider_id": "scaleway", "name": "Scaleway", "base_url": "https://api.scaleway.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_secret_key"]}, "additional_fields": ["project_id_optional"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "frequency_penalty_n_top_logprobs_logit_bias_user_unsupported", "custom_tools_unsupported", "manual_test_before_enable"],
+      "source_urls": ["https://www.scaleway.com/en/developers/api/generative-apis", "https://www.scaleway.com/en/docs/generative-apis/api-cli/using-chat-api/", "https://www.scaleway.com/en/docs/generative-apis/api-cli/using-models-api/"], "confidence": "high"
+    },
+    {
+      "provider_id": "siliconflow", "name": "SiliconFlow", "base_url": "https://api.siliconflow.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_content_supported", "tools_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions"], "confidence": "high"
+    },
+    {
+      "provider_id": "siliconflow-cn", "name": "SiliconFlow China", "base_url": "https://api.siliconflow.cn/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_content_supported", "region_specific_key", "manual_test_before_enable"],
+      "source_urls": ["https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions", "https://cloud.siliconflow.com/models"], "confidence": "medium"
+    },
+    {
+      "provider_id": "snowflake-cortex", "name": "Snowflake Cortex", "base_url": "https://{snowflake_account}.snowflakecomputing.com/api/v2/cortex/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "https://{snowflake_account}.snowflakecomputing.com/api/v2/cortex/v1/messages", "models_endpoint": null,
+      "auth": {"type": "bearer_pat_jwt_or_oauth", "fields": ["snowflake_account", "token"]}, "additional_fields": ["snowflake_account", "token_type_optional"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "dynamic",
+      "capability_filters": ["chat_models_only", "audio_unsupported", "vision_only_openai_and_claude", "tools_only_openai_and_claude", "temperature_by_model", "reasoning_shape_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api"], "confidence": "high"
+    },
+    {
+      "provider_id": "stackit", "name": "STACKIT", "base_url": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "available_endpoints_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.stackit.cloud/products/data-and-ai/ai-model-serving/basics/available-shared-models/"], "confidence": "high"
+    },
+    {
+      "provider_id": "stepfun", "name": "StepFun China", "base_url": "https://api.stepfun.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_or_reasoning_content_by_request", "multimodal_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://platform.stepfun.com/docs/zh/guides/basic-concepts", "https://platform.stepfun.com/docs/zh/api-reference/chat/chat-completion-create"], "confidence": "high"
+    },
+    {
+      "provider_id": "stepfun-ai", "name": "StepFun Global", "base_url": "https://api.stepfun.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "reasoning_or_reasoning_content_by_request", "multimodal_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://platform.stepfun.ai/docs/en/api-reference/chat/chat-completion-create", "https://platform.stepfun.ai/docs/en/api-reference/models/list"], "confidence": "high"
+    },
+    {
+      "provider_id": "stepfun-ai-step-plan", "name": "StepFun Step Plan Global", "base_url": "https://api.stepfun.ai/step_plan/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["active_step_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["plan_entitlement_required", "plan_model_ids_only", "reasoning_shape_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://platform.stepfun.ai/docs/en/step-plan/quick-start", "https://platform.stepfun.ai/docs/en/step-plan/integrations/reasoning-api"], "confidence": "high"
+    },
+    {
+      "provider_id": "stepfun-step-plan", "name": "StepFun Step Plan China", "base_url": "https://api.stepfun.com/step_plan/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["active_step_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["plan_entitlement_required", "plan_model_ids_only", "reasoning_shape_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api"], "confidence": "high"
+    },
+    {
+      "provider_id": "subconscious", "name": "Subconscious", "base_url": "https://api.subconscious.dev/v1", "chat_endpoint": null, "messages_endpoint": "/messages", "models_endpoint": null,
+      "auth": {"type": "anthropic_key_unverified", "fields": ["api_key"]}, "additional_fields": [], "protocol": "anthropic_messages", "streaming": "anthropic_sse_expected", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "requires_anthropic_adapter", "require_live_test"],
+      "source_urls": ["https://docs.subconscious.dev/overview"], "confidence": "medium"
+    },
+    {
+      "provider_id": "submodel", "name": "submodel", "base_url": "https://llm.submodel.ai/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["instagen_access_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://submodel.gitbook.io"], "confidence": "low"
+    },
+    {
+      "provider_id": "synthetic", "name": "Synthetic", "base_url": "https://api.synthetic.new/openai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["model_id_must_use_hf_prefix_when_documented", "chat_models_only", "vision_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://dev.synthetic.new/docs/openai/chat-completions"], "confidence": "high"
+    },
+    {
+      "provider_id": "tencent-coding-plan", "name": "Tencent Coding Plan China", "base_url": "https://api.lkeap.cloud.tencent.com/coding/v3", "chat_endpoint": "/chat/completions", "messages_endpoint": "https://api.lkeap.cloud.tencent.com/coding/anthropic/v1/messages", "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["coding_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["plan_specific_key_required", "plan_model_ids_dynamic", "manual_test_before_enable"],
+      "source_urls": ["https://cloud.tencent.com/document/product/1823/130092"], "confidence": "high"
+    },
+    {
+      "provider_id": "tencent-token-plan", "name": "Tencent Token Plan", "base_url": "https://api.lkeap.cloud.tencent.com/plan/v3", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["token_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["plan_specific_key_required", "plan_model_ids_dynamic", "manual_test_before_enable"],
+      "source_urls": ["https://cloud.tencent.com/document/product/1823/130119", "https://cloud.tencent.com/document/product/1823/130060"], "confidence": "high"
+    },
+    {
+      "provider_id": "tencent-tokenhub", "name": "Tencent TokenHub", "base_url": "https://tokenhub.tencentmaas.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["region_endpoint_optional", "x_session_id_optional"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["region_must_match_account", "live_models_authoritative", "reasoning_content_supported", "manual_test_before_enable"],
+      "source_urls": ["https://cloud.tencent.com/document/product/1823/130078", "https://cloud.tencent.com/document/product/1823/131382"], "confidence": "high"
+    },
+    {
+      "provider_id": "the-grid-ai", "name": "The Grid AI", "base_url": "https://api.thegrid.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "/messages", "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["purchased_consumption_units"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["instrument_ids_not_underlying_model_ids", "balance_required", "tools_json_and_streaming_by_instrument", "manual_test_before_enable"],
+      "source_urls": ["https://thegrid.ai/docs", "https://app.thegrid.ai/"], "confidence": "high"
+    },
+    {
+      "provider_id": "thinkingmachines", "name": "Thinking Machines", "base_url": "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_expected", "fields": ["tinker_api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["tinker_compatible_models_only", "manual_test_before_enable", "do_not_auto_sync_without_models_endpoint"],
+      "source_urls": ["https://tinker-docs.thinkingmachines.ai/tinker/compatible-apis/openai/"], "confidence": "medium"
+    },
+    {
+      "provider_id": "tinfoil", "name": "Tinfoil", "base_url": "https://inference.tinfoil.sh/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["sdk_recommended_for_attestation"], "protocol": "openai_chat_completions", "streaming": "sse_openai_with_possible_vendor_events", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["live_model_ids_only", "direct_http_lacks_sdk_attestation_guarantee", "vendor_events_may_be_ignored", "manual_test_before_enable"],
+      "source_urls": ["https://docs.tinfoil.sh/sdk/overview", "https://docs.tinfoil.sh/sdk/cli-sdk", "https://docs.tinfoil.sh/resources/changelog"], "confidence": "high"
+    },
+    {
+      "provider_id": "trustedrouter", "name": "TrustedRouter", "base_url": "https://api.trustedrouter.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["provider_prefixed_or_router_model_ids", "provider_routing_options_not_exposed_by_basic_chat", "manual_test_before_enable"],
+      "source_urls": ["https://trustedrouter.com/docs"], "confidence": "high"
+    },
+    {
+      "provider_id": "umans-ai", "name": "Umans AI", "base_url": "https://api.code.umans.ai/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://app.umans.ai/offers/code/docs/orgs"], "confidence": "low"
+    },
+    {
+      "provider_id": "umans-ai-coding-plan", "name": "Umans AI Coding Plan", "base_url": "https://api.code.umans.ai/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["coding_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "plan_entitlement_required", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://app.umans.ai/offers/code/docs"], "confidence": "low"
+    },
+    {
+      "provider_id": "unorouter", "name": "UnoRouter", "base_url": "https://api.unorouter.com/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://unorouter.com/models"], "confidence": "low"
+    },
+    {
+      "provider_id": "upstage", "name": "Upstage", "base_url": "https://api.upstage.ai/v1/solar", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["solar_chat_models_only", "manual_test_before_enable", "do_not_auto_sync_without_models_endpoint"],
+      "source_urls": ["https://developers.upstage.ai/docs/apis/chat"], "confidence": "medium"
+    },
+    {
+      "provider_id": "vivgrid", "name": "Vivgrid", "base_url": "https://api.vivgrid.com/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://docs.vivgrid.com/models"], "confidence": "low"
+    },
+    {
+      "provider_id": "vultr", "name": "Vultr", "base_url": "https://api.vultrinference.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer_expected", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "manual_test_before_enable"],
+      "source_urls": ["https://api.vultrinference.com/"], "confidence": "medium"
+    },
+    {
+      "provider_id": "wafer.ai", "name": "Wafer", "base_url": "https://pass.wafer.ai/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://docs.wafer.ai/wafer-pass"], "confidence": "low"
+    },
+    {
+      "provider_id": "wandb", "name": "Weights & Biases", "base_url": "https://api.inference.wandb.ai/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": "/models",
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": ["openai_project_optional"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["chat_models_only", "team_project_may_be_required", "reasoning_control_is_model_specific", "manual_test_before_enable"],
+      "source_urls": ["https://docs.wandb.ai/inference/api-reference", "https://docs.wandb.ai/inference/api-reference/chat-completions", "https://docs.wandb.ai/inference/response-settings/streaming"], "confidence": "high"
+    },
+    {
+      "provider_id": "xiaomi", "name": "Xiaomi", "base_url": "https://api.xiaomimimo.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_expected", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["mimo_models_only", "model_capabilities_require_live_test", "do_not_auto_sync_without_verified_models_endpoint"],
+      "source_urls": ["https://platform.xiaomimimo.com/#/docs"], "confidence": "medium"
+    },
+    {
+      "provider_id": "xiaomi-token-plan-ams", "name": "Xiaomi Token Plan Europe", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_expected", "fields": ["token_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["region_specific_plan_key", "plan_model_ids_only", "manual_test_before_enable"],
+      "source_urls": ["https://platform.xiaomimimo.com/#/docs"], "confidence": "medium"
+    },
+    {
+      "provider_id": "xiaomi-token-plan-cn", "name": "Xiaomi Token Plan China", "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_expected", "fields": ["token_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["region_specific_plan_key", "plan_model_ids_only", "manual_test_before_enable"],
+      "source_urls": ["https://platform.xiaomimimo.com/#/docs"], "confidence": "medium"
+    },
+    {
+      "provider_id": "xiaomi-token-plan-sgp", "name": "Xiaomi Token Plan Singapore", "base_url": "https://token-plan-sgp.xiaomimimo.com/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_expected", "fields": ["token_plan_api_key"]}, "additional_fields": ["active_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["region_specific_plan_key", "plan_model_ids_only", "manual_test_before_enable"],
+      "source_urls": ["https://platform.xiaomimimo.com/#/docs"], "confidence": "medium"
+    },
+    {
+      "provider_id": "xpersona", "name": "Xpersona", "base_url": "https://www.xpersona.co/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://www.xpersona.co/docs"], "confidence": "low"
+    },
+    {
+      "provider_id": "zai", "name": "Z.AI", "base_url": "https://api.z.ai/api/paas/v4", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_api_key_or_jwt", "fields": ["api_key"]}, "additional_fields": ["accept_language_optional"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["glm_models_only", "reasoning_content_supported", "temperature_by_model", "multimodal_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.z.ai/api-reference/introduction", "https://docs.z.ai/api-reference/llm/chat-completion", "https://docs.z.ai/guides/capabilities/streaming"], "confidence": "high"
+    },
+    {
+      "provider_id": "zai-coding-plan", "name": "Z.AI Coding Plan", "base_url": "https://api.z.ai/api/coding/paas/v4", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer_api_key", "fields": ["coding_plan_api_key"]}, "additional_fields": ["active_coding_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["coding_plan_supported_tools_only", "coding_plan_model_ids_only", "manual_test_before_enable"],
+      "source_urls": ["https://docs.z.ai/guides/develop/http/introduction", "https://docs.z.ai/devpack/overview"], "confidence": "high"
+    },
+    {
+      "provider_id": "zeldoc", "name": "Zeldoc", "base_url": "https://api.zeldoc.ai/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://docs.zeldoc.ai"], "confidence": "low"
+    },
+    {
+      "provider_id": "zenifra", "name": "Zenifra", "base_url": "https://ai.zenifra.com/v1", "chat_endpoint": null, "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "unknown", "fields": ["api_key"]}, "additional_fields": [], "protocol": "unverified", "streaming": "unverified", "adapter": "unsupported", "setup_mode": "unsupported",
+      "capability_filters": ["never_auto_enable", "require_primary_api_reference", "require_live_test"],
+      "source_urls": ["https://docs.zenifra.com"], "confidence": "low"
+    },
+    {
+      "provider_id": "zenmux", "name": "ZenMux", "base_url": "https://zenmux.ai/api/v1", "chat_endpoint": "/chat/completions", "messages_endpoint": "https://zenmux.ai/api/anthropic/v1/messages", "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["provider_prefixed_model_ids", "n_greater_than_one_unsupported", "capabilities_by_upstream_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.zenmux.ai/api/openai/create-chat-completion", "https://docs.zenmux.ai/zh/guide/quickstart", "https://docs.zenmux.ai/zh/guide/advanced/streaming.html"], "confidence": "high"
+    },
+    {
+      "provider_id": "zhipuai", "name": "Zhipu AI", "base_url": "https://open.bigmodel.cn/api/paas/v4", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["api_key"]}, "additional_fields": [], "protocol": "openai_chat_completions", "streaming": "sse_openai", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["glm_models_only", "reasoning_content_supported", "temperature_by_model", "multimodal_by_model", "manual_test_before_enable"],
+      "source_urls": ["https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8", "https://docs.bigmodel.cn/cn/guide/models/text/glm-4"], "confidence": "high"
+    },
+    {
+      "provider_id": "zhipuai-coding-plan", "name": "Zhipu AI Coding Plan", "base_url": "https://open.bigmodel.cn/api/coding/paas/v4", "chat_endpoint": "/chat/completions", "messages_endpoint": null, "models_endpoint": null,
+      "auth": {"type": "bearer", "fields": ["coding_plan_api_key"]}, "additional_fields": ["active_coding_plan"], "protocol": "openai_chat_completions", "streaming": "sse_openai_expected", "adapter": "openai_chat", "setup_mode": "api_key_only",
+      "capability_filters": ["coding_plan_supported_tools_only", "coding_plan_model_ids_only", "manual_test_before_enable"],
+      "source_urls": ["https://docs.bigmodel.cn/cn/coding-plan/overview", "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8"], "confidence": "medium"
+    }
+  ]
+}

@@ -450,8 +450,12 @@ async def process_chat_job(job_id: str) -> None:
         if completed_image_results and not bool(
             getattr(agent_outcome.route, "requires_final_synthesis", False)
         ):
-            edited = completed_image_results[-1].name == "image_edit"
+            completed = completed_image_results[-1]
+            edited = completed.name == "image_edit"
             response = "Imagem editada com Antigravity." if edited else "Imagem gerada com Antigravity."
+            effective_prompt = str((completed.activity or {}).get("query") or "").strip()
+            if effective_prompt:
+                response += f"\n\nPrompt utilizado: {effective_prompt}"
             await _add_event(job_id, "text_delta", response)
             memory = _prepare_memory(session_id, message)
             memory.add_user_message(message)
@@ -603,6 +607,9 @@ async def process_chat_job(job_id: str) -> None:
                         if image_action["operation"] == "edit"
                         else "Imagem gerada com Antigravity."
                     )
+                    effective_prompt = str(image_action.get("prompt") or "").strip()
+                    if effective_prompt:
+                        response += f"\n\nPrompt utilizado: {effective_prompt}"
                     await _add_event(job_id, "text_delta", response)
                     memory = _prepare_memory(session_id, message)
                     memory.add_user_message(message)

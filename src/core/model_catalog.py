@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from glob import glob
 import threading
 import time
 from urllib.request import Request, urlopen
@@ -25,10 +26,131 @@ CATALOG_PROVIDER_DEFAULTS = {
     },
 }
 CACHE_TTL_SECONDS = 24 * 60 * 60
+CONNECTION_CATALOG_GLOB = os.path.join(".", "research", "provider_catalog", "*.json")
 
 _lock = threading.Lock()
 _catalog: dict | None = None
 _catalog_loaded_at = 0.0
+
+
+def _connection_catalog() -> dict[str, dict]:
+    """Load reviewed connection contracts without making models.dev an endpoint authority."""
+    result: dict[str, dict] = {}
+    for path in sorted(glob(CONNECTION_CATALOG_GLOB)):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                items = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(items, dict):
+            items = items.get("providers")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            provider_id = str(item.get("provider_id") or "").strip()
+            if not provider_id:
+                continue
+            ranks = {"low": 1, "medium": 2, "high": 3}
+            incoming_rank = ranks.get(str(item.get("confidence") or "").lower(), 0)
+            current_rank = ranks.get(str(result.get(provider_id, {}).get("confidence") or "").lower(), -1)
+            if incoming_rank >= current_rank:
+                result[provider_id] = item
+    return result
+
+
+def _normalized_api_format(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if (
+        normalized.startswith("openai_chat_completions")
+        or normalized in {"openai_compatible_json_and_sse", "openai_compatible"}
+    ):
+        return "chat_completions"
+    if normalized.startswith("anthropic_messages"):
+        return "anthropic_messages"
+    return normalized or "chat_completions"
+
+
+def _connection_metadata(provider_id: str) -> dict:
+    item = _connection_catalog().get(provider_id)
+    if not item:
+        return {
+            "connection_catalogued": False,
+            "endpoint_verified": False,
+            "quick_setup": False,
+            "setup_mode": "advanced_review_required",
+        }
+    confidence = str(item.get("confidence") or "").lower()
+    auth = item.get("auth") if isinstance(item.get("auth"), dict) else {}
+    additional_fields = [
+        str(value).strip()
+        for value in [*(auth.get("additional_fields") or []), *(item.get("additional_fields") or [])]
+        if str(value).strip()
+    ]
+    required = [str(value).strip() for value in (item.get("required_fields") or [])]
+    if not required:
+        required = [str(value).strip() for value in (auth.get("fields") or []) if str(value).strip()]
+        required.extend(value for value in additional_fields if value not in required)
+    if not required and item.get("setup_mode") == "api_key_only":
+        required = ["api_key", *additional_fields]
+    raw_protocol = item.get("protocol")
+    protocol = raw_protocol if isinstance(raw_protocol, dict) else {}
+    api_format = _normalized_api_format(str(
+        item.get("api_format") or protocol.get("format") or raw_protocol or ""
+    ))
+    base_url = str(item.get("base_url") or item.get("verified_base_url") or "").strip()
+    status = str(item.get("status") or item.get("compatibility") or "supported").lower()
+    auth_type = str(item.get("auth_type") or auth.get("type") or "")
+    explicitly_simple = item.get("setup_mode") == "api_key_only"
+    key_only = required == ["api_key"] or (
+        explicitly_simple and len(required) <= 1 and not additional_fields
+    )
+    adapter_ready = api_format in {"chat_completions", "anthropic_messages"}
+    auth_ready = (
+        "bearer" in auth_type
+        or auth_type in {"authorization_api_key_scheme", "clarifai_pat"}
+        or (auth_type == "x_api_key" and api_format in {"chat_completions", "anthropic_messages"})
+    )
+    static_url = bool(base_url) and "{" not in base_url and "}" not in base_url
+    supported = (
+        "unsupported" not in status
+        and "not_verified" not in status
+        and "provider_adapter" not in status
+        and item.get("setup_mode") != "unsupported"
+    )
+    quick_setup = bool(
+        confidence == "high" and key_only and adapter_ready and auth_ready and static_url and supported
+    )
+    endpoint = str(
+        item.get("endpoint")
+        or item.get("chat_endpoint")
+        or (item.get("messages_endpoint") if api_format == "anthropic_messages" else "")
+        or ""
+    ).strip()
+    raw_models_endpoint = item.get("models_endpoint")
+    models_endpoint = raw_models_endpoint
+    if isinstance(raw_models_endpoint, str) and raw_models_endpoint.startswith("/") and base_url:
+        models_endpoint = base_url.rstrip("/") + raw_models_endpoint
+    return {
+        "connection_catalogued": True,
+        "connection_confidence": confidence,
+        "endpoint_verified": confidence == "high",
+        "quick_setup": quick_setup,
+        "setup_mode": "api_key_only" if quick_setup else (
+            str(item.get("setup_mode") or "advanced_configuration")
+        ),
+        "api": base_url,
+        "endpoint": endpoint,
+        "api_format": api_format,
+        "auth_type": auth_type,
+        "required_fields": required,
+        "models_endpoint": models_endpoint,
+        "docs_url": str(item.get("docs_url") or ""),
+        "protocol": str(protocol.get("format") or raw_protocol or ""),
+        "connection_notes": str(item.get("notes") or ""),
+        "source_urls": [str(value) for value in (item.get("source_urls") or []) if value],
+    }
 
 # Models explicitly recommended in OpenCode's model guide.  models.dev itself
 # describes capabilities but intentionally has no model-level recommendation.
@@ -214,21 +336,26 @@ def list_catalog_providers(query: str = "") -> list[dict]:
         if needle and needle not in f"{provider_id} {name} {model_search_index}".lower():
             continue
         defaults = CATALOG_PROVIDER_DEFAULTS.get(str(provider_id), {})
+        connection = _connection_metadata(str(provider_id))
         npm_package = str(raw.get("npm") or "")
-        api_format = str(defaults.get("api_format") or (
+        api_format = str(connection.get("api_format") or defaults.get("api_format") or (
             "anthropic_messages" if "anthropic" in npm_package else "chat_completions"
         ))
         result.append({
             "id": str(provider_id),
             "name": name,
-            "model_count": len(models) if isinstance(models, dict) else 0,
+            "model_count": sum(
+                1 for model in models.values()
+                if isinstance(model, dict) and _catalog_model_is_chat_compatible(model)
+            ) if isinstance(models, dict) else 0,
             # Permite busca global instantanea no frontend sem uma requisicao por tecla.
             "model_search_index": model_search_index,
             "doc": str(raw.get("doc") or ""),
             "env": [str(value) for value in (raw.get("env") or []) if value],
             "npm": str(raw.get("npm") or ""),
-            "api": str(raw.get("api") or defaults.get("api") or ""),
+            "api": str(connection.get("api") or raw.get("api") or defaults.get("api") or ""),
             "api_format": api_format,
+            **connection,
         })
     return sorted(result, key=lambda item: (item["name"].lower(), item["id"]))
 
@@ -236,6 +363,7 @@ def list_catalog_providers(query: str = "") -> list[dict]:
 def _normalize_catalog_model(model_id: str, raw: dict) -> dict:
     modalities = raw.get("modalities") or {}
     inputs = modalities.get("input") or []
+    outputs = modalities.get("output") or []
     limits = raw.get("limit") or {}
     return {
         "id": str(model_id),
@@ -246,6 +374,7 @@ def _normalize_catalog_model(model_id: str, raw: dict) -> dict:
         "supports_images": "image" in inputs,
         "supports_video": "video" in inputs,
         "supports_audio": "audio" in inputs,
+        "supports_text_output": not outputs or "text" in outputs,
         "supports_pdf": "pdf" in inputs,
         "supports_thinking": bool(raw.get("reasoning")),
         "supports_tools": bool(raw.get("tool_call")),
@@ -256,6 +385,18 @@ def _normalize_catalog_model(model_id: str, raw: dict) -> dict:
     }
 
 
+def _catalog_model_is_chat_compatible(raw: dict) -> bool:
+    """Keep non-text generators, embeddings and rerankers out of the chat selector."""
+    modalities = raw.get("modalities") if isinstance(raw.get("modalities"), dict) else {}
+    outputs = modalities.get("output") or []
+    if outputs and "text" not in outputs:
+        return False
+    family = str(raw.get("family") or "").lower()
+    model_id = str(raw.get("id") or "").lower()
+    blocked = ("embedding", "rerank", "moderation", "text-to-speech", "speech-to-text")
+    return not any(value in family or value in model_id for value in blocked)
+
+
 def list_catalog_models(provider_id: str, query: str = "") -> list[dict]:
     provider = get_catalog().get(str(provider_id))
     if not isinstance(provider, dict):
@@ -264,6 +405,8 @@ def list_catalog_models(provider_id: str, query: str = "") -> list[dict]:
     result = []
     for model_id, raw in (provider.get("models") or {}).items():
         if not isinstance(raw, dict):
+            continue
+        if not _catalog_model_is_chat_compatible({**raw, "id": str(model_id)}):
             continue
         model = _normalize_catalog_model(str(model_id), raw)
         if needle and needle not in f'{model["id"]} {model["name"]} {model["family"]}'.lower():

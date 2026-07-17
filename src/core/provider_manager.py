@@ -688,6 +688,7 @@ def list_providers(include_keys: bool = False, *, enrich_catalog: bool = True) -
             "endpoint": cp.get("endpoint", ""),
             "api_key": cp_key if include_keys else ("sk-..." if cp_key else ""),
             "api_format": cp.get("api_format", "chat_completions"),
+            "auth_type": cp.get("auth_type", ""),
             "provider_type": "builtin" if promoted_builtin else "custom",
             "enabled": cp.get("enabled", True),
             "models": marked_models,
@@ -830,6 +831,8 @@ def import_custom_providers(items: list[dict]) -> dict:
             provider["endpoint"] = str(item.get("endpoint", "")).strip()
         if "api_format" in item or not existing:
             provider["api_format"] = str(item.get("api_format", "chat_completions")).strip() or "chat_completions"
+        if "auth_type" in item or not existing:
+            provider["auth_type"] = str(item.get("auth_type", "")).strip()
         if "enabled" in item or not existing:
             requested_enabled = bool(item.get("enabled", True))
             if raw.get("active_provider_id") == provider_id and not requested_enabled:
@@ -912,6 +915,7 @@ def create_provider(body: dict) -> dict:
         "endpoint": body.get("endpoint", ""),
         "api_key": body.get("api_key", ""),
         "api_format": body.get("api_format", "chat_completions"),
+        "auth_type": str(body.get("auth_type", "")).strip(),
         "enabled": body.get("enabled", True),
         "models": body.get("models", []),
         "catalog_provider_id": str(body.get("catalog_provider_id", "")).strip(),
@@ -927,6 +931,7 @@ def create_provider(body: dict) -> dict:
         "base_url": new_provider["base_url"],
         "endpoint": new_provider["endpoint"],
         "api_format": new_provider["api_format"],
+        "auth_type": new_provider["auth_type"],
         "provider_type": "custom",
         "enabled": new_provider["enabled"],
         "models": new_provider["models"],
@@ -989,6 +994,8 @@ def update_provider(provider_id: str, data: dict) -> Optional[dict]:
                 cp["api_key"] = data["api_key"]
             if "api_format" in data:
                 cp["api_format"] = data["api_format"]
+            if "auth_type" in data:
+                cp["auth_type"] = str(data["auth_type"] or "").strip()
             if "enabled" in data:
                 if data["enabled"] is False and raw.get("active_provider_id") == provider_id:
                     raise ValueError("Não dá para desativar o provider ativo. Ative outro provider primeiro.")
@@ -1114,6 +1121,7 @@ def get_active_config(provider_id: str | None = None, model_id: str | None = Non
                 "endpoint": cp.get("endpoint", ""),
                 "api_key": get_provider_api_key(active_id),
                 "api_format": cp.get("api_format", "chat_completions"),
+                "auth_type": cp.get("auth_type", ""),
                 "model_id": model_info["id"] if model_info else "",
                 "model_name": model_info["name"] if model_info else "",
                 "supports_images": model_info.get("supports_images") if model_info else None,
@@ -1229,7 +1237,10 @@ def update_model(provider_id: str, model_id: str, data: dict) -> Optional[dict]:
         raw.setdefault("builtin_model_overrides", {})
         raw["builtin_model_overrides"].setdefault(provider_id, {})
         override = raw["builtin_model_overrides"][provider_id].setdefault(model_id, {})
-        for key in ("name", "context_length", "enabled"):
+        for key in (
+            "name", "context_length", "enabled", "validation_status",
+            "validation_error", "validated_at", "validation_latency_ms",
+        ):
             if key in data:
                 override[key] = data[key]
 
@@ -1253,6 +1264,12 @@ def update_model(provider_id: str, model_id: str, data: dict) -> Optional[dict]:
                         m["context_length"] = data["context_length"]
                     if "enabled" in data:
                         m["enabled"] = data["enabled"]
+                    for key in (
+                        "validation_status", "validation_error", "validated_at",
+                        "validation_latency_ms",
+                    ):
+                        if key in data:
+                            m[key] = data[key]
                     if data.get("enabled") is False and raw.get("active_provider_id") == provider_id and raw.get("active_model_id") == model_id:
                         raise ValueError("Não dá para desativar o modelo ativo. Selecione outro modelo primeiro.")
                     cp["models"][mi] = m

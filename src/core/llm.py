@@ -59,6 +59,20 @@ def _is_openai_compatible_provider(config: dict) -> bool:
     }
 
 
+def _provider_auth_headers(api_key: str, auth_type: str = "") -> dict[str, str]:
+    """Build the documented credential header for supported catalog auth schemes."""
+    if not api_key:
+        return {}
+    normalized = str(auth_type or "").strip().lower()
+    if normalized in {"x_api_key", "x-api-key"}:
+        return {"X-API-Key": api_key}
+    if normalized == "authorization_api_key_scheme":
+        return {"Authorization": f"Api-Key {api_key}"}
+    if normalized == "clarifai_pat":
+        return {"Authorization": f"Key {api_key}"}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
 def _coerce_stream_text(value) -> str:
     if isinstance(value, str):
         return value
@@ -489,8 +503,7 @@ async def generate_openai_compatible_stream(
         "Accept": "text/event-stream",
         "Content-Type": "application/json",
     }
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers.update(_provider_auth_headers(api_key, str(provider_config.get("auth_type") or "")))
 
     variants = _openai_request_variants(
         messages,
@@ -648,6 +661,14 @@ def get_llm(provider_config: dict | None = None) -> BaseChatModel:
 
     if pm_cfg.get("model_id") and pm_cfg.get("base_url"):
         api_key = pm_cfg.get("api_key") or settings.custom_provider_config.get("api_key", "")
+        if str(pm_cfg.get("api_format") or "").lower() == "anthropic_messages":
+            return ChatAnthropic(
+                model=pm_cfg["model_id"],
+                api_key=api_key,
+                base_url=pm_cfg["base_url"],
+                temperature=0.7,
+                streaming=True,
+            )
         return ChatOpenAI(
             model=pm_cfg["model_id"],
             api_key=api_key,

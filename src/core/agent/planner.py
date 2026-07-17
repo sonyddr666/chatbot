@@ -10,7 +10,7 @@ import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.core.agent.schemas import ToolCall, ToolDefinition
-from src.core.llm import _chat_completions_url, generate
+from src.core.llm import _chat_completions_url, _provider_auth_headers, generate
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -131,8 +131,7 @@ async def _native_openai_decision(
         return None
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     api_key = str(provider_config.get("api_key") or "").strip()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers.update(_provider_auth_headers(api_key, str(provider_config.get("auth_type") or "")))
     payload = {
         "model": str(provider_config.get("model_id")),
         "messages": [
