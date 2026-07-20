@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     enable_rag: bool = True
     rate_limit_per_minute: int = 30
 
+    # ─── Agent runtime (harness) ─────────────────────────────────
+    # Maximo de etapas de planejamento+execucao de ferramentas por mensagem.
+    agent_max_steps: int = 2
+    # Modelo dedicado para o planner (selecao de ferramentas). Mais barato que
+    # usar o modelo principal do usuario. Vazio = provider efetivo do usuario.
+    planner_base_url: str = ""
+    planner_api_key: str = ""
+    planner_model: str = ""
+
     # ─── Helpers ────────────────────────────────────────────────
     @property
     def custom_provider_config(self) -> dict:

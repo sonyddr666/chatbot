@@ -50,20 +50,50 @@ def classify_tool_route(message: str, attachments: list[dict] | None = None) -> 
     local_search = bool(re.search(
         r"\b(pesquis\w*|busc\w*|procur\w*)\b.*\b(dentro do (?:sistema|workspace)|meus? arquivos?|minhas? pastas?)\b",
         text,
+    )) or bool(re.search(
+        r"\b(search|look|find)\b.*\b(in|inside)\s+(the\s+|my\s+)(system|workspace|files?|folders?)\b",
+        text,
     ))
-    wants_search = bool(re.search(r"\b(pesquis\w*|busc\w*|procur\w*|internet|web)\b", text)) and not local_search
-    wants_history = bool(re.search(r"\b(historico|conversas? anteriores?|outros? chats?|lembra\w*)\b", text))
-    wants_workspace = local_search or bool(re.search(r"\b(arquivos?|pastas?|workspace|diretorio)\b", text))
-    if not wants_workspace and re.search(r"\b(leia|abra|busque|procure|liste)\b.*\bprojeto\b", text):
+    wants_search = bool(re.search(
+        r"\b(pesquis\w*|busc\w*|procur\w*|internet|web|search\w*|google\w*|look\s+(?:it\s+)?up|browse\s+the\s+web|on\s+the\s+internet)\b",
+        text,
+    )) and not local_search
+    wants_history = bool(re.search(
+        r"\b(historico|conversas? anteriores?|outros? chats?|lembra\w*|history|previous\s+conversations?|past\s+chats?|remember\s+when\s+we)\b",
+        text,
+    ))
+    wants_workspace = local_search or bool(re.search(
+        r"\b(arquivos?|pastas?|workspace|diretorio|files?|folders?|director\w+)\b",
+        text,
+    ))
+    if not wants_workspace and re.search(r"\b(leia|abra|busque|procure|liste|read|open|find|list)\b.*\b(projeto|project)\b", text):
         wants_workspace = True
-    wants_list = bool(re.search(r"\b(list\w*|mostr\w*|quais|estrutura)\b", text)) and wants_workspace
-    wants_file_delivery = bool(re.search(r"\b(envi\w*|mand\w*|entreg\w*|baix\w*)\b", text)) and wants_workspace
-    wants_time = bool(re.search(r"\b(que horas|qual (?:e )?a hora|que dia|data (?:de )?hoje|agora)\b", text))
-    wants_weather = bool(re.search(r"\b(clima|tempo em|previsao do tempo|temperatura)\b", text))
-    wants_url = "http://" in text or "https://" in text or bool(re.search(r"\b(url|site|pagina web|link)\b", text))
-    wants_calculation = bool(re.search(r"\b(calcule|calcular|conta|somar|multiplicar|porcentagem)\b", text))
-    wants_rag = bool(re.search(r"\b(rag|base de conhecimento|documentos indexados)\b", text))
-    wants_schedule = bool(re.search(r"\b(agend\w*|lembre-me|daqui a \d+|amanha as|tarefa futura)\b", text))
+    wants_list = bool(re.search(r"\b(list\w*|mostr\w*|quais|estrutura|show\s+me|structure)\b", text)) and wants_workspace
+    wants_file_delivery = bool(re.search(r"\b(envi\w*|mand\w*|entreg\w*|baix\w*|send|download|deliver)\b", text)) and wants_workspace
+    wants_time = bool(re.search(
+        r"\b(que horas|qual (?:e )?a hora|que dia|data (?:de )?hoje|agora|what\s+(?:time|day)\s+is\s+it|what'?s\s+the\s+(?:time|date)|current\s+(?:time|date)|today'?s\s+date)\b",
+        text,
+    ))
+    wants_weather = bool(re.search(r"\b(clima|tempo em|previsao do tempo|temperatura|weather|forecast)\b", text))
+    # URL exige um endereco literal ou um verbo de leitura explicito junto ao termo;
+    # mencionar "link" isoladamente ("me manda o link depois") nao habilita a leitura.
+    wants_url = (
+        "http://" in text
+        or "https://" in text
+        or bool(re.search(r"\b(leia|ler|abra|abrir|acesse|acessar|resuma|read|open|summarize)\b[^.!?]*\b(url|site|pagina|link|page)\b", text))
+        or bool(re.search(r"\b(url|site|pagina|link|page)\b[^.!?]*\b(leia|ler|abra|abrir|acesse|acessar|read|open)\b", text))
+    )
+    # "conta" isolado e falso positivo classico ("me conta uma piada"); exigir
+    # contexto matematico explicito ou uma expressao numerica.
+    wants_calculation = bool(re.search(
+        r"(calcule|calcular|calculate|somar?|multiplic\w*|dividir?|porcentagem|percent(?:age)?|quanto\s+(?:e|da|dá)\s+\d|\d+\s*[\+\-\*/x×]\s*\d+)",
+        text,
+    ))
+    wants_rag = bool(re.search(r"\b(rag|base de conhecimento|documentos indexados|knowledge base|indexed documents?)\b", text))
+    wants_schedule = bool(re.search(
+        r"\b(agend\w*|lembre-me|daqui a \d+|amanha as|tarefa futura|schedule|remind\s+me|tomorrow\s+at|in\s+\d+\s+(?:hours?|minutes?|days?))\b",
+        text,
+    ))
 
     # Image intent uses the same conservative detector as the durable job path.
     from src.core.image_actions import detect_image_action
@@ -111,7 +141,7 @@ def classify_tool_route(message: str, attachments: list[dict] | None = None) -> 
     # A request is compound when it genuinely needs more than one capability category.
     compound = len(categories) > 1
     intent = "image_generation" if image_action and image_confidence != "low" else (
-        next(iter(categories)) if categories else "chat"
+        sorted(categories)[0] if categories else "chat"
     )
     confidence = image_confidence if image_action else "high"
     return ToolRoute(

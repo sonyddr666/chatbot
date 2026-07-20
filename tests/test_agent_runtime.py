@@ -257,5 +257,218 @@ class AgentRoutingTests(unittest.TestCase):
         self.assertEqual(len(accepted), 1)
 
 
+class AgentHarnessImprovementsTests(unittest.IsolatedAsyncioTestCase):
+    def _context(self, **overrides):
+        base = dict(
+            user_id=1,
+            session_id="s",
+            request="teste",
+            attachments=[],
+            provider_config={"provider_id": "test", "model_id": "m", "base_url": "https://example.test"},
+        )
+        base.update(overrides)
+        return AgentContext(**base)
+
+    def _route(self, *names, compound=False):
+        return ToolRoute(allowed_tools=frozenset(names), compound=compound)
+
+    def _registered(self, name, handler, **definition_kwargs):
+        return RegisteredTool(
+            definition=ToolDefinition(
+                name=name,
+                description=name,
+                input_schema={"type": "object"},
+                **definition_kwargs,
+            ),
+            handler=handler,
+        )
+
+    async def test_tool_timeout_fails_without_killing_the_batch(self):
+        async def slow_handler(context, arguments):
+            await asyncio.sleep(5)
+            return ToolResult(call_id="c", name="noop", status="completed", content="tarde")
+
+        registered = self._registered("noop", slow_handler, timeout_seconds=0.05)
+        calls = [ToolCall(id="1", name="noop", arguments={})]
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=[registered]),
+            patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(side_effect=[calls, []])),
+            patch("src.core.agent.runtime.classify_tool_route", return_value=self._route("noop")),
+        ):
+            outcome = await run_agent_tools(self._context())
+        self.assertEqual(outcome.results[0].status, "failed")
+        self.assertIn("timeout", outcome.results[0].error)
+        self.assertEqual(outcome.tool_timeouts, 1)
+        self.assertIn("noop", outcome.tool_latencies)
+
+    async def test_single_tool_without_properties_skips_planner(self):
+        async def handler(context, arguments):
+            return ToolResult(call_id=context.current_call_id, name="noop", status="completed", content="ok")
+
+        registered = RegisteredTool(
+            definition=ToolDefinition(
+                name="noop",
+                description="noop",
+                input_schema={"type": "object", "properties": {}, "required": []},
+            ),
+            handler=handler,
+        )
+        decide = AsyncMock(return_value=[])
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=[registered]),
+            patch("src.core.agent.runtime.decide_tool_calls", new=decide),
+            patch("src.core.agent.runtime.classify_tool_route", return_value=self._route("noop")),
+        ):
+            outcome = await run_agent_tools(self._context())
+        self.assertTrue(outcome.executed)
+        self.assertEqual(outcome.planner_calls, 0)
+        decide.assert_not_awaited()
+
+    async def test_tool_with_optional_arguments_still_uses_planner(self):
+        async def handler(context, arguments):
+            return ToolResult(call_id="c", name="noop", status="completed", content="ok")
+
+        registered = RegisteredTool(
+            definition=ToolDefinition(
+                name="noop",
+                description="noop",
+                input_schema={
+                    "type": "object",
+                    "properties": {"optional": {"type": "string"}},
+                    "required": [],
+                },
+            ),
+            handler=handler,
+        )
+        decide = AsyncMock(side_effect=[[ToolCall(id="1", name="noop", arguments={"optional": "x"})], []])
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=[registered]),
+            patch("src.core.agent.runtime.decide_tool_calls", new=decide),
+            patch("src.core.agent.runtime.classify_tool_route", return_value=self._route("noop")),
+        ):
+            outcome = await run_agent_tools(self._context())
+        decide.assert_awaited()
+        self.assertTrue(outcome.executed)
+
+    async def test_rejected_calls_emit_event_and_count(self):
+        events = []
+
+        async def sink(name, payload):
+            events.append((name, payload))
+
+        registered = self._registered("noop", AsyncMock())
+        calls = [ToolCall(id="1", name="other_tool", arguments={})]
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=[registered]),
+            patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(side_effect=[calls, []])),
+            patch("src.core.agent.runtime.classify_tool_route", return_value=self._route("noop", "other_tool")),
+        ):
+            outcome = await run_agent_tools(self._context(event_sink=sink))
+        rejected = [payload for name, payload in events if name == "tool.rejected"]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["reason"], "not_in_route")
+        self.assertEqual(outcome.tool_rejected, 1)
+
+    async def test_compound_route_exhausting_steps_marks_truncated(self):
+        events = []
+
+        async def sink(name, payload):
+            events.append((name, payload))
+
+        async def handler(context, arguments):
+            return ToolResult(call_id=context.current_call_id, name="noop", status="completed", content="ok")
+
+        # category com orcamento 2 para as duas chamadas serem aceitas e o loop esgotar
+        registered = self._registered("noop", handler, category="workspace_read")
+        decisions = [
+            [ToolCall(id="1", name="noop", arguments={"value": 1})],
+            [ToolCall(id="2", name="noop", arguments={"value": 2})],
+        ]
+        with (
+            patch("src.core.agent.runtime.available_tools", return_value=[registered]),
+            patch("src.core.agent.runtime.decide_tool_calls", new=AsyncMock(side_effect=decisions)),
+            patch("src.core.agent.runtime.classify_tool_route", return_value=self._route("noop", compound=True)),
+        ):
+            outcome = await run_agent_tools(self._context(event_sink=sink))
+        self.assertTrue(outcome.steps_exhausted)
+        self.assertIn("limite de etapas", outcome.model_context())
+        self.assertIn("agent.truncated", [name for name, _ in events])
+        self.assertEqual(outcome.steps_used, 2)
+
+    def test_model_payload_truncates_only_with_max_chars(self):
+        result = ToolResult(call_id="c", name="t", status="completed", content="x" * 5000)
+        self.assertEqual(len(result.model_payload()["content"]), 5000)
+        truncated = result.model_payload(max_chars=100)
+        self.assertTrue(truncated["content"].endswith("...[truncado]"))
+        self.assertLess(len(truncated["content"]), 200)
+
+    def test_validator_rejects_invalid_arguments_with_definitions(self):
+        route = ToolRoute(allowed_tools=frozenset({"web_search"}))
+        definitions = {
+            "web_search": ToolDefinition(
+                name="web_search",
+                description="busca",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                category="search",
+            )
+        }
+        rejected = []
+        accepted = validate_tool_calls(
+            [ToolCall(id="1", name="web_search", arguments={})],
+            route,
+            definitions=definitions,
+            rejected=rejected,
+        )
+        self.assertEqual(accepted, [])
+        self.assertTrue(rejected[0]["reason"].startswith("invalid_arguments"))
+
+    def test_validator_uses_definition_category_over_name_table(self):
+        route = ToolRoute(allowed_tools=frozenset({"custom_tool"}))
+        definitions = {
+            "custom_tool": ToolDefinition(
+                name="custom_tool",
+                description="custom",
+                input_schema={"type": "object"},
+                category="search",
+            )
+        }
+        calls = [
+            ToolCall(id="1", name="custom_tool", arguments={"q": "a"}),
+            ToolCall(id="2", name="custom_tool", arguments={"q": "b"}),
+        ]
+        accepted = validate_tool_calls(calls, route, definitions=definitions)
+        # category "search" tem orcamento 1, mesmo o nome nao estando na tabela legada
+        self.assertEqual(len(accepted), 1)
+
+
+class AgentRoutingBilingualTests(unittest.TestCase):
+    def test_english_requests_enable_tools(self):
+        self.assertIn("get_time", classify_tool_route("what time is it now?").allowed_tools)
+        self.assertIn("web_search", classify_tool_route("search the web for codex").allowed_tools)
+        self.assertIn("get_weather", classify_tool_route("what is the weather in Paris?").allowed_tools)
+        self.assertIn("workspace_search", classify_tool_route("find notes inside my workspace").allowed_tools)
+
+    def test_portuguese_requests_still_enable_tools(self):
+        self.assertIn("get_time", classify_tool_route("que horas sao?").allowed_tools)
+        self.assertIn("get_weather", classify_tool_route("como esta o clima em Paris?").allowed_tools)
+
+    def test_calculation_false_positive_removed(self):
+        self.assertNotIn("calculate", classify_tool_route("me conta uma piada").allowed_tools)
+        self.assertIn("calculate", classify_tool_route("quanto e 18 * 4?").allowed_tools)
+
+    def test_link_mention_without_action_is_not_url_read(self):
+        self.assertNotIn("read_url_content", classify_tool_route("me manda o link depois").allowed_tools)
+        self.assertIn("read_url_content", classify_tool_route("leia https://example.com/docs").allowed_tools)
+
+    def test_intent_is_deterministic(self):
+        route_a = classify_tool_route("pesquise o clima e a hora agora")
+        route_b = classify_tool_route("pesquise a hora agora e o clima")
+        self.assertEqual(route_a.intent, route_b.intent)
+
+
 if __name__ == "__main__":
     unittest.main()

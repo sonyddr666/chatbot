@@ -371,6 +371,14 @@ async def process_chat_job(job_id: str) -> None:
         agent_outcome = AgentRunOutcome()
         if not simple_direct_image_request:
             try:
+                planner_config = None
+                if settings.planner_model and settings.planner_base_url:
+                    planner_config = {
+                        "provider_id": "planner",
+                        "base_url": settings.planner_base_url,
+                        "api_key": settings.planner_api_key,
+                        "model_id": settings.planner_model,
+                    }
                 agent_outcome = await run_agent_tools(AgentContext(
                     user_id=user_id,
                     session_id=session_id,
@@ -379,6 +387,8 @@ async def process_chat_job(job_id: str) -> None:
                     provider_config=provider_config,
                     recent_history=recent_history,
                     job_id=job_id,
+                    max_steps=settings.agent_max_steps,
+                    planner_config=planner_config,
                     event_sink=agent_event_sink,
                 ))
             except Exception as exc:

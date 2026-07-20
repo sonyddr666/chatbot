@@ -191,10 +191,14 @@ async def decide_tool_calls(
     prior_results: list[dict],
     tools: list[ToolDefinition],
     provider_config: dict,
+    planner_config: dict | None = None,
     recent_history: list[dict[str, str]] | None = None,
 ) -> list[ToolCall]:
     if not tools:
         return []
+    # Um planner dedicado (modelo mais barato) pode ser configurado; sem ele,
+    # a selecao de ferramentas usa o provider efetivo do usuario.
+    effective_config = planner_config or provider_config
     prompt = {
         "current_user_request": request,
         "available_attachments": attachment_summary,
@@ -202,7 +206,7 @@ async def decide_tool_calls(
     }
     if recent_history:
         prompt["recent_conversation_context"] = recent_history
-    native = await _native_openai_decision(prompt, tools, provider_config)
+    native = await _native_openai_decision(prompt, tools, effective_config)
     if native is not None:
         return native
     raw = await generate(
@@ -210,6 +214,6 @@ async def decide_tool_calls(
             SystemMessage(content=_planner_system_prompt(tools)),
             HumanMessage(content=json.dumps(prompt, ensure_ascii=False)),
         ],
-        provider_config=provider_config,
+        provider_config=effective_config,
     )
     return parse_tool_calls(raw, {tool.name for tool in tools})
