@@ -144,6 +144,29 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(provider["endpoint_verified"])
         self.assertTrue(provider["quick_setup"])
 
+    def test_alibaba_pay_as_you_go_regions_accept_single_api_key_setup(self):
+        catalog = {
+            "alibaba": {
+                "name": "Alibaba Cloud",
+                "models": {"qwen-plus": {"name": "Qwen Plus"}},
+            },
+            "alibaba-cn": {
+                "name": "Alibaba Cloud (China)",
+                "models": {"qwen-plus": {"name": "Qwen Plus"}},
+            },
+        }
+
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            providers = {
+                provider["id"]: provider
+                for provider in list_catalog_providers("alibaba")
+            }
+
+        self.assertEqual(providers["alibaba"]["required_fields"], ["api_key"])
+        self.assertTrue(providers["alibaba"]["quick_setup"])
+        self.assertEqual(providers["alibaba-cn"]["required_fields"], ["api_key"])
+        self.assertTrue(providers["alibaba-cn"]["quick_setup"])
+
     def test_unreviewed_provider_cannot_claim_key_only_quick_setup(self):
         catalog = {
             "unreviewed-example": {
