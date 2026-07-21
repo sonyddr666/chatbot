@@ -433,6 +433,23 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(variants[0]["reasoning_effort"], "high")
 
+    def test_openai_payload_omits_unsupported_temperature(self):
+        from src.core.llm import _openai_request_variants
+
+        variants = _openai_request_variants(
+            [HumanMessage(content="oi")],
+            {
+                "provider_id": "example",
+                "base_url": "https://example.test/v1",
+                "model_id": "fixed-temperature-model",
+                "supports_temperature": False,
+            },
+            response_mode="normal",
+            reasoning_effort=None,
+        )
+
+        self.assertNotIn("temperature", variants[0])
+
     async def test_cloudflare_placeholder_attempts_account_discovery(self):
         from src.core.llm import generate_openai_compatible_stream
 

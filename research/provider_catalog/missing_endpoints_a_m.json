@@ -155,6 +155,8 @@
     "protocol": "OpenAI-compatible Chat Completions",
     "auth_type": "bearer_api_key_or_scoped_jwt",
     "required_fields": ["api_key OR scoped_jwt"],
+    "setup_mode": "api_key_only",
+    "adapter": "openai_chat",
     "docs_url": "https://docs.deepinfra.com/quickstart",
     "models_endpoint": null,
     "confidence": "high",
@@ -289,6 +291,27 @@
       "https://docs.mistral.ai/api",
       "https://docs.mistral.ai/api/endpoint/models",
       "https://docs.mistral.ai/getting-started/quickstarts/developer/first-api-request"
+    ]
+  },
+  {
+    "provider_id": "cline-pass",
+    "status": "supported",
+    "base_url": "https://api.cline.bot/api/v1",
+    "endpoint": "/chat/completions",
+    "api_format": "openai_chat_completions",
+    "protocol": "OpenAI-compatible Chat Completions with SSE",
+    "auth_type": "bearer_api_key_or_account_token",
+    "required_fields": ["api_key OR account_token"],
+    "setup_mode": "api_key_only",
+    "adapter": "openai_chat",
+    "models_endpoint": null,
+    "confidence": "high",
+    "notes": "Cline documents one OpenAI-compatible Chat Completions endpoint. API keys and account tokens use the same Authorization Bearer field. Preserve provider/model IDs exactly as published and test each model before enabling it.",
+    "source_urls": [
+      "https://docs.cline.bot/api/overview",
+      "https://docs.cline.bot/api/authentication",
+      "https://docs.cline.bot/api/chat-completions",
+      "https://docs.cline.bot/api/models"
     ]
   }
 ]

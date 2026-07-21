@@ -2,6 +2,8 @@ import unittest
 from unittest.mock import patch
 
 from src.core.model_catalog import (
+    _connection_catalog,
+    _connection_metadata,
     canonical_model_name,
     enrich_builtin_models,
     list_catalog_models,
@@ -129,6 +131,37 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual([provider["id"] for provider in providers], ["xai"])
         self.assertIn("grok-4.5", providers[0]["model_search_index"])
 
+    def test_catalog_excludes_non_chat_models(self):
+        catalog = {
+            "mixed": {
+                "models": {
+                    "chat-model": {"name": "Chat Model", "modalities": {"output": ["text"]}},
+                    "whisper-large": {"name": "Whisper Large", "modalities": {"output": ["text"]}},
+                    "guard-model": {"name": "Prompt Guard", "modalities": {"output": ["text"]}},
+                    "image-model": {"name": "Image Generator", "modalities": {"output": ["image"]}},
+                }
+            }
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            models = list_catalog_models("mixed")
+
+        self.assertEqual([model["id"] for model in models], ["chat-model"])
+
+    def test_catalog_preserves_temperature_capability(self):
+        catalog = {
+            "test": {
+                "models": {
+                    "fixed": {"name": "Fixed", "temperature": False},
+                    "normal": {"name": "Normal", "temperature": True},
+                }
+            }
+        }
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            models = {model["id"]: model for model in list_catalog_models("test")}
+
+        self.assertFalse(models["fixed"]["supports_temperature"])
+        self.assertTrue(models["normal"]["supports_temperature"])
+
     def test_catalog_exposes_ready_connection_defaults_for_aihubmix(self):
         catalog = {
             "aihubmix": {
@@ -202,6 +235,44 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertFalse(provider["endpoint_verified"])
         self.assertFalse(provider["quick_setup"])
+
+    def test_every_provider_in_current_snapshot_has_a_connection_contract(self):
+        from src.core.model_catalog import get_catalog
+
+        self.assertEqual(set(get_catalog()), set(_connection_catalog()))
+
+    def test_deepinfra_alternative_bearer_tokens_share_one_credential_field(self):
+        provider = _connection_metadata("deepinfra")
+
+        self.assertTrue(provider["configuration_supported"])
+        self.assertTrue(provider["quick_setup"])
+        self.assertEqual(provider["required_config_fields"], [])
+        self.assertEqual(provider["auth_type"], "bearer_api_key_or_scoped_jwt")
+
+    def test_advanced_placeholder_endpoint_is_not_reported_as_verified(self):
+        provider = _connection_metadata("azure")
+
+        self.assertFalse(provider["endpoint_verified"])
+        self.assertFalse(provider["configuration_supported"])
+        self.assertEqual(provider["setup_status"], "advanced")
+
+    def test_optional_credential_does_not_become_required(self):
+        provider = _connection_metadata("ovhcloud")
+
+        self.assertTrue(provider["configuration_supported"])
+        self.assertFalse(provider["credential_required"])
+
+    def test_all_connection_contracts_receive_an_explicit_setup_status(self):
+        allowed = {"ready", "experimental", "advanced", "unsupported", "review_required"}
+        contracts = _connection_catalog()
+
+        self.assertEqual(len(contracts), 168)
+        for provider_id in contracts:
+            metadata = _connection_metadata(provider_id)
+            self.assertIn(metadata["setup_status"], allowed, provider_id)
+            if metadata["quick_setup"]:
+                self.assertTrue(metadata["endpoint_verified"], provider_id)
+                self.assertTrue(metadata["configuration_supported"], provider_id)
 
 
 if __name__ == "__main__":

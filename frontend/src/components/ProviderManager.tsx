@@ -87,9 +87,16 @@ interface CatalogProviderInfo {
   connection_catalogued?: boolean
   connection_confidence?: string
   quick_setup?: boolean
+  configuration_supported?: boolean
+  setup_status?: 'ready' | 'experimental' | 'advanced' | 'unsupported' | 'review_required'
+  setup_message?: string
   setup_mode?: string
   auth_type?: string
   required_fields?: string[]
+  required_config_fields?: string[]
+  optional_config_fields?: string[]
+  account_prerequisites?: string[]
+  credential_required?: boolean
   docs_url?: string
   connection_notes?: string
 }
@@ -172,6 +179,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const catalogModelsCacheRef = useRef(new Map<string, CatalogModelInfo[]>())
   const catalogLoadRequestRef = useRef(0)
   const catalogModelsRequestRef = useRef(0)
+  const catalogAutoSelectionSuppressedRef = useRef(false)
+  const catalogSetupBindingRef = useRef<{
+    provider: CatalogProviderInfo
+    models: CatalogModelInfo[]
+  } | null>(null)
   const [syncingCatalog, setSyncingCatalog] = useState(false)
   const [modelView, setModelView] = useState<'active' | 'hidden'>('active')
   const [loading, setLoading] = useState(false)
@@ -260,6 +272,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   }, [])
 
   const openCatalogProvider = useCallback(async (provider: CatalogProviderInfo, modelQuery = '') => {
+    catalogAutoSelectionSuppressedRef.current = false
     const requestId = ++catalogModelsRequestRef.current
     selectedCatalogRef.current = provider
     setSelectedCatalog(provider)
@@ -338,6 +351,8 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       selectedCatalogRef.current = null
       setSelectedCatalog(null)
       setCatalogModels([])
+      catalogAutoSelectionSuppressedRef.current = false
+      catalogSetupBindingRef.current = null
       providerViewRef.current = 'active'
       setProviderView('active')
       loadProviders()
@@ -394,6 +409,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
 
   useEffect(() => {
     if (providerView !== 'catalog') return
+    if (catalogAutoSelectionSuppressedRef.current) return
     if (!normalizedCatalogSearch) {
       setCatalogModelSearch('')
       return
@@ -886,6 +902,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const [formModelCtx, setFormModelCtx] = useState('128000')
 
   const resetForm = () => {
+    catalogSetupBindingRef.current = null
     setFormName('')
     setFormProviderId('')
     setFormCatalogProviderId('')
@@ -929,12 +946,20 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       toast.error('Nome e Base URL são obrigatórios')
       return
     }
-    if (catalogQuickSetup?.env?.length && !formApiKey.trim()) {
+    if (catalogQuickSetup?.credential_required !== false && !formApiKey.trim()) {
       toast.error('Informe a API key para configurar este provider')
       return
     }
-    if (catalogQuickSetup && formCatalogModels.some(model => model.catalog_provider_id !== catalogQuickSetup.id)) {
+    const catalogBinding = catalogSetupBindingRef.current
+    if (catalogBinding && (
+      formCatalogProviderId !== catalogBinding.provider.id
+      || catalogBinding.models.some(model => model.catalog_provider_id !== catalogBinding.provider.id)
+    )) {
       toast.error('A lista de modelos nao corresponde ao provider selecionado. Reabra o catalogo e tente novamente.')
+      return
+    }
+    if (catalogQuickSetup && catalogBinding?.provider.id !== catalogQuickSetup.id) {
+      toast.error('A configuracao aberta nao corresponde ao provider selecionado. Reabra o catalogo e tente novamente.')
       return
     }
     setSaving(true)
@@ -957,7 +982,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       } else {
         // Cria o modelo inicial se o usuário preencheu
         const models: any[] = catalogQuickSetup
-          ? formCatalogModels.map(model => ({ ...model, enabled: false, active: false }))
+          ? (catalogBinding?.models || []).map(model => ({ ...model, enabled: false, active: false }))
           : []
         if (!catalogQuickSetup && formModelId.trim()) {
           models.push({
@@ -975,7 +1000,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           endpoint: formEndpoint.trim(),
           api_key: formApiKey.trim(),
           api_format: formApiFormat,
-          auth_type: catalogQuickSetup?.auth_type || undefined,
+          auth_type: catalogBinding?.provider.auth_type || undefined,
           models,
         }
         const created = await apiReq<ProviderInfo>(`${API}/providers/manage`, {
@@ -1242,6 +1267,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 <button
                   key={view}
                   onClick={() => {
+                    catalogAutoSelectionSuppressedRef.current = false
                     providerViewRef.current = view
                     setProviderView(view)
                     setSelectedId(null)
@@ -1270,7 +1296,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     <Search size={14} className="absolute left-3 top-2.5" style={{ color: 'var(--text-tertiary)' }} />
                     <input
                       value={catalogSearch}
-                      onChange={event => setCatalogSearch(event.target.value)}
+                      onChange={event => {
+                        catalogAutoSelectionSuppressedRef.current = false
+                        setCatalogSearch(event.target.value)
+                      }}
                       placeholder="Buscar provider..."
                       className="w-full rounded-xl border py-2 pl-9 pr-3 text-xs"
                       style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
@@ -1875,26 +1904,33 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               onRefresh={() => void refreshWorldCatalog()}
               onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
               onConfigure={() => {
-                const catalogProvider = selectedCatalog
-                const providerModels = catalogModels.filter(model => model.catalog_provider_id === catalogProvider.id)
+                const catalogProvider = { ...selectedCatalog }
+                const providerModels = catalogModels
+                  .filter(model => model.catalog_provider_id === catalogProvider.id)
+                  .map(model => ({ ...model }))
                 if (providerModels.length !== catalogModels.length) {
                   toast.error('Os modelos carregados nao correspondem ao provider selecionado. Aguarde e tente novamente.')
                   return
                 }
+                // A transicao catalogo -> formulario precisa ser atomica. Enquanto o formulario
+                // estiver aberto, a busca antiga nao pode selecionar novamente um provider.
+                catalogAutoSelectionSuppressedRef.current = true
                 catalogModelsRequestRef.current += 1
                 resetForm()
-                setCatalogQuickSetup(catalogProvider.quick_setup ? catalogProvider : null)
-                setFormCatalogModels(catalogProvider.quick_setup ? providerModels : [])
+                catalogSetupBindingRef.current = { provider: catalogProvider, models: providerModels }
+                setCatalogQuickSetup(catalogProvider.configuration_supported ? catalogProvider : null)
+                setFormCatalogModels(providerModels)
                 setFormProviderId(catalogProvider.id)
                 setFormCatalogProviderId(catalogProvider.id)
                 setFormName(catalogProvider.name)
                 setFormBaseUrl(catalogProvider.api || '')
                 setFormEndpoint(catalogProvider.endpoint || '')
                 setFormApiFormat(catalogProvider.api_format || 'chat_completions')
-                if (!catalogProvider.quick_setup) {
-                  toast(catalogProvider.endpoint_verified
-                    ? 'Este provider exige configuracao adicional ou um adaptador especifico; revise os campos avancados.'
-                    : 'Endpoint ainda nao validado em documentacao oficial; revise os campos avancados antes de salvar.')
+                if (catalogProvider.setup_status !== 'ready' || catalogProvider.account_prerequisites?.length) {
+                  const prerequisites = catalogProvider.account_prerequisites?.length
+                    ? ` Pre-requisitos da conta: ${catalogProvider.account_prerequisites.join(', ')}.`
+                    : ''
+                  toast(`${catalogProvider.setup_message || 'Revise a configuracao antes de salvar.'}${prerequisites}`)
                 }
                 const firstModel = providerModels[0]
                 if (firstModel) {

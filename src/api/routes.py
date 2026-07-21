@@ -1315,7 +1315,15 @@ async def providers_test(body: dict | None = None, user=Depends(get_current_user
     if not cfg.get("api_key"):
         cfg["api_key"] = get_provider_api_key(cfg.get("provider_id", ""))
 
-    if not cfg.get("api_key"):
+    auth_type = str(cfg.get("auth_type") or "").strip().lower()
+    credential_optional = (
+        cfg.get("provider_id") == "ollama"
+        or "optional" in auth_type
+        or auth_type in {"none", "no_auth", "proxy_managed"}
+        or auth_type.startswith("none_")
+    )
+
+    if not cfg.get("api_key") and not credential_optional:
         return {
             "ok": False,
             "provider": cfg.get("provider_id", ""),

@@ -40,6 +40,8 @@
   },
   {
     "provider_id": "sap-ai-core",
+    "setup_mode": "unsupported",
+    "adapter": "unsupported",
     "base_url": null,
     "endpoint": "/chat/completions",
     "api_format": "chat_completions",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from glob import glob
 import threading
 import time
@@ -72,6 +73,15 @@ def _normalized_api_format(value: str) -> str:
     return normalized or "chat_completions"
 
 
+def _looks_like_credential_field(value: str) -> bool:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    return any(marker in normalized for marker in (
+        "api_key", "api key", "access_token", "access token", "api_secret",
+        "secret key", "bearer", "jwt", "pat", "credential", "token_plan",
+        "coding_plan", "coding plan", "token", "helicone key", "hf token",
+    ))
+
+
 def _connection_metadata(provider_id: str) -> dict:
     item = _connection_catalog().get(provider_id)
     if not item:
@@ -91,7 +101,6 @@ def _connection_metadata(provider_id: str) -> dict:
     required = [str(value).strip() for value in (item.get("required_fields") or [])]
     if not required:
         required = [str(value).strip() for value in (auth.get("fields") or []) if str(value).strip()]
-        required.extend(value for value in additional_fields if value not in required)
     if not required and item.get("setup_mode") == "api_key_only":
         required = ["api_key", *additional_fields]
     raw_protocol = item.get("protocol")
@@ -102,14 +111,28 @@ def _connection_metadata(provider_id: str) -> dict:
     base_url = str(item.get("base_url") or item.get("verified_base_url") or "").strip()
     status = str(item.get("status") or item.get("compatibility") or "supported").lower()
     auth_type = str(item.get("auth_type") or auth.get("type") or "")
-    explicitly_simple = item.get("setup_mode") == "api_key_only"
-    key_only = required == ["api_key"] or (
-        explicitly_simple and len(required) <= 1 and not additional_fields
+    declared_setup_mode = str(item.get("setup_mode") or "").strip().lower()
+    explicitly_simple = declared_setup_mode == "api_key_only"
+    credential_fields = [value for value in required if _looks_like_credential_field(value)]
+    required_config_fields = [value for value in required if value not in credential_fields]
+    optional_config_fields = [
+        value for value in additional_fields if "optional" in value.lower()
+    ]
+    account_prerequisites = list(dict.fromkeys(
+        value for value in [*required_config_fields, *additional_fields]
+        if value not in optional_config_fields
+    ))
+    single_secret_setup = explicitly_simple or (
+        bool(credential_fields) and not required_config_fields
     )
-    adapter_ready = api_format in {"chat_completions", "anthropic_messages"}
+    adapter_name = str(item.get("adapter") or "").strip().lower()
+    adapter_ready = (
+        api_format in {"chat_completions", "anthropic_messages"}
+        and adapter_name != "unsupported"
+    )
     auth_ready = (
         "bearer" in auth_type
-        or auth_type in {"authorization_api_key_scheme", "clarifai_pat"}
+        or auth_type in {"api_key", "authorization_api_key_scheme", "clarifai_pat"}
         or (auth_type == "x_api_key" and api_format in {"chat_completions", "anthropic_messages"})
     )
     static_url = bool(base_url) and "{" not in base_url and "}" not in base_url
@@ -117,11 +140,37 @@ def _connection_metadata(provider_id: str) -> dict:
         "unsupported" not in status
         and "not_verified" not in status
         and "provider_adapter" not in status
-        and item.get("setup_mode") != "unsupported"
+        and declared_setup_mode != "unsupported"
     )
-    quick_setup = bool(
-        confidence == "high" and key_only and adapter_ready and auth_ready and static_url and supported
+    configuration_supported = bool(
+        single_secret_setup and adapter_ready and auth_ready and static_url and supported
     )
+    quick_setup = bool(confidence == "high" and configuration_supported)
+    credential_required = "optional" not in auth_type.lower()
+    endpoint_verified = bool(
+        confidence == "high" and adapter_ready and auth_ready and static_url and supported
+    )
+
+    if configuration_supported:
+        setup_status = "ready" if confidence == "high" else "experimental"
+    elif declared_setup_mode == "dynamic" or "{" in base_url:
+        setup_status = "advanced"
+    elif not supported or adapter_name == "unsupported":
+        setup_status = "unsupported"
+    else:
+        setup_status = "review_required"
+
+    if setup_status == "ready":
+        setup_message = "Configuracao com uma credencial suportada."
+    elif setup_status == "experimental":
+        setup_message = "Configuracao disponivel em modo experimental; teste a credencial e cada modelo antes de habilitar."
+    elif setup_status == "advanced":
+        fields = ", ".join(required_config_fields or required or ["endpoint e credenciais especificos"])
+        setup_message = f"Configuracao avancada necessaria: {fields}."
+    elif setup_status == "unsupported":
+        setup_message = "Este provider ainda nao possui um adaptador compativel com o protocolo atual."
+    else:
+        setup_message = "Contrato de conexao ainda nao validado; configure manualmente e teste antes de habilitar."
     endpoint = str(
         item.get("endpoint")
         or item.get("chat_endpoint")
@@ -135,9 +184,12 @@ def _connection_metadata(provider_id: str) -> dict:
     return {
         "connection_catalogued": True,
         "connection_confidence": confidence,
-        "endpoint_verified": confidence == "high",
+        "endpoint_verified": endpoint_verified,
         "quick_setup": quick_setup,
-        "setup_mode": "api_key_only" if quick_setup else (
+        "configuration_supported": configuration_supported,
+        "setup_status": setup_status,
+        "setup_message": setup_message,
+        "setup_mode": "api_key_only" if configuration_supported else (
             str(item.get("setup_mode") or "advanced_configuration")
         ),
         "api": base_url,
@@ -145,6 +197,10 @@ def _connection_metadata(provider_id: str) -> dict:
         "api_format": api_format,
         "auth_type": auth_type,
         "required_fields": required,
+        "required_config_fields": [] if configuration_supported else required_config_fields,
+        "optional_config_fields": optional_config_fields,
+        "account_prerequisites": account_prerequisites,
+        "credential_required": credential_required,
         "models_endpoint": models_endpoint,
         "docs_url": str(item.get("docs_url") or ""),
         "protocol": str(protocol.get("format") or raw_protocol or ""),
@@ -378,6 +434,7 @@ def _normalize_catalog_model(model_id: str, raw: dict) -> dict:
         "supports_pdf": "pdf" in inputs,
         "supports_thinking": bool(raw.get("reasoning")),
         "supports_tools": bool(raw.get("tool_call")),
+        "supports_temperature": raw.get("temperature") is not False,
         "release_date": str(raw.get("release_date") or ""),
         "last_updated": str(raw.get("last_updated") or ""),
         "cost": raw.get("cost") if isinstance(raw.get("cost"), dict) else {},
@@ -391,10 +448,20 @@ def _catalog_model_is_chat_compatible(raw: dict) -> bool:
     outputs = modalities.get("output") or []
     if outputs and "text" not in outputs:
         return False
-    family = str(raw.get("family") or "").lower()
-    model_id = str(raw.get("id") or "").lower()
-    blocked = ("embedding", "rerank", "moderation", "text-to-speech", "speech-to-text")
-    return not any(value in family or value in model_id for value in blocked)
+    searchable = " ".join((
+        str(raw.get("family") or ""),
+        str(raw.get("id") or ""),
+        str(raw.get("name") or ""),
+    )).lower()
+    blocked_patterns = (
+        r"\bembedding", r"\brerank", r"\bmoderation", r"text[-_ ]to[-_ ]speech",
+        r"speech[-_ ]to[-_ ]text", r"\bwhisper\b", r"\basr\b", r"\btranscri",
+        r"\btts\b", r"\bprompt[-_ ]?guard", r"\bllama[-_ ]?guard", r"\bsafety\b",
+        r"\bspeaker\b", r"\btranslation\b", r"text[-_ ]to[-_ ]image",
+        r"image[-_ ]generation", r"\bgpt[-_ ]image\b", r"\bdall[-_ ]?e\b",
+        r"\bstable[-_ ]diffusion\b",
+    )
+    return not any(re.search(pattern, searchable) for pattern in blocked_patterns)
 
 
 def list_catalog_models(provider_id: str, query: str = "") -> list[dict]:
@@ -514,6 +581,7 @@ def enrich_builtin_models(provider_id: str, models: list[dict]) -> list[dict]:
             model.setdefault("supports_pdf", "pdf" in inputs)
             model.setdefault("supports_thinking", bool(metadata.get("reasoning")))
             model.setdefault("supports_tools", bool(metadata.get("tool_call")))
+            model.setdefault("supports_temperature", metadata.get("temperature") is not False)
             reasoning_options = metadata.get("reasoning_options")
             if isinstance(reasoning_options, list) and reasoning_options:
                 model.setdefault("reasoning_options", reasoning_options)

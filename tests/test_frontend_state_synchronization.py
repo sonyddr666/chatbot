@@ -19,7 +19,8 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
 
         self.assertIn("catalogQuickSetup", manager)
-        self.assertIn("catalogProvider.quick_setup ? catalogProvider : null", manager)
+        self.assertIn("catalogProvider.configuration_supported ? catalogProvider : null", manager)
+        self.assertIn("auth_type: catalogBinding?.provider.auth_type || undefined", manager)
         self.assertNotIn("Configuracao rapida bloqueada", manager)
         self.assertIn("enabled: false, active: false", manager)
         self.assertIn("formApiKey", manager)
@@ -45,6 +46,20 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         self.assertIn("const target = exactProviderMatch || selectedStillVisible", manager)
         self.assertIn('placeholder="Buscar provider..."', manager)
         self.assertNotIn("provider.model_search_index?.includes(normalizedCatalogSearch)", manager)
+
+    def test_catalog_setup_form_cannot_be_closed_by_previous_search_selection(self):
+        manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("catalogAutoSelectionSuppressedRef", manager)
+        self.assertIn("if (catalogAutoSelectionSuppressedRef.current) return", manager)
+        self.assertIn("catalogAutoSelectionSuppressedRef.current = true", manager)
+        self.assertIn("catalogSetupBindingRef", manager)
+        self.assertIn("catalogSetupBindingRef.current = { provider: catalogProvider, models: providerModels }", manager)
+        self.assertIn("(catalogBinding?.models || []).map", manager)
+        self.assertIn("catalogAutoSelectionSuppressedRef.current = false", manager)
+        self.assertIn("catalogProvider.configuration_supported ? catalogProvider : null", manager)
+        self.assertIn("catalogProvider.setup_message", manager)
+        self.assertNotIn("Este provider exige configuracao adicional ou um adaptador especifico", manager)
 
     def test_shared_store_loaders_ignore_outdated_user_responses(self):
         store = Path("frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")

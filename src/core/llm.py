@@ -339,8 +339,9 @@ def _openai_request_variants(
         "model": str(provider_config.get("model_id", "")).strip(),
         "messages": _messages_for_openai(messages),
         "stream": True,
-        "temperature": 0.7,
     }
+    if provider_config.get("supports_temperature") is not False:
+        base_payload["temperature"] = 0.7
     style = _provider_reasoning_style(provider_config)
     extras: list[dict]
     if not effort:
@@ -661,21 +662,17 @@ def get_llm(provider_config: dict | None = None) -> BaseChatModel:
 
     if pm_cfg.get("model_id") and pm_cfg.get("base_url"):
         api_key = pm_cfg.get("api_key") or settings.custom_provider_config.get("api_key", "")
+        common_kwargs = {
+            "model": pm_cfg["model_id"],
+            "api_key": api_key,
+            "base_url": pm_cfg["base_url"],
+            "streaming": True,
+        }
+        if pm_cfg.get("supports_temperature") is not False:
+            common_kwargs["temperature"] = 0.7
         if str(pm_cfg.get("api_format") or "").lower() == "anthropic_messages":
-            return ChatAnthropic(
-                model=pm_cfg["model_id"],
-                api_key=api_key,
-                base_url=pm_cfg["base_url"],
-                temperature=0.7,
-                streaming=True,
-            )
-        return ChatOpenAI(
-            model=pm_cfg["model_id"],
-            api_key=api_key,
-            base_url=pm_cfg["base_url"],
-            temperature=0.7,
-            streaming=True,
-        )
+            return ChatAnthropic(**common_kwargs)
+        return ChatOpenAI(**common_kwargs)
 
     # Fallback: settings existentes
     provider = settings.llm_provider

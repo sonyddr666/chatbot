@@ -1225,6 +1225,7 @@ def get_active_config(provider_id: str | None = None, model_id: str | None = Non
             "supports_thinking": model_info.get("supports_thinking") if model_info else None,
             "image_generation": bool(model_info.get("image_generation")) if model_info else False,
             "supports_tools": model_info.get("supports_tools") if model_info else None,
+            "supports_temperature": model_info.get("supports_temperature") if model_info else None,
             "reasoning_style": pinfo.get("reasoning_style", ""),
         }
         from src.core.model_capabilities import with_reasoning_capabilities
@@ -1254,6 +1255,7 @@ def get_active_config(provider_id: str | None = None, model_id: str | None = Non
                 "supports_thinking": model_info.get("supports_thinking") if model_info else None,
                 "image_generation": bool(model_info.get("image_generation")) if model_info else False,
                 "supports_tools": model_info.get("supports_tools") if model_info else None,
+                "supports_temperature": model_info.get("supports_temperature") if model_info else None,
                 "reasoning_style": cp.get("reasoning_style", ""),
                 "reasoning_options": model_info.get("reasoning_options", []) if model_info else [],
             }
