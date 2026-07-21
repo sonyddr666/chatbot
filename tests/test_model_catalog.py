@@ -140,6 +140,8 @@ class ModelCatalogTests(unittest.TestCase):
                     "guard-model": {"name": "Prompt Guard", "modalities": {"output": ["text"]}},
                     "image-model": {"name": "Image Generator", "modalities": {"output": ["image"]}},
                     "mixed-image-model": {"name": "Nano Banana", "modalities": {"output": ["text", "image"]}},
+                    "embedding-model": {"name": "Embed v4", "modalities": {"output": ["text"]}},
+                    "ocr-model": {"name": "DeepSeek OCR", "modalities": {"output": ["text"]}},
                 }
             }
         }

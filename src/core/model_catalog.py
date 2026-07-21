@@ -454,7 +454,8 @@ def _catalog_model_is_chat_compatible(raw: dict) -> bool:
         str(raw.get("name") or ""),
     )).lower()
     blocked_patterns = (
-        r"\bembedding", r"\brerank", r"\bmoderation", r"text[-_ ]to[-_ ]speech",
+        r"\bembed", r"\brerank", r"\bmoderation", r"ocr\b",
+        r"[-_/ ]detector\b", r"intent[-_ ]detect", r"text[-_ ]to[-_ ]speech",
         r"speech[-_ ]to[-_ ]text", r"\bwhisper\b", r"\basr\b", r"\btranscri",
         r"tts\b", r"\bprompt[-_ ]?guard", r"\bllama[-_ ]?guard", r"safeguard",
         r"guardrail", r"qwen\d*guard", r"llmguard", r"\bsafety\b", r"\bspeaker\b",
