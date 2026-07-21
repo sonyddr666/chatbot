@@ -167,6 +167,26 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(providers["alibaba-cn"]["required_fields"], ["api_key"])
         self.assertTrue(providers["alibaba-cn"]["quick_setup"])
 
+    def test_google_uses_documented_openai_compatibility_for_key_only_setup(self):
+        catalog = {
+            "google": {
+                "name": "Google Gemini",
+                "models": {"gemini-test": {"name": "Gemini Test"}},
+            }
+        }
+
+        with patch("src.core.model_catalog.get_catalog", return_value=catalog):
+            provider = list_catalog_providers("google")[0]
+
+        self.assertEqual(
+            provider["api"],
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        )
+        self.assertEqual(provider["api_format"], "chat_completions")
+        self.assertEqual(provider["auth_type"], "bearer_api_key")
+        self.assertEqual(provider["required_fields"], ["api_key"])
+        self.assertTrue(provider["quick_setup"])
+
     def test_unreviewed_provider_cannot_claim_key_only_quick_setup(self):
         catalog = {
             "unreviewed-example": {

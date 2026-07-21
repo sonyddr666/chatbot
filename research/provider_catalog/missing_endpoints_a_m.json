@@ -186,21 +186,18 @@
   },
   {
     "provider_id": "google",
-    "status": "supported_with_provider_adapter",
-    "base_url": "https://generativelanguage.googleapis.com/v1beta",
-    "api_format": "google_generate_content",
-    "protocol": "Gemini native generateContent/streamGenerateContent",
-    "auth_type": "x_goog_api_key",
+    "status": "supported",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "api_format": "chat_completions",
+    "protocol": "OpenAI-compatible Chat Completions",
+    "auth_type": "bearer_api_key",
     "required_fields": ["api_key"],
-    "docs_url": "https://ai.google.dev/api/generate-content",
-    "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+    "docs_url": "https://ai.google.dev/gemini-api/docs/openai",
+    "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/models",
     "confidence": "high",
-    "notes": "Native generation is POST /v1beta/models/{model}:generateContent or :streamGenerateContent and is not OpenAI Chat Completions. Authentication uses x-goog-api-key (the query key form is also shown in examples). GET /v1beta/models returns supportedGenerationMethods, which must be checked before enabling a model for chat. An OpenAI compatibility surface exists, but the Models.dev provider package is native Google and native capability semantics should be preserved.",
+    "notes": "Google documents an OpenAI-compatible surface at /v1beta/openai. It accepts the Gemini API key as a Bearer token and exposes Chat Completions and model listing using the protocol already supported by this application.",
     "source_urls": [
-      "https://ai.google.dev/api",
-      "https://ai.google.dev/api/generate-content",
-      "https://ai.google.dev/api/models",
-      "https://ai.google.dev/gemini-api/docs/generate-content/api-key"
+      "https://ai.google.dev/gemini-api/docs/openai"
     ]
   },
   {

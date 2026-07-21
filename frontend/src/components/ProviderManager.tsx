@@ -1789,15 +1789,6 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
               onConfigure={() => {
                 const catalogProvider = selectedCatalog
-                if (!catalogProvider.quick_setup) {
-                  const fields = (catalogProvider.required_fields || []).join(', ')
-                  toast.error(
-                    catalogProvider.endpoint_verified
-                      ? `Configuracao rapida bloqueada: este provider exige ${fields || 'campos ou adaptador adicionais'}.`
-                      : 'Configuracao rapida bloqueada ate endpoint, autenticacao e protocolo terem validacao oficial.'
-                  )
-                  return
-                }
                 resetForm()
                 setCatalogQuickSetup(catalogProvider.quick_setup ? catalogProvider : null)
                 setFormProviderId(catalogProvider.id)
@@ -1809,7 +1800,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 if (!catalogProvider.quick_setup) {
                   toast(catalogProvider.endpoint_verified
                     ? 'Este provider exige configuracao adicional ou um adaptador especifico; revise os campos avancados.'
-                    : 'Endpoint ainda nao validado em documentacao oficial; configuracao rapida bloqueada.')
+                    : 'Endpoint ainda nao validado em documentacao oficial; revise os campos avancados antes de salvar.')
                 }
                 const firstModel = catalogModels[0]
                 if (firstModel) {

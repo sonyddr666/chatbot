@@ -20,6 +20,7 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
 
         self.assertIn("catalogQuickSetup", manager)
         self.assertIn("catalogProvider.quick_setup ? catalogProvider : null", manager)
+        self.assertNotIn("Configuracao rapida bloqueada", manager)
         self.assertIn("enabled: false, active: false", manager)
         self.assertIn("formApiKey", manager)
         self.assertIn("teste e habilite somente", manager)
