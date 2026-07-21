@@ -95,6 +95,7 @@ interface CatalogProviderInfo {
 }
 
 interface CatalogModelInfo extends ModelInfo {
+  catalog_provider_id: string
   family?: string
   output_length?: number
   release_date?: string
@@ -143,17 +144,21 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const [providerOrder, setProviderOrder] = useState<string[]>([])
   const [draggedProviderId, setDraggedProviderId] = useState<string | null>(null)
   const [providerView, setProviderView] = useState<'active' | 'hidden' | 'catalog'>('active')
+  const providerViewRef = useRef<'active' | 'hidden' | 'catalog'>('active')
   const [catalogProviders, setCatalogProviders] = useState<CatalogProviderInfo[]>([])
   const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<string | null>(null)
   const [catalogSearch, setCatalogSearch] = useState('')
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogRefreshing, setCatalogRefreshing] = useState(false)
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogProviderInfo | null>(null)
+  const selectedCatalogRef = useRef<CatalogProviderInfo | null>(null)
   const [catalogQuickSetup, setCatalogQuickSetup] = useState<CatalogProviderInfo | null>(null)
   const [catalogModels, setCatalogModels] = useState<CatalogModelInfo[]>([])
   const [catalogModelSearch, setCatalogModelSearch] = useState('')
   const [catalogModelsLoading, setCatalogModelsLoading] = useState(false)
   const catalogModelsCacheRef = useRef(new Map<string, CatalogModelInfo[]>())
+  const catalogLoadRequestRef = useRef(0)
+  const catalogModelsRequestRef = useRef(0)
   const [syncingCatalog, setSyncingCatalog] = useState(false)
   const [modelView, setModelView] = useState<'active' | 'hidden'>('active')
   const [loading, setLoading] = useState(false)
@@ -173,6 +178,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const [formEndpoint, setFormEndpoint] = useState('')
   const [formApiKey, setFormApiKey] = useState('')
   const [formApiFormat, setFormApiFormat] = useState('chat_completions')
+  const [formCatalogModels, setFormCatalogModels] = useState<CatalogModelInfo[]>([])
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [personalSaving, setPersonalSaving] = useState(false)
@@ -210,6 +216,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
         ? savedOrder.filter((value): value is string => typeof value === 'string')
         : [])
       setSelectedId(current => {
+        if (providerViewRef.current === 'catalog') return null
         if (current && data.some(provider => provider.id === current)) return current
         return data.find(provider => provider.active)?.id || data[0]?.id || null
       })
@@ -222,50 +229,87 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   }, [])
 
   const loadCatalog = useCallback(async (query = '') => {
+    const requestId = ++catalogLoadRequestRef.current
     setCatalogLoading(true)
     try {
       const data = await apiReq<{providers: CatalogProviderInfo[]; updated_at: string | null}>(
         `${API}/providers/catalog${query ? `?q=${encodeURIComponent(query)}` : ''}`
       )
+      if (requestId !== catalogLoadRequestRef.current) return
       setCatalogProviders(data.providers)
       setCatalogUpdatedAt(data.updated_at)
     } catch (err: any) {
+      if (requestId !== catalogLoadRequestRef.current) return
       toast.error(err.message)
     } finally {
-      setCatalogLoading(false)
+      if (requestId === catalogLoadRequestRef.current) setCatalogLoading(false)
     }
   }, [])
 
   const openCatalogProvider = useCallback(async (provider: CatalogProviderInfo, modelQuery = '') => {
+    const requestId = ++catalogModelsRequestRef.current
+    selectedCatalogRef.current = provider
     setSelectedCatalog(provider)
     setSelectedId(null)
+    setShowAddForm(false)
+    setShowPersonalForm(false)
+    setEditing(false)
     setCatalogModelSearch(modelQuery)
     const cachedModels = catalogModelsCacheRef.current.get(provider.id)
     if (cachedModels) {
-      setCatalogModels(cachedModels)
-      setCatalogModelsLoading(false)
+      if (requestId === catalogModelsRequestRef.current) {
+        setCatalogModels(cachedModels)
+        setCatalogModelsLoading(false)
+      }
       return
     }
+    setCatalogModels([])
     setCatalogModelsLoading(true)
     try {
-      const data = await apiReq<{models: CatalogModelInfo[]}>(`${API}/providers/catalog/${encodeURIComponent(provider.id)}/models`)
+      const data = await apiReq<{provider_id: string; models: CatalogModelInfo[]}>(`${API}/providers/catalog/${encodeURIComponent(provider.id)}/models`)
+      if (requestId !== catalogModelsRequestRef.current || data.provider_id !== provider.id) return
+      if (data.models.some(model => model.catalog_provider_id !== provider.id)) {
+        throw new Error('O servidor retornou modelos de outro provider. A lista foi descartada por seguranca.')
+      }
       catalogModelsCacheRef.current.set(provider.id, data.models)
       setCatalogModels(data.models)
     } catch (err: any) {
+      if (requestId !== catalogModelsRequestRef.current) return
       toast.error(err.message)
       setCatalogModels([])
     } finally {
-      setCatalogModelsLoading(false)
+      if (requestId === catalogModelsRequestRef.current) setCatalogModelsLoading(false)
     }
   }, [])
+
+  const clearCatalogSelection = useCallback(() => {
+    catalogModelsRequestRef.current += 1
+    selectedCatalogRef.current = null
+    setSelectedCatalog(null)
+    setCatalogModels([])
+    setCatalogModelSearch('')
+    setCatalogModelsLoading(false)
+  }, [])
+
+  const selectManagedProvider = useCallback((providerId: string | null) => {
+    clearCatalogSelection()
+    setSelectedId(providerId)
+    setShowAddForm(false)
+    setShowPersonalForm(false)
+    setEditing(false)
+  }, [clearCatalogSelection])
 
   const refreshWorldCatalog = async () => {
     setCatalogRefreshing(true)
     try {
       const result = await apiReq<{providers: number; models: number}>(`${API}/providers/catalog/refresh`, { method: 'POST' })
+      catalogModelsRequestRef.current += 1
       catalogModelsCacheRef.current.clear()
+      setCatalogModels([])
+      setCatalogModelsLoading(false)
       await loadCatalog()
-      if (selectedCatalog) await openCatalogProvider(selectedCatalog)
+      const currentCatalogProvider = selectedCatalogRef.current
+      if (currentCatalogProvider) await openCatalogProvider(currentCatalogProvider)
       toast.success(`Catalogo atualizado: ${result.providers} providers e ${result.models} modelos`)
     } catch (err: any) {
       toast.error(err.message)
@@ -277,7 +321,11 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   useEffect(() => {
     if (open) {
       setSelectedId(null)
+      catalogModelsRequestRef.current += 1
+      selectedCatalogRef.current = null
       setSelectedCatalog(null)
+      setCatalogModels([])
+      providerViewRef.current = 'active'
       setProviderView('active')
       loadProviders()
       setShowAddForm(false)
@@ -285,6 +333,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       setEditing(false)
     }
   }, [open, loadProviders])
+
+  useEffect(() => {
+    providerViewRef.current = providerView
+  }, [providerView])
 
   const selected = providers.find(p => p.id === selectedId) || null
   const catalogConfiguredProvider = selectedCatalog
@@ -335,8 +387,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       : undefined
     const target = selectedStillVisible || visibleCatalogProviders[0]
     if (!target) {
-      setSelectedCatalog(null)
-      setCatalogModels([])
+      clearCatalogSelection()
       return
     }
     const providerItselfMatches = `${target.name} ${target.id}`.toLowerCase().includes(normalizedCatalogSearch)
@@ -346,7 +397,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     } else {
       void openCatalogProvider(target, modelQuery)
     }
-  }, [deferredCatalogSearch, normalizedCatalogSearch, openCatalogProvider, providerView, selectedCatalog, visibleCatalogProviders])
+  }, [clearCatalogSelection, deferredCatalogSearch, normalizedCatalogSearch, openCatalogProvider, providerView, selectedCatalog, visibleCatalogProviders])
 
   const handleProviderDrop = async (targetId: string) => {
     const sourceId = draggedProviderId
@@ -822,6 +873,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     setFormEndpoint('')
     setFormApiKey('')
     setFormApiFormat('chat_completions')
+    setFormCatalogModels([])
     setFormModelId('')
     setFormModelName('')
     setFormModelCtx('128000')
@@ -837,8 +889,12 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       toast('Providers built-in não podem ser editados')
       return
     }
+    clearCatalogSelection()
+    setCatalogQuickSetup(null)
+    setFormCatalogModels([])
     setFormName(p.name)
     setFormProviderId(p.id)
+    setFormCatalogProviderId(p.catalog_provider_id || '')
     setFormBaseUrl(p.base_url)
     setFormEndpoint(p.endpoint || '')
     setFormApiKey('')
@@ -855,6 +911,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     }
     if (catalogQuickSetup?.env?.length && !formApiKey.trim()) {
       toast.error('Informe a API key para configurar este provider')
+      return
+    }
+    if (catalogQuickSetup && formCatalogModels.some(model => model.catalog_provider_id !== catalogQuickSetup.id)) {
+      toast.error('A lista de modelos nao corresponde ao provider selecionado. Reabra o catalogo e tente novamente.')
       return
     }
     setSaving(true)
@@ -877,7 +937,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       } else {
         // Cria o modelo inicial se o usuário preencheu
         const models: any[] = catalogQuickSetup
-          ? catalogModels.map(model => ({ ...model, enabled: false, active: false }))
+          ? formCatalogModels.map(model => ({ ...model, enabled: false, active: false }))
           : []
         if (!catalogQuickSetup && formModelId.trim()) {
           models.push({
@@ -902,6 +962,9 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           method: 'POST', body: JSON.stringify(body),
         })
         setProviders(prev => [...prev, created])
+        providerViewRef.current = 'active'
+        setProviderView('active')
+        clearCatalogSelection()
         setSelectedId(created.id)
         toast.success(models.length > 0
           ? `Provider criado com ${models.length} modelo(s)`
@@ -1072,6 +1135,9 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           active: prov.id === targetProviderId && m.id === modelId,
         })),
       })))
+      providerViewRef.current = 'active'
+      setProviderView('active')
+      clearCatalogSelection()
       setSelectedId(targetProviderId)
       toast.success(`✅ Usando: ${provider?.name || targetProviderId} › ${modelId}`)
       await syncChatProvider()
@@ -1156,9 +1222,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 <button
                   key={view}
                   onClick={() => {
+                    providerViewRef.current = view
                     setProviderView(view)
                     setSelectedId(null)
-                    setSelectedCatalog(null)
+                    clearCatalogSelection()
                     setShowAddForm(false)
                     setShowPersonalForm(false)
                   }}
@@ -1242,7 +1309,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     onDragStart={() => setDraggedProviderId(p.id)}
                     onDragEnd={() => setDraggedProviderId(null)}
                     onDrop={() => void handleProviderDrop(p.id)}
-                    onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
+                    onClick={() => selectManagedProvider(p.id)}
                     onEdit={() => handleEditProvider(p)}
                   />
                 ))}
@@ -1264,7 +1331,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                         onDragStart={() => setDraggedProviderId(p.id)}
                         onDragEnd={() => setDraggedProviderId(null)}
                         onDrop={() => void handleProviderDrop(p.id)}
-                        onClick={() => { setSelectedId(p.id); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
+                        onClick={() => selectManagedProvider(p.id)}
                         onEdit={() => handleEditProvider(p)}
                         onDelete={() => handleDelete(p.id)}
                       />
@@ -1379,7 +1446,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               </button>
             </div>
             <button
-              onClick={() => { resetForm(); setShowAddForm(true); setShowPersonalForm(false); setSelectedId(null) }}
+              onClick={() => { resetForm(); clearCatalogSelection(); setShowAddForm(true); setShowPersonalForm(false); setSelectedId(null) }}
               className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all hover:opacity-90"
               style={{ background: 'var(--accent)', color: '#fff' }}
             >
@@ -1387,7 +1454,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               Add Provider
             </button>
             <button
-              onClick={() => { resetForm(); resetPersonalForm(); setShowPersonalForm(true); setShowAddForm(false); setSelectedId(null) }}
+              onClick={() => { resetForm(); resetPersonalForm(); clearCatalogSelection(); setShowPersonalForm(true); setShowAddForm(false); setSelectedId(null) }}
               className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all hover:opacity-90 border"
               style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
             >
@@ -1402,7 +1469,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
           <div className="flex items-center justify-between border-b px-3 py-3 md:hidden" style={{ borderColor: 'var(--border)' }}>
             <button
               type="button"
-              onClick={() => { setSelectedId(null); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
+              onClick={() => { clearCatalogSelection(); setSelectedId(null); setShowAddForm(false); setShowPersonalForm(false); setEditing(false) }}
               className="inline-flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm font-bold"
               style={{ color: 'var(--text-primary)' }}
             >
@@ -1643,7 +1710,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                   {/* API Key */}
                   {catalogQuickSetup && (
                     <div className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
-                      URL, formato e {catalogModels.length} modelos ja vieram do catalogo. Eles serao importados ocultos: teste e habilite somente os que realmente responderem.
+                      URL, formato e {formCatalogModels.length} modelos ja vieram do catalogo. Eles serao importados ocultos: teste e habilite somente os que realmente responderem.
                     </div>
                   )}
                   <div>
@@ -1774,7 +1841,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                 </div>
               </div>
             </div>
-          ) : selectedCatalog ? (
+          ) : providerView === 'catalog' && selectedCatalog ? (
             <CatalogProviderPanel
               provider={selectedCatalog}
               models={catalogModels}
@@ -1789,8 +1856,15 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
               onSync={() => catalogConfiguredProvider && void handleSyncCatalog(catalogConfiguredProvider.id, selectedCatalog.id)}
               onConfigure={() => {
                 const catalogProvider = selectedCatalog
+                const providerModels = catalogModels.filter(model => model.catalog_provider_id === catalogProvider.id)
+                if (providerModels.length !== catalogModels.length) {
+                  toast.error('Os modelos carregados nao correspondem ao provider selecionado. Aguarde e tente novamente.')
+                  return
+                }
+                catalogModelsRequestRef.current += 1
                 resetForm()
                 setCatalogQuickSetup(catalogProvider.quick_setup ? catalogProvider : null)
+                setFormCatalogModels(catalogProvider.quick_setup ? providerModels : [])
                 setFormProviderId(catalogProvider.id)
                 setFormCatalogProviderId(catalogProvider.id)
                 setFormName(catalogProvider.name)
@@ -1802,13 +1876,13 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     ? 'Este provider exige configuracao adicional ou um adaptador especifico; revise os campos avancados.'
                     : 'Endpoint ainda nao validado em documentacao oficial; revise os campos avancados antes de salvar.')
                 }
-                const firstModel = catalogModels[0]
+                const firstModel = providerModels[0]
                 if (firstModel) {
                   setFormModelId(firstModel.id)
                   setFormModelName(firstModel.name)
                   setFormModelCtx(String(firstModel.context_length || 128000))
                 }
-                setSelectedCatalog(null)
+                clearCatalogSelection()
                 setShowAddForm(true)
               }}
             />
@@ -2465,7 +2539,7 @@ function CatalogProviderPanel({
             </button>
           )}
           {isAdmin && !configuredProvider && (
-            <button onClick={onConfigure} className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: 'var(--accent)' }}>
+            <button onClick={onConfigure} disabled={loading} className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
               <Plus size={13} /> Configurar provider
             </button>
           )}

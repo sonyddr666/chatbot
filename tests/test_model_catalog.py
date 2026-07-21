@@ -103,6 +103,7 @@ class ModelCatalogTests(unittest.TestCase):
             models = list_catalog_models("anthropic")
         self.assertEqual(providers[0]["model_count"], 1)
         self.assertEqual(models[0]["context_length"], 200000)
+        self.assertEqual(models[0]["catalog_provider_id"], "anthropic")
         self.assertTrue(models[0]["supports_images"])
         self.assertTrue(models[0]["supports_pdf"])
         self.assertTrue(models[0]["supports_tools"])

@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import asyncio
+import logging
 import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -19,6 +20,8 @@ from src.db.models import init_db as initialize_database
 from src.db.repository import ChatJobRepo, UserRepo
 from src.core.chat_jobs import start_chat_job, stop_chat_jobs
 from src.core.scheduled_tasks import start_schedule_runner, stop_schedule_runner
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Chatbot API",
@@ -62,6 +65,14 @@ def _websocket_auth_token(websocket: WebSocket) -> tuple[str, str | None]:
 async def initialize_persistent_runtime():
     initialize_database()
     UserRepo.ensure_initial_admin()
+    from src.core.provider_manager import repair_catalog_integrity
+    try:
+        repair_result = await asyncio.to_thread(repair_catalog_integrity)
+        if repair_result["repaired"] or repair_result["errors"]:
+            logger.warning("Provider catalog integrity repair: %s", repair_result)
+    except Exception:
+        # A falha de uma manutencao corretiva nao pode derrubar toda a API.
+        logger.exception("Provider catalog integrity repair failed")
     await asyncio.to_thread(ChatJobRepo.recover_running)
     queued_job_ids = await asyncio.to_thread(ChatJobRepo.list_queued_ids)
     for job_id in queued_job_ids:

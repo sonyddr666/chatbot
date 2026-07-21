@@ -409,6 +409,7 @@ def list_catalog_models(provider_id: str, query: str = "") -> list[dict]:
         if not _catalog_model_is_chat_compatible({**raw, "id": str(model_id)}):
             continue
         model = _normalize_catalog_model(str(model_id), raw)
+        model["catalog_provider_id"] = str(provider_id)
         if needle and needle not in f'{model["id"]} {model["name"]} {model["family"]}'.lower():
             continue
         result.append(model)

@@ -566,63 +566,52 @@ def set_builtin_dynamic_models(provider_id: str, models: list[dict]) -> list[dic
 
 
 def sync_models_from_catalog(provider_id: str, catalog_provider_id: str = "") -> dict:
-    """Mescla models.dev no provider; novos entram desativados e nada e apagado."""
-    from src.core.model_catalog import list_catalog_models, resolve_catalog_provider_id
+    """Reconcilia um provider com uma unica fonte models.dev, sem misturar catalogos."""
+    from src.core.model_catalog import resolve_catalog_provider_id
 
     if provider_id in {"ollama", "codex-chatgpt", "antigravity", "grok-oauth"}:
         raise ValueError("Este provider usa descoberta propria da conta ou maquina e nao deve ser substituido pelo catalogo mundial")
     provider = get_provider(provider_id)
     if not provider:
         raise ValueError("Provider nao encontrado")
-    source_id = str(catalog_provider_id or resolve_catalog_provider_id(provider_id) or "").strip()
+    requested_source_id = str(catalog_provider_id or "").strip()
+    declared_source_id = str(
+        provider.get("catalog_provider_id")
+        or resolve_catalog_provider_id(provider_id)
+        or ""
+    ).strip()
+    if requested_source_id and declared_source_id and requested_source_id != declared_source_id:
+        raise ValueError(
+            "A fonte solicitada nao corresponde ao catalogo vinculado a este provider"
+        )
+    source_id = requested_source_id or declared_source_id
     if not source_id:
         raise ValueError("Este provider ainda nao possui uma fonte correspondente no models.dev")
-    incoming = list_catalog_models(source_id)
-    if not incoming:
-        raise ValueError("O provider escolhido nao possui modelos no catalogo atual")
-
-    existing = {str(model.get("id")): dict(model) for model in provider.get("models", [])}
-    merged = []
-    added = 0
-    for catalog_model in incoming:
-        model_id = catalog_model["id"]
-        previous = existing.pop(model_id, None)
-        if previous:
-            model = {**catalog_model, **previous}
-            model["catalog_removed"] = False
-        else:
-            model = {**catalog_model, "enabled": False, "catalog_removed": False}
-            added += 1
-        model["catalog_provider_id"] = source_id
-        merged.append(model)
-
-    # Um modelo retirado da fonte pode continuar sendo valido para uma conta
-    # ou endpoint antigo. Mantemos o registro e apenas sinalizamos a ausencia.
-    for previous in existing.values():
-        merged.append({
-            **previous,
-            "catalog_removed": True,
-            # Nunca interrompe silenciosamente o modelo que ja esta em uso.
-            "enabled": bool(previous.get("active")),
-        })
-
+    raw = _load_raw()
     if provider_id in BUILTIN_PROVIDERS:
-        set_builtin_dynamic_models(provider_id, merged)
+        current_models = raw.get("builtin_dynamic_models", {}).get(provider_id)
+        if not isinstance(current_models, list) or not current_models:
+            current_models = BUILTIN_PROVIDERS[provider_id].get("models", [])
+        merged, integrity = _reconcile_catalog_models(source_id, current_models)
+        raw.setdefault("builtin_dynamic_models", {})[provider_id] = merged
     else:
-        raw = _load_raw()
         target = next((item for item in raw.get("custom_providers", []) if item.get("id") == provider_id), None)
         if target is None:
             raise ValueError("Provider nao pode receber sincronizacao de catalogo")
+        merged, integrity = _reconcile_catalog_models(source_id, target.get("models", []))
         target["models"] = merged
         target["catalog_provider_id"] = source_id
-        _save_raw(raw)
+    active_model_repaired = _repair_active_model_reference(raw, provider_id, merged)
+    _save_raw(raw)
 
     return {
         "provider_id": provider_id,
         "catalog_provider_id": source_id,
         "total": len(merged),
-        "added_hidden": added,
-        "removed_hidden": len(existing),
+        "added_hidden": integrity["added_hidden"],
+        "removed_hidden": integrity["removed_catalog_models"],
+        "preserved_manual": integrity["preserved_manual"],
+        "active_model_repaired": active_model_repaired,
         "models": get_provider(provider_id).get("models", []),
     }
 
@@ -796,6 +785,132 @@ def _normalize_import_models(value) -> list[dict]:
     return models
 
 
+def _reconcile_catalog_models(
+    catalog_provider_id: str,
+    current_models,
+) -> tuple[list[dict], dict]:
+    """Reconstroi modelos catalogados a partir da fonte oficial e preserva apenas dados locais seguros."""
+    from src.core.model_catalog import get_catalog, list_catalog_models
+
+    source_id = str(catalog_provider_id or "").strip()
+    if not source_id or source_id not in get_catalog():
+        raise ValueError("Provider nao encontrado no catalogo mundial")
+
+    incoming = list_catalog_models(source_id)
+    if not incoming:
+        raise ValueError("O provider escolhido nao possui modelos no catalogo atual")
+
+    normalized_current = _normalize_import_models(current_models or [])
+    existing = {str(model.get("id")): dict(model) for model in normalized_current}
+    merged = []
+    added = 0
+
+    for catalog_model in incoming:
+        model_id = str(catalog_model["id"])
+        previous = existing.pop(model_id, None)
+        if previous:
+            model = {**catalog_model, **previous}
+        else:
+            model = {**catalog_model, "enabled": False}
+            added += 1
+        model.pop("active", None)
+        model["catalog_source"] = "models.dev"
+        model["catalog_provider_id"] = source_id
+        model["catalog_removed"] = False
+        merged.append(model)
+
+    removed_catalog_models = 0
+    preserved_manual = 0
+    for previous in existing.values():
+        previous.pop("active", None)
+        previous_source = str(previous.get("catalog_provider_id") or "").strip()
+        catalog_generated = bool(
+            previous_source
+            or str(previous.get("catalog_source") or "").startswith("models.dev")
+            or previous.get("catalog_removed")
+        )
+        if not catalog_generated:
+            previous.pop("catalog_removed", None)
+            merged.append(previous)
+            preserved_manual += 1
+            continue
+
+        # Um modelo explicitamente ligado a esta mesma fonte pode ter sido
+        # retirado do catalogo, mas continuamos preservando-o se o admin o
+        # habilitou. Modelos ocultos, sem fonte especifica ou de outra fonte
+        # sao residuos seguros de remover e eram a origem da contaminacao.
+        if previous_source == source_id and previous.get("enabled"):
+            previous["catalog_removed"] = True
+            merged.append(previous)
+            continue
+        removed_catalog_models += 1
+
+    return merged, {
+        "added_hidden": added,
+        "removed_catalog_models": removed_catalog_models,
+        "preserved_manual": preserved_manual,
+    }
+
+
+def _repair_active_model_reference(raw: dict, provider_id: str, models: list[dict]) -> bool:
+    """Mantem o modelo ativo valido depois de remover residuos de outro catalogo."""
+    if raw.get("active_provider_id") != provider_id:
+        return False
+    active_model_id = str(raw.get("active_model_id") or "")
+    if any(
+        str(model.get("id") or "") == active_model_id and model.get("enabled", True)
+        for model in models
+    ):
+        return False
+    fallback = next((model for model in models if model.get("enabled", True)), None)
+    if fallback is None and models:
+        fallback = models[0]
+        fallback["enabled"] = True
+    next_model_id = str(fallback.get("id") or "") if fallback else None
+    changed = raw.get("active_model_id") != next_model_id
+    raw["active_model_id"] = next_model_id
+    return changed
+
+
+def repair_catalog_integrity() -> dict:
+    """Repara todos os custom providers catalogados uma vez, sem tocar nos modelos manuais."""
+    raw = _load_raw()
+    repaired = []
+    errors = []
+    removed_catalog_models = 0
+    preserved_manual = 0
+
+    for provider in raw.get("custom_providers", []):
+        provider_id = str(provider.get("id") or "")
+        source_id = str(provider.get("catalog_provider_id") or "").strip()
+        if not provider_id or not source_id:
+            continue
+        try:
+            models, integrity = _reconcile_catalog_models(
+                source_id,
+                provider.get("models", []),
+            )
+        except ValueError as exc:
+            errors.append({"provider_id": provider_id, "error": str(exc)})
+            continue
+        models_changed = models != provider.get("models", [])
+        active_model_repaired = _repair_active_model_reference(raw, provider_id, models)
+        if models_changed or active_model_repaired:
+            provider["models"] = models
+            repaired.append(provider_id)
+        removed_catalog_models += integrity["removed_catalog_models"]
+        preserved_manual += integrity["preserved_manual"]
+
+    if repaired:
+        _save_raw(raw)
+    return {
+        "repaired": repaired,
+        "removed_catalog_models": removed_catalog_models,
+        "preserved_manual": preserved_manual,
+        "errors": errors,
+    }
+
+
 def import_custom_providers(items: list[dict]) -> dict:
     """Mescla providers customizados globais por ID sem alterar o provider ativo."""
     if not isinstance(items, list):
@@ -844,6 +959,12 @@ def import_custom_providers(items: list[dict]) -> dict:
             provider["reasoning_style"] = str(item.get("reasoning_style", "")).strip()
         if "catalog_provider_id" in item:
             provider["catalog_provider_id"] = str(item.get("catalog_provider_id", "")).strip()
+        if provider.get("catalog_provider_id"):
+            provider["models"], _ = _reconcile_catalog_models(
+                provider["catalog_provider_id"],
+                provider.get("models", []),
+            )
+            _repair_active_model_reference(raw, provider_id, provider["models"])
         provider["created_at"] = provider.get("created_at") or datetime.now(timezone.utc).isoformat()
 
         if "api_key" in item:
@@ -908,6 +1029,11 @@ def create_provider(body: dict) -> dict:
         if cp["id"] == provider_id:
             raise ValueError(f"Provider '{provider_id}' já existe")
 
+    catalog_provider_id = str(body.get("catalog_provider_id", "")).strip()
+    models = _normalize_import_models(body.get("models", []))
+    if catalog_provider_id:
+        models, _ = _reconcile_catalog_models(catalog_provider_id, models)
+
     new_provider = {
         "id": provider_id,
         "name": body.get("name", provider_id),
@@ -917,8 +1043,8 @@ def create_provider(body: dict) -> dict:
         "api_format": body.get("api_format", "chat_completions"),
         "auth_type": str(body.get("auth_type", "")).strip(),
         "enabled": body.get("enabled", True),
-        "models": body.get("models", []),
-        "catalog_provider_id": str(body.get("catalog_provider_id", "")).strip(),
+        "models": models,
+        "catalog_provider_id": catalog_provider_id,
         "created_at": datetime.utcnow().isoformat(),
     }
 
@@ -1179,6 +1305,19 @@ def import_complete_state(state: dict) -> dict:
         raise ValueError("Provider ativo invalido")
     if restored["active_model_id"] is not None and not isinstance(restored["active_model_id"], str):
         raise ValueError("Modelo ativo invalido")
+    for provider in restored["custom_providers"]:
+        if not isinstance(provider, dict):
+            raise ValueError("Provider customizado invalido")
+        provider_id = str(provider.get("id") or "").strip()
+        source_id = str(provider.get("catalog_provider_id") or "").strip()
+        if not provider_id:
+            raise ValueError("Provider customizado sem id")
+        if source_id:
+            provider["models"], _ = _reconcile_catalog_models(
+                source_id,
+                provider.get("models", []),
+            )
+            _repair_active_model_reference(restored, provider_id, provider["models"])
     _save_raw(restored)
     return {
         "providers": len(restored["custom_providers"]) + len(BUILTIN_PROVIDERS),

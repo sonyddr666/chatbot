@@ -25,6 +25,18 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         self.assertIn("formApiKey", manager)
         self.assertIn("teste e habilite somente", manager)
 
+    def test_catalog_provider_state_rejects_stale_models_and_clears_cross_selection(self):
+        manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("catalogModelsRequestRef", manager)
+        self.assertIn("data.provider_id !== provider.id", manager)
+        self.assertIn("data.models.some(model => model.catalog_provider_id !== provider.id)", manager)
+        self.assertIn("formCatalogModels", manager)
+        self.assertIn("const firstModel = providerModels[0]", manager)
+        self.assertIn("clearCatalogSelection", manager)
+        self.assertIn("onClick={() => selectManagedProvider(p.id)}", manager)
+        self.assertIn("providerView === 'catalog' && selectedCatalog", manager)
+
     def test_shared_store_loaders_ignore_outdated_user_responses(self):
         store = Path("frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
 
