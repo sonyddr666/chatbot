@@ -446,7 +446,7 @@ def _catalog_model_is_chat_compatible(raw: dict) -> bool:
     """Keep non-text generators, embeddings and rerankers out of the chat selector."""
     modalities = raw.get("modalities") if isinstance(raw.get("modalities"), dict) else {}
     outputs = modalities.get("output") or []
-    if outputs and "text" not in outputs:
+    if outputs and ("text" not in outputs or any(output != "text" for output in outputs)):
         return False
     searchable = " ".join((
         str(raw.get("family") or ""),
@@ -456,10 +456,11 @@ def _catalog_model_is_chat_compatible(raw: dict) -> bool:
     blocked_patterns = (
         r"\bembedding", r"\brerank", r"\bmoderation", r"text[-_ ]to[-_ ]speech",
         r"speech[-_ ]to[-_ ]text", r"\bwhisper\b", r"\basr\b", r"\btranscri",
-        r"\btts\b", r"\bprompt[-_ ]?guard", r"\bllama[-_ ]?guard", r"\bsafety\b",
-        r"\bspeaker\b", r"\btranslation\b", r"text[-_ ]to[-_ ]image",
+        r"tts\b", r"\bprompt[-_ ]?guard", r"\bllama[-_ ]?guard", r"safeguard",
+        r"guardrail", r"qwen\d*guard", r"llmguard", r"\bsafety\b", r"\bspeaker\b",
+        r"translat", r"text[-_ ]to[-_ ]image", r"[-_/ .]image(?:[-_/ .]|$)",
         r"image[-_ ]generation", r"\bgpt[-_ ]image\b", r"\bdall[-_ ]?e\b",
-        r"\bstable[-_ ]diffusion\b",
+        r"\bstable[-_ ]diffusion\b", r"\bnano[-_ ]?banana\b",
     )
     return not any(re.search(pattern, searchable) for pattern in blocked_patterns)
 

@@ -139,6 +139,7 @@ class ModelCatalogTests(unittest.TestCase):
                     "whisper-large": {"name": "Whisper Large", "modalities": {"output": ["text"]}},
                     "guard-model": {"name": "Prompt Guard", "modalities": {"output": ["text"]}},
                     "image-model": {"name": "Image Generator", "modalities": {"output": ["image"]}},
+                    "mixed-image-model": {"name": "Nano Banana", "modalities": {"output": ["text", "image"]}},
                 }
             }
         }
