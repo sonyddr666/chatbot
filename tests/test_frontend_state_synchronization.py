@@ -37,6 +37,15 @@ class FrontendStateSynchronizationTest(unittest.TestCase):
         self.assertIn("onClick={() => selectManagedProvider(p.id)}", manager)
         self.assertIn("providerView === 'catalog' && selectedCatalog", manager)
 
+    def test_catalog_sidebar_search_cannot_match_models_from_another_provider(self):
+        manager = Path("frontend/src/components/ProviderManager.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("catalogProviderSearchRank", manager)
+        self.assertIn("const exactProviderMatch", manager)
+        self.assertIn("const target = exactProviderMatch || selectedStillVisible", manager)
+        self.assertIn('placeholder="Buscar provider..."', manager)
+        self.assertNotIn("provider.model_search_index?.includes(normalizedCatalogSearch)", manager)
+
     def test_shared_store_loaders_ignore_outdated_user_responses(self):
         store = Path("frontend/src/hooks/useChatStore.ts").read_text(encoding="utf-8")
 

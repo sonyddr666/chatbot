@@ -125,6 +125,19 @@ async function apiReq<T>(url: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+function catalogProviderSearchRank(provider: CatalogProviderInfo, query: string): number {
+  if (!query) return 0
+  const id = provider.id.toLowerCase()
+  const name = provider.name.toLowerCase()
+  if (id === query) return 0
+  if (name === query) return 1
+  if (id.startsWith(query)) return 2
+  if (name.startsWith(query)) return 3
+  if (id.includes(query)) return 4
+  if (name.includes(query)) return 5
+  return Number.POSITIVE_INFINITY
+}
+
 // ─── Componente principal ──────────────────────────────────────────
 
 export const ProviderManager = memo(function ProviderManager({ open, onClose, isAdmin = false }: Props) {
@@ -362,12 +375,15 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
   const visibleUserProviders = userProviders.filter(provider => providerView === 'hidden' ? !provider.is_enabled : provider.is_enabled)
   const deferredCatalogSearch = useDeferredValue(catalogSearch)
   const normalizedCatalogSearch = deferredCatalogSearch.trim().toLowerCase()
-  const visibleCatalogProviders = useMemo(() => catalogProviders.filter(provider => (
-    !normalizedCatalogSearch
-    || provider.name.toLowerCase().includes(normalizedCatalogSearch)
-    || provider.id.toLowerCase().includes(normalizedCatalogSearch)
-    || provider.model_search_index?.includes(normalizedCatalogSearch)
-  )), [catalogProviders, normalizedCatalogSearch])
+  const visibleCatalogProviders = useMemo(() => catalogProviders
+    .map((provider, originalIndex) => ({
+      provider,
+      originalIndex,
+      rank: catalogProviderSearchRank(provider, normalizedCatalogSearch),
+    }))
+    .filter(item => Number.isFinite(item.rank))
+    .sort((left, right) => left.rank - right.rank || left.originalIndex - right.originalIndex)
+    .map(item => item.provider), [catalogProviders, normalizedCatalogSearch])
   const builtinProviders = sortProviders(visibleProviders.filter(p => p.provider_type === 'builtin'))
   const customProviders = sortProviders(visibleProviders.filter(p => p.provider_type === 'custom'))
   const displayedModels = selected?.models.filter(model => modelView === 'hidden' ? !model.enabled : model.enabled) || []
@@ -382,10 +398,14 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       setCatalogModelSearch('')
       return
     }
+    const exactProviderMatch = visibleCatalogProviders.find(provider => (
+      provider.id.toLowerCase() === normalizedCatalogSearch
+      || provider.name.toLowerCase() === normalizedCatalogSearch
+    ))
     const selectedStillVisible = selectedCatalog
       ? visibleCatalogProviders.find(provider => provider.id === selectedCatalog.id)
       : undefined
-    const target = selectedStillVisible || visibleCatalogProviders[0]
+    const target = exactProviderMatch || selectedStillVisible || visibleCatalogProviders[0]
     if (!target) {
       clearCatalogSelection()
       return
@@ -1251,7 +1271,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                     <input
                       value={catalogSearch}
                       onChange={event => setCatalogSearch(event.target.value)}
-                      placeholder="Buscar no mundo..."
+                      placeholder="Buscar provider..."
                       className="w-full rounded-xl border py-2 pl-9 pr-3 text-xs"
                       style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}
                     />
