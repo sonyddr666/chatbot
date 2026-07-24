@@ -53,6 +53,7 @@ def _is_openai_compatible_provider(config: dict) -> bool:
     api_format = str(config.get("api_format", "chat_completions")).strip().lower()
     return api_format in {
         "chat_completions",
+        "custom",
         "openai",
         "openai_compatible",
         "openai_chat_completions",

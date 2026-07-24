@@ -25,6 +25,29 @@ class UserProviderLLMTest(unittest.IsolatedAsyncioTestCase):
             {"Authorization": "Api-Key secret"},
         )
 
+    def test_custom_api_format_uses_typed_endpoint(self):
+        from src.core.llm import _chat_completions_url, _is_openai_compatible_provider
+
+        relative_config = {
+            "base_url": "https://api.example.test/v1",
+            "endpoint": "/my/chat",
+            "api_format": "custom",
+        }
+        absolute_config = {
+            **relative_config,
+            "endpoint": "https://gateway.example.test/custom/chat",
+        }
+
+        self.assertTrue(_is_openai_compatible_provider(relative_config))
+        self.assertEqual(
+            _chat_completions_url(relative_config),
+            "https://api.example.test/v1/my/chat",
+        )
+        self.assertEqual(
+            _chat_completions_url(absolute_config),
+            "https://gateway.example.test/custom/chat",
+        )
+
     def test_anthropic_catalog_provider_uses_native_messages_adapter(self):
         from langchain_anthropic import ChatAnthropic
         from src.core.llm import get_llm

@@ -946,6 +946,10 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
       toast.error('Nome e Base URL são obrigatórios')
       return
     }
+    if (formApiFormat === 'custom' && !formEndpoint.trim()) {
+      toast.error('Informe o endpoint da API customizada')
+      return
+    }
     if (catalogQuickSetup?.credential_required !== false && !formApiKey.trim()) {
       toast.error('Informe a API key para configurar este provider')
       return
@@ -1199,6 +1203,7 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
     responses: 'Responses API',
     openai_responses: 'OpenAI Responses',
     openai: 'OpenAI Compatible',
+    custom: 'API Customizada',
   }
 
   const benchmarkRanking = Object.values(benchmarkResults)
@@ -1805,6 +1810,33 @@ export const ProviderManager = memo(function ProviderManager({ open, onClose, is
                       ))}
                     </select>
                   </div>
+
+                  {formApiFormat === 'custom' && !catalogQuickSetup && (
+                    <div
+                      className="rounded-xl border p-3"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+                    >
+                      <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                        Endpoint da API customizada
+                      </label>
+                      <input
+                        type="text"
+                        value={formEndpoint}
+                        onChange={e => setFormEndpoint(e.target.value)}
+                        placeholder="/chat/completions ou https://api.exemplo.com/v1/chat"
+                        autoFocus
+                        className="w-full px-3 py-2 rounded-xl border text-sm font-mono"
+                        style={{
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          borderColor: 'var(--border)',
+                        }}
+                      />
+                      <p className="mt-1.5 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                        Aceita um caminho relativo à Base URL ou uma URL HTTPS completa. O corpo e a resposta devem ser compatíveis com Chat Completions.
+                      </p>
+                    </div>
+                  )}
 
                   {/* ─── Modelo inicial (opcional) ─── */}
                   {!editing && !catalogQuickSetup && (
